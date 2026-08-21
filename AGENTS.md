@@ -21,6 +21,7 @@
 
 - 远程仓库：`https://github.com/IceFireIcer/HyperSoundEngine`（origin），工作分支 `main`
 - push 到 `main` 触发 `.github/workflows/ci.yml`：`typecheck` → `typecheck:ui` → `test` → `build`，全绿才算过
+- 每日北京时间 17:00（cron 为 UTC 09:00）触发 `.github/workflows/nightly.yml`：质量门禁 → TS/Rust 构建 → 发 pre-release。tag 命名 `nightly-YYYYMMDD.当日构建次数`（重跑自动 +1）；**包版本号不随 nightly 递增**（版本规则见 docs/VERSIONING.md）；Rust 支线目录不存在时自动跳过
 
 ## 常用命令（工作目录 = 本目录）
 

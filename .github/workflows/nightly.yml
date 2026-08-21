@@ -1,0 +1,99 @@
+name: Nightly Build
+
+# 每日自动构建并发 pre-release。
+# 注意：GitHub Actions cron 为 UTC；北京时间 17:00 = UTC 09:00。
+# tag 命名：nightly-YYYYMMDD.当日构建次数（重跑自动递增）；包版本号不随 nightly 变化（docs/VERSIONING.md）。
+
+on:
+  schedule:
+    - cron: '0 9 * * *' # UTC 09:00 = 北京时间 17:00
+  workflow_dispatch: {} # 支持手动触发（Actions 页面 Run workflow）
+
+permissions:
+  contents: write # 创建 release 与 tag
+
+concurrency:
+  group: nightly-build
+  cancel-in-progress: false
+
+jobs:
+  nightly:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 需要 tags 来计算当日构建次数
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 质量门禁（typecheck + 全量测试）
+        run: |
+          npm run typecheck
+          npm run typecheck:ui
+          npm test
+
+      - name: 构建 TS 支线（dist/）
+        run: npm run build
+
+      - name: 打 npm 包（版本号不递增）
+        run: npm pack
+
+      - name: 构建 Rust 支线（目录存在时）
+        run: |
+          if [ -d HyperSoundEngineRust ]; then
+            echo '检测到 Rust 支线，构建 release……'
+            (cd HyperSoundEngineRust && cargo build --release)
+          else
+            echo 'HyperSoundEngineRust/ 尚不存在，跳过 Rust 构建'
+          fi
+
+      - name: 汇总产物
+        run: |
+          mkdir -p nightly-artifacts
+          STAMP=$(TZ=Asia/Shanghai date +%Y%m%d)
+          tar -czf "nightly-artifacts/hypersoundengine-ts-dist-${STAMP}.tar.gz" dist
+          cp hypersoundengine-*.tgz nightly-artifacts/ 2>/dev/null || true
+          if [ -d HyperSoundEngineRust/target/release ]; then
+            find HyperSoundEngineRust/target/release -maxdepth 1 -type f -executable \
+              \( -name 'hse-*' -o -name '*.exe' -o -name '*.dll' \) \
+              -exec cp {} nightly-artifacts/ \; 2>/dev/null || true
+          fi
+          echo '--- 产物清单 ---'
+          ls -la nightly-artifacts/
+
+      - name: 计算版本（项目名 + 今日日期 + 当日构建次数）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TODAY=$(TZ=Asia/Shanghai date +%Y%m%d)
+          DATE_PRETTY=$(TZ=Asia/Shanghai date +%Y-%m-%d)
+          LAST=$(git tag -l "nightly-${TODAY}.*" | sed "s/^nightly-${TODAY}\.//" | sort -n | tail -1)
+          NEXT=$(( ${LAST:-0} + 1 ))
+          echo "TAG=nightly-${TODAY}.${NEXT}" >> "$GITHUB_ENV"
+          echo "DATE_PRETTY=${DATE_PRETTY}" >> "$GITHUB_ENV"
+          echo "BUILD_NO=${NEXT}" >> "$GITHUB_ENV"
+
+      - name: 发布 Pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SHA=$(git rev-parse --short HEAD)
+          PKG_VER=$(node -p "require('./package.json').version")
+          cat > release-notes.md <<EOF
+          每日自动构建（北京时间 17:00 触发）。
+
+          - 提交：\`${SHA}\`
+          - 包版本：\`${PKG_VER}\`（nightly 不递增版本号，规则见 docs/VERSIONING.md）
+          - 产物：TS 支线 \`dist/\` 与 npm 包；Rust 支线二进制（存在时）
+          - 标签：\`${TAG}\`（nightly-日期.当日构建次数）
+          EOF
+          gh release create "$TAG" nightly-artifacts/* \
+            --prerelease \
+            --title "HyperSoundEngine ${DATE_PRETTY} #${BUILD_NO}" \
+            --notes-file release-notes.md
