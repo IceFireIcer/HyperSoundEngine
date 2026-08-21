@@ -1,7 +1,7 @@
 /**
  * audit-dsp.test.ts —— DSP 边界与稳定性审计（任务 B）
  *
- * 审计维度（对 hypersoundengine-v3/src/dsp/ 下 16 个模块逐一覆盖）：
+ * 审计维度（对 src/dsp/ 下 16 个模块逐一覆盖）：
  *  1. 参数无效/边界直通性：增益 0dB / enabled=false / mix=0 语义恒等
  *  2. 零输入零输出：IIR 状态在零输入下必须衰减（无 DC 泄漏 / 自激）
  *  3. 边界 clamp：fs（8k/96k/192k）、频率（20Hz/20kHz/Nyquist 附近）、

@@ -1,5 +1,5 @@
 /**
- * HyperSoundEngine v3 调音室 UI —— 引擎桥（HyperSoundEngineUiBridge）
+ * HyperSoundEngine v1 调音室 UI —— 引擎桥（HyperSoundEngineUiBridge）
  *
  * UI 只依赖本文件的桥接口（不直接 import HyperSoundEngine），融合时把桥接实现换到
  * HyperSoundEngine 侧（引擎实例来自 HyperSoundEngineHost.engine 或直接 new HyperSoundEngine）即可。
@@ -19,9 +19,9 @@ import { SCENE_PRESETS, getSceneById } from '../src/engine/ScenePresets'
 import { encodeShareCode, decodeShareCode } from '../src/engine/ShareCodec'
 import { HearingTest, type AudiogramPoint } from '../src/analysis/HearingTest'
 
-/** 我的场景存储键（v3 独立命名空间，与 v2 区分） */
-const MY_SCENES_KEY = 'hypersound:v3-my-scenes'
-/** 我的场景上限（与 v2 一致） */
+/** 我的场景存储键（独立命名空间） */
+const MY_SCENES_KEY = 'hypersound:hse-my-scenes'
+/** 我的场景上限 */
 export const MAX_MY_SCENES = 8
 
 export interface HyperSoundEngineHearingSession {

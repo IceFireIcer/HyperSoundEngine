@@ -1,5 +1,5 @@
 /**
- * HyperSoundEngine v3 调音室 UI —— 公共出口
+ * HyperSoundEngine v1 调音室 UI —— 公共出口
  *
  * 导出：主面板 HyperSoundEngineMixingStudio、引擎桥（createHyperSoundEngineUiBridge + 类型）、
  * 设计语言（useHyperSoundEngineTheme）、参数 hooks（useHyperSoundEngineParams/DeepPartial/deepMerge）。
@@ -7,7 +7,7 @@
  */
 
 export { default as HyperSoundEngineMixingStudio } from './HyperSoundEngineMixingStudio'
-export type { HyperSoundEngineMixingStudioProps, HyperSoundEngineVersion } from './HyperSoundEngineMixingStudio'
+export type { HyperSoundEngineMixingStudioProps } from './HyperSoundEngineMixingStudio'
 export { createHyperSoundEngineUiBridge, MAX_MY_SCENES } from './bridge'
 export type { HyperSoundEngineUiBridge, HyperSoundEngineHearingSession } from './bridge'
 export { useHyperSoundEngineTheme } from './theme'

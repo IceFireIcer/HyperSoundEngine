@@ -2,7 +2,7 @@
  * StretchLgplAdapter 单元测试（LGPL-2.1 链接适配器）
  * 物理意义（SoundTouch 语义）：
  *  - tempo = 播放速度 → 时长伸缩 rate 映射为 tempo=1/rate：rate=2 → 输出总时长 ≈ 输入×2；
- *  - semitones=+10（v2 范围上限）、rate=1 → 440Hz 变 ≈784Hz（时长不变），用 FFT 峰值验证；
+ *  - semitones=+10（范围上限）、rate=1 → 440Hz 变 ≈784Hz（时长不变），用 FFT 峰值验证；
  *  - 确定性：同输入同输出（位级一致，已实测原始库确定）；
  *  - 每个用例创建独立适配器实例（避免用例间状态污染）；
  *  - 未安装 soundtouchjs 时 createStretchLgplAdapter() 返回 null → 整组跳过。

@@ -93,7 +93,7 @@
   1. 设计 §2：… → 低频增强 → **Post-EQ → 等响度/响度** → 限幅器；实际（含 API_SPEC 辅助模块 A）：… → BassEnhancer → **LoudnessComp(等响度) → IEQ(Post)** → [LUFS] → Limiter。即"等响度"与"Post-EQ(IEQ)"顺序互换（两者均为线性滤波器，交换听感差异极小）。
   2. 实际链在 M/S 前插入 **3D 环绕** 级（API_SPEC 模块 A 未列出；HyperSoundEngine 头注释有说明）——契约漂移。
   3. 设计 §2 的"M/S 解码 … → M/S 编码"在引擎中折叠为单级 M/S（解码-处理-编码一次完成），链主体运行在 L/R 域而非 M/S 域——功能等价。
-  4. 响度归一化增益（输入级）与 NightMode 为设计 §2 未明确列出的级（HyperSoundEngine 注释为 v2 兼容语义）。
+  4. 响度归一化增益（输入级）与 NightMode 为设计 §2 未明确列出的级（HyperSoundEngine 历史兼容语义）。
 - **复现测试**：代码审查（无失败测试；链顺序正确性由 `process()` 逐级比对 API_SPEC 模块 A 确认——除 3D 环绕外与 API_SPEC 完全一致）。
 - **根因推测**：设计文档 §2 为粗粒度示意图，实际以 API_SPEC 模块 A 为契约；`3D 环绕` 为后加功能未回写契约。
 - **影响**：文档与实现不一致；对听感影响极小（LTI 顺序交换）。
@@ -155,7 +155,7 @@
 
 > 按用户新需求（"不用加真实设备档案，机型频响补偿改为按音量实施补偿的通用曲线"），
 > `src/device/DeviceProfile.ts`（含 getProfileById / 6 示例档案 / fitParametricEq）与
-> `V3EngineParams.deviceProfile` 字段已**整体删除**。本审计的「异常 3：eq 旁路不彻底（档案场景）」
+> `HyperSoundEngineParams.deviceProfile` 字段已**整体删除**。本审计的「异常 3：eq 旁路不彻底（档案场景）」
 > 所依赖的档案机制已不存在，该缺陷以"代码移除"方式彻底消除；
 > `audit-chain.test.ts` 对应用例已改为纯 `eq.enabled=false` 旁路断言（+12dB 用户 EQ 不泄漏）。
 > 机型频响补偿由 `dsp/LoudnessComp.ts` auto 模式承担（按音量通用曲线，测试 loudnesscomp 覆盖）。

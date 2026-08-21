@@ -4,7 +4,7 @@
  * 物理意义注记：
  *  - volumePercent=100（满音量）→ 补偿量 0，全频带增益 ≈ 0dB；
  *  - volumePercent=20 → 低频（120Hz）补偿提升 >3dB、1kHz 参考点 ≈0dB（±0.3dB），
- *    对应 ISO 226 简化近似（v2 兼容）的"低频 0–12dB / 高频 0–6dB"曲线；
+ *    对应 ISO 226 简化近似的"低频 0–12dB / 高频 0–6dB"曲线；
  *  - 平滑：参数突变时增益按 smoothingSeconds 一阶缓变，无采样跳变（无爆音）；
  *  - preset/custom 模式：固定曲线与用户自定义曲线均被拟合为 biquad 链。
  */

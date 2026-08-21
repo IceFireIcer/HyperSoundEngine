@@ -1,5 +1,5 @@
 /**
- * HyperSoundEngine v3 独立音频引擎 —— 公共出口（Core）
+ * HyperSoundEngine v1 独立音频引擎 —— 公共出口（Core）
  *
  * 本入口只包含纯 TypeScript 核心，零 DOM / AudioContext / React 依赖：
  *   - 类型与默认参数（types.ts）

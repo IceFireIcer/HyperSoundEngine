@@ -1,5 +1,5 @@
 /**
- * HyperSoundEngine v3 调音室 UI —— 响度类配置弹窗
+ * HyperSoundEngine v1 调音室 UI —— 响度类配置弹窗
  *
  * 音量自适应补偿（等响度按音量通用曲线：auto/preset/custom 三模式，替代原"机型补偿"）
  * 与响度归一化（引擎内实时 BS.1770，无需外部服务）。
@@ -10,7 +10,7 @@ import type { HyperSoundEngineTheme } from './theme'
 import { InfoLine, Modal, Segmented, Slider, Toggle } from './primitives'
 import type { HyperSoundEngineParamsController } from './hooks'
 
-/** v3 preset 模式预设（v2 兼容：flat/bass/vocal/warm/bright/night） */
+/** preset 模式预设（flat/bass/vocal/warm/bright/night） */
 export const COMP_PRESETS: { id: string; name: string; hint: string }[] = [
   { id: 'flat', name: '监听平直', hint: '中性直白' },
   { id: 'bass', name: '低频补偿', hint: '补足低频' },
@@ -20,7 +20,7 @@ export const COMP_PRESETS: { id: string; name: string; hint: string }[] = [
   { id: 'night', name: '夜间温和', hint: '低音量友好' },
 ]
 
-/** custom 模式固定频点（v2 兼容 5 点） */
+/** custom 模式固定频点（固定 5 点） */
 export const CUSTOM_BAND_FREQUENCIES = [80, 250, 1000, 4000, 12000]
 
 /** auto 模式按音量曲线的展示辅助：给定音量百分比 → 低/高频提升 dB */

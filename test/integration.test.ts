@@ -1,8 +1,8 @@
 /**
  * HyperSoundEngineHost 单元测试 —— 引擎切换接线模块
  * 物理意义（切换正确性）：
- *  - attach：masterGain 全断 → 接入 v3 节点 → 连 analyser（防新旧双链并联打架）；
- *  - dispose：恢复 masterGain→analyser 直连（v2 dispose 同款语义）；
+ *  - attach：masterGain 全断 → 接入引擎节点 → 连 analyser（防新旧双链并联打架）；
+ *  - dispose：恢复 masterGain→analyser 直连（恢复直连语义）；
  *  - 幂等 / 竞态（异步注册期间被 dispose → 放弃接线且直连已恢复）；
  *  - script 兜底通路：onaudioprocess 里音频真实经过 HyperSoundEngine 处理（限幅生效）。
  */
@@ -76,7 +76,7 @@ describe('HyperSoundEngineHost —— worklet 模式', () => {
   it('attach：masterGain 先全断 → 接 worklet 节点 → 连 analyser；参数已下发', async () => {
     stubWorkletNode()
     const { handle, masterGain, analyser } = makeHandle()
-    const host = new HyperSoundEngineHost({ mode: 'worklet', workletUrl: '/v3-worklet.js' })
+    const host = new HyperSoundEngineHost({ mode: 'worklet', workletUrl: '/hse-worklet.js' })
     const params = createDefaultParams(48000)
     await host.attach(handle, params)
 
@@ -93,7 +93,7 @@ describe('HyperSoundEngineHost —— worklet 模式', () => {
   it('幂等：同一 handle 重复 attach 不重复接线', async () => {
     stubWorkletNode()
     const { handle, masterGain } = makeHandle()
-    const host = new HyperSoundEngineHost({ mode: 'worklet', workletUrl: '/v3-worklet.js' })
+    const host = new HyperSoundEngineHost({ mode: 'worklet', workletUrl: '/hse-worklet.js' })
     await host.attach(handle)
     await host.attach(handle)
     expect(masterGain.connect).toHaveBeenCalledTimes(1)
@@ -103,7 +103,7 @@ describe('HyperSoundEngineHost —— worklet 模式', () => {
   it('dispose：断开节点 + masterGain 全断 + 恢复 masterGain→analyser 直连', async () => {
     stubWorkletNode()
     const { handle, masterGain, analyser } = makeHandle()
-    const host = new HyperSoundEngineHost({ mode: 'worklet', workletUrl: '/v3-worklet.js' })
+    const host = new HyperSoundEngineHost({ mode: 'worklet', workletUrl: '/hse-worklet.js' })
     await host.attach(handle)
     const node = (masterGain.connect as ReturnType<typeof vi.fn>).mock.calls[0][0] as FakeNode
 
@@ -123,7 +123,7 @@ describe('HyperSoundEngineHost —— worklet 模式', () => {
       resolveAdd = res
     })
     const { handle, masterGain, analyser } = makeHandle({ addModuleImpl: () => gate })
-    const host = new HyperSoundEngineHost({ mode: 'worklet', workletUrl: '/v3-worklet.js' })
+    const host = new HyperSoundEngineHost({ mode: 'worklet', workletUrl: '/hse-worklet.js' })
     const attaching = host.attach(handle) // 挂起在 addModule
     host.dispose()
     resolveAdd()
@@ -138,7 +138,7 @@ describe('HyperSoundEngineHost —— worklet 模式', () => {
   it('setParams：主线程引擎 + worklet port 同步更新', async () => {
     stubWorkletNode()
     const { handle, masterGain } = makeHandle()
-    const host = new HyperSoundEngineHost({ mode: 'worklet', workletUrl: '/v3-worklet.js' })
+    const host = new HyperSoundEngineHost({ mode: 'worklet', workletUrl: '/hse-worklet.js' })
     await host.attach(handle)
     const node = (masterGain.connect as ReturnType<typeof vi.fn>).mock.calls[0][0] as FakeNode
     node.port.postMessage.mockClear()
@@ -149,19 +149,19 @@ describe('HyperSoundEngineHost —— worklet 模式', () => {
   })
 })
 
-describe('HyperSoundEngineHost —— script 兜底模式（切换后音频真实经过 v3 处理）', () => {
+describe('HyperSoundEngineHost —— script 兜底模式（切换后音频真实经过引擎处理）', () => {
   it('无 AudioWorkletNode 时自动回退 script；onaudioprocess 通路限幅生效', async () => {
-    // HyperSoundEngine 的 test/setup.ts 为 v1 引擎测试全局 stub 了 AudioWorkletNode；
+    // HyperSoundEngine 的 test/setup.ts 为引擎测试全局 stub 了 AudioWorkletNode；
     // 此处以 undefined 覆盖（afterEach unstub 恢复），模拟"宿主无 worklet"环境
     vi.stubGlobal('AudioWorkletNode', undefined)
     const { handle, masterGain, scriptNodes } = makeHandle()
-    const host = new HyperSoundEngineHost({ mode: 'auto', workletUrl: '/v3-worklet.js' })
+    const host = new HyperSoundEngineHost({ mode: 'auto', workletUrl: '/hse-worklet.js' })
     await host.attach(handle)
     expect(host.getMode()).toBe('script')
     expect(scriptNodes.length).toBe(1)
     expect(masterGain.connect).toHaveBeenCalledTimes(1)
 
-    // 构造处理事件：满幅 440Hz 正弦 → v3 限幅（默认 -1dBFS）应压到 ≤0.9
+    // 构造处理事件：满幅 440Hz 正弦 → 引擎限幅（默认 -1dBFS）应压到 ≤0.9
     const sp = scriptNodes[0]
     const handler = sp.onaudioprocess!
     const fs = 48000
@@ -193,7 +193,7 @@ describe('HyperSoundEngineHost —— script 兜底模式（切换后音频真�
         throw new Error('worklet module failed')
       },
     })
-    const host = new HyperSoundEngineHost({ mode: 'auto', workletUrl: '/v3-worklet.js' })
+    const host = new HyperSoundEngineHost({ mode: 'auto', workletUrl: '/hse-worklet.js' })
     await host.attach(handle)
     expect(host.getMode()).toBe('script')
     host.dispose()
@@ -202,7 +202,7 @@ describe('HyperSoundEngineHost —— script 兜底模式（切换后音频真�
   it('worklet 可用时 auto 优先 worklet', async () => {
     stubWorkletNode()
     const { handle } = makeHandle()
-    const host = new HyperSoundEngineHost({ mode: 'auto', workletUrl: '/v3-worklet.js' })
+    const host = new HyperSoundEngineHost({ mode: 'auto', workletUrl: '/hse-worklet.js' })
     await host.attach(handle)
     expect(host.getMode()).toBe('worklet')
     host.dispose()
@@ -213,7 +213,7 @@ describe('HyperSoundEngineHost —— script 兜底模式（切换后音频真�
     // 去掉 audioWorklet 与 script
     ;(handle.audioContext as { audioWorklet?: unknown }).audioWorklet = undefined
     ;(handle.audioContext as { createScriptProcessor?: unknown }).createScriptProcessor = undefined
-    const host = new HyperSoundEngineHost({ mode: 'auto', workletUrl: '/v3-worklet.js' })
+    const host = new HyperSoundEngineHost({ mode: 'auto', workletUrl: '/hse-worklet.js' })
     await expect(host.attach(handle)).rejects.toThrow('no audio path')
     const connects = (masterGain.connect as ReturnType<typeof vi.fn>).mock.calls
     expect(connects.length).toBe(1)

@@ -1,8 +1,8 @@
 /**
- * HyperSoundEngine v3 调音室 UI —— 动态/调音类效果配置弹窗
+ * HyperSoundEngine v1 调音室 UI —— 动态/调音类效果配置弹窗
  *
  * 动态压缩、齿音抑制、夜间模式、限幅器、智能均衡（IEQ）、变速变调、立体声宽度。
- * 视觉与交互沿用 v1/v2 弹窗规范（glass 面板 + wf-glass-range + 胶囊开关）。
+ * 视觉与交互沿用弹窗规范（glass 面板 + wf-glass-range + 胶囊开关）。
  */
 
 import { Activity, Mic2, Moon, Shield, Sparkles, Music, Columns2 } from 'lucide-react'

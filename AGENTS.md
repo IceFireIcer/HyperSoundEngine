@@ -8,7 +8,7 @@
 - `ui/` — 可选 React 调音室（不参与核心构建）
 - `adapters/waveforge/` — WaveForge 专属接线（不入包）
 - `test/` — vitest 测试
-- `docs/` — 工程文档（API / ARCHITECTURE / INTEGRATION…）+ `docs/adr/`（架构决策记录：0001 独立进程形态 / 0002 双音频入口 / 0003 双支线原生化）
+- `docs/` — 工程文档（API / ARCHITECTURE / VERSIONING…）+ `docs/adr/`（架构决策记录：0001 独立进程形态 / 0002 双音频入口 / 0003 双支线原生化）
 - `CONTEXT.md` — 领域术语表（ubiquitous language），改模型前先读
 - `原生化双支线与Windows音频接入规划书.md` — 当前主线执行规划
 - `空间音频实现规划书.md` — 空间音频规格输入（§3.2 契约、§八性能目标有效）
@@ -36,6 +36,13 @@ npm run benchmark               # 先 build 再跑 scripts/benchmark.mjs（48kHz
 - 兼容契约三层不得单方面破坏：`AudioEngine` 接口语义、参数模型/场景预设/分享串格式、引擎服务进程控制协议（WebSocket JSON-RPC）
 - TS 支线与 Rust 支线各自内部保持确定性（无随机/时钟/控制台输出）与稳态零分配
 
+## 版本与命名铁律（docs/VERSIONING.md）
+
+- 生成代号 **HyperSoundEngine vN ↔ semver MAJOR N**；当前线 HyperSoundEngine v1（包版本 0.x 为其预发布）。旧 WaveForge v1/v2/v3 引擎谱系已废止，不得再引入其描述。
+- MAJOR=破坏兼容契约三层；MINOR=新功能/新向量；PATCH=行为不变修复。bump 与 CHANGELOG 更新由实施变更的会话按 `docs/VERSIONING.md` 规则自动完成，不需用户手动管理。
+- 标识符/存储键/事件名/CSS 动画/worklet URL 一律无版本前缀或 `hse-` 前缀；禁止 `v1/v2/v3` 字样（第三方名称如 GPLv3、soundtouchjs v1.x 除外）。
+- 已冻结对拍向量的期望值永不修改；行为变更=新增向量或走 MAJOR。
+
 ## 架构铁律（改代码前必读 `docs/ARCHITECTURE.md`）
 
 分层（自上而下，依赖只能向下）：
@@ -60,7 +67,7 @@ npm run benchmark               # 先 build 再跑 scripts/benchmark.mjs（48kHz
 
 ## 空间音频工作约束（已被 ADR-0003 收编）
 
-原《空间音频实现规划书.md》的 Rust HRTF 核方案**并入 Rust 支线**实现；TS 侧"兄弟 Worklet 节点"（`attachV3Engine.ts` 加 `syncSpatialChain`）方案作废。规划书中的契约函数（§3.2）、性能目标（§八：<5ms 渲染延迟、32-64 对象、<25% 单核、渲染循环零分配）与数值对拍要求（容差 1e-6）继续有效，作为 Rust 支线空间音频模块的规格输入。
+原《空间音频实现规划书.md》的 Rust HRTF 核方案**并入 Rust 支线**实现；TS 侧"兄弟 Worklet 节点"（`attachEngine.ts` 加 `syncSpatialChain`）方案作废。规划书中的契约函数（§3.2）、性能目标（§八：<5ms 渲染延迟、32-64 对象、<25% 单核、渲染循环零分配）与数值对拍要求（容差 1e-6）继续有效，作为 Rust 支线空间音频模块的规格输入。
 
 ## 改动前应读文档
 

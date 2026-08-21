@@ -2,15 +2,15 @@
  * LoudnessComp —— 等响度补偿（模块 12）
  *
  * 出处/许可：等响度曲线概念源自 ISO 226:2003（人耳频率灵敏度随音量变化）；
- * 本实现使用简化的 1/3 倍频程近似增益表（技术文档 §6，v2 兼容语义），
+ * 本实现使用简化的 1/3 倍频程近似增益表（技术文档 §6），
  * 并采用 RBJ Audio EQ Cookbook（Robert Bristow-Johnson，公开公式）的
- * shelf/peaking biquad 拟合。注意：表数据为"ISO 226 简化近似（v2 兼容）"，
+ * shelf/peaking biquad 拟合。注意：表数据为"ISO 226 简化近似"，
  * 正式发布前可与官方 ISO 226 表核对。本实现为自研 TS 代码。
  *
  * 实现要点：
  *  - 1/3 倍频程"等响度近似"增益表：低频 0–12dB、高频 0–6dB，随 volumePercent
  *    线性变化，100% 时 0dB、中频（1kHz 附近）保持 0dB。
- *    v2 语义：低频系数 0.35、高频系数 0.15（100Hz 与 10kHz 处相对灵敏度），
+ *    系数语义：低频系数 0.35、高频系数 0.15（100Hz 与 10kHz 处相对灵敏度），
  *    归一化后 w(100Hz)=1.0、w(10kHz)=0.15/0.35≈0.43，故低频最大提升=maxBoostDb、
  *    高频最大提升≈0.43·maxBoostDb（maxBoostDb=12 时 ≈5.1dB≈"0–6dB"）。
  *  - 拟合：固定 low shelf 120Hz Q0.707 + high shelf 12kHz Q0.707 +
@@ -25,7 +25,7 @@
 
 import type { CompensationMode } from '../types'
 
-/** 等响度补偿参数（v2 兼容） */
+/** 等响度补偿参数 */
 export interface LoudnessCompParams {
   volumePercent: number
   maxBoostDb: number
@@ -53,7 +53,7 @@ const THIRD_OCTAVE_FREQS = [
 // 中频 peaking 候选频点（auto/preset 拟合用）
 const PEAKING_CANDIDATES = [315, 630, 1000, 1600, 2500, 4000, 6300]
 
-// 场景预设曲线（v2 兼容 id：flat/bass/vocal/warm/bright/night；控制点 频率→dB）
+// 场景预设曲线（预设 id：flat/bass/vocal/warm/bright/night；控制点 频率→dB）
 const PRESET_CURVES: Record<string, Array<[number, number]>> = {
   flat: [],
   bass: [
@@ -226,7 +226,7 @@ export class LoudnessComp {
         table[i] = interpLogCurve(THIRD_OCTAVE_FREQS[i], curve)
       }
     } else {
-      // auto：ISO 226 简化近似（v2 兼容），随音量线性
+      // auto：ISO 226 简化近似，随音量线性
       const v = this.volumePercent / 100
       for (let i = 0; i < THIRD_OCTAVE_FREQS.length; i++) {
         table[i] = this.maxBoostDb * (1 - v) * autoWeight(THIRD_OCTAVE_FREQS[i])
@@ -304,7 +304,7 @@ function average(arr: number[]): number {
 }
 
 /**
- * auto 模式 1/3 倍频程权重 w(f)（ISO 226 简化近似，v2 兼容）：
+ * auto 模式 1/3 倍频程权重 w(f)（ISO 226 简化近似）：
  *  - f ≤ 100Hz：1.0（低频全提升，→ 最大 boost = maxBoostDb，即"0–12dB"）
  *  - 100Hz→250Hz：对数线性 1.0→0
  *  - 250Hz–2kHz：0（中频参考区，1kHz 处为 0dB）
@@ -365,7 +365,7 @@ function designPeaking(f0: number, gainDb: number, q: number, fs: number): Biqua
 
 /**
  * RBJ shelf（isLow=true 低架 / false 高架），S=1（默认斜率）：α = sin(w0)/2·√2。
- * 说明：v2 兼容语义固定 S=1（对应 Q≈0.707 的一阶型架式），故签名不含 Q。
+ * 说明：语义固定 S=1（对应 Q≈0.707 的一阶型架式），故签名不含 Q。
  */
 function designShelf(isLow: boolean, f0: number, gainDb: number, fs: number): BiquadCoeffs {
   const f = Math.min(Math.max(f0, 1), fs * 0.45) // 越界钳制（12kHz 架在 fs=8k 下必 NaN）

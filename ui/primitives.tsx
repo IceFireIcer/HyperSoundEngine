@@ -1,7 +1,7 @@
 /**
- * HyperSoundEngine v3 调音室 UI —— 基础组件（primitives）
+ * HyperSoundEngine v1 调音室 UI —— 基础组件（primitives）
  *
- * 与 v1/v2 调音室一致的交互基元：胶囊开关 Toggle、玻璃滑块 Slider、
+ * 调音室交互基元：胶囊开关 Toggle、玻璃滑块 Slider、
  * 玻璃卡片 GlassCard、弹窗 Modal（CSS 动画替代 framer-motion，零动画依赖）、
  * 分段选择 Segmented、胶囊按钮 Chip、输入框 TextInput、分区标题 SectionTitle。
  *
@@ -98,8 +98,8 @@ export function GlassCard({ children, theme, className, style }: {
 
 /** CSS 关键帧（弹窗出现/消失动画，替代 framer-motion，零依赖） */
 const MODAL_KEYFRAMES = `
-@keyframes v3-modal-backdrop { from { opacity: 0 } to { opacity: 1 } }
-@keyframes v3-modal-pop { from { opacity: 0; transform: scale(0.9) translateY(12px) } to { opacity: 1; transform: scale(1) translateY(0) } }
+@keyframes hse-modal-backdrop { from { opacity: 0 } to { opacity: 1 } }
+@keyframes hse-modal-pop { from { opacity: 0; transform: scale(0.9) translateY(12px) } to { opacity: 1; transform: scale(1) translateY(0) } }
 `
 
 /** 居中配置弹窗（点击遮罩关闭；内容由 children 提供，含头部/开关/参数区） */
@@ -123,7 +123,7 @@ export function Modal({ title, icon, onClose, theme, children, maxWidth = 'max-w
         backgroundColor: theme.dark ? 'rgba(0,0,0,0.4)' : 'rgba(0,0,0,0.2)',
         backdropFilter: 'blur(4px)',
         WebkitBackdropFilter: 'blur(4px)',
-        animation: 'v3-modal-backdrop 0.18s ease-out',
+        animation: 'hse-modal-backdrop 0.18s ease-out',
       }}
       onClick={onClose}
     >
@@ -137,7 +137,7 @@ export function Modal({ title, icon, onClose, theme, children, maxWidth = 'max-w
           WebkitBackdropFilter: theme.glassBlur,
           border: `1px solid ${theme.glassBorder}`,
           boxShadow: '0 24px 64px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.2)',
-          animation: 'v3-modal-pop 0.22s cubic-bezier(0.2, 0.9, 0.3, 1.2)',
+          animation: 'hse-modal-pop 0.22s cubic-bezier(0.2, 0.9, 0.3, 1.2)',
         }}
       >
         <div className="p-5">

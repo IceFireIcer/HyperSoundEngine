@@ -1,5 +1,5 @@
 /**
- * HyperSoundEngine 音频效果引擎 v3 —— 听力分析流程（HearingTest）
+ * HyperSoundEngine v1 —— 听力分析流程（HearingTest）
  *
  * 出处/许可：自研状态机（设计文档 §4.8 / 映射表 #13 🟡，流程参考临床听力测试的
  *   "升降法/二分法"阈值估计；特征统计配合 meyda(MIT) 式特征，技术文档 §12）。

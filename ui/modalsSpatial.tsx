@@ -1,8 +1,8 @@
 /**
- * HyperSoundEngine v3 调音室 UI —— 空间/染色类效果配置弹窗
+ * HyperSoundEngine v1 调音室 UI —— 空间/染色类效果配置弹窗
  *
  * 混响（双路由：卷积/算法/off + IR 导入入口）、3D 环绕（圆形拖拽可视化）、
- * 低音增强（4 种谐波非线性）。视觉与交互沿用 v1/v2 弹窗规范。
+ * 低音增强（4 种谐波非线性）。视觉与交互沿用弹窗规范。
  */
 
 import { useRef } from 'react'
@@ -52,7 +52,7 @@ export function ReverbModal({ controller, theme, onClose }: { controller: HyperS
 
   return (
     <Modal title="混响" icon={<AudioLines className="w-4.5 h-4.5" />} onClose={onClose} theme={theme}>
-      <p className={`${theme.textSecondary} text-xs leading-relaxed mb-4`}>v3 混响支持双路由：算法混响（Freeverb 类，五种空间）与分区卷积混响（可导入 IR，自动去周期化消除循环伪影）。</p>
+      <p className={`${theme.textSecondary} text-xs leading-relaxed mb-4`}>混响支持双路由：算法混响（Freeverb 类，五种空间）与分区卷积混响（可导入 IR，自动去周期化消除循环伪影）。</p>
       <div className="flex items-center justify-between mb-4">
         <span className={`${theme.textPrimary} text-sm font-medium`}>启用 混响</span>
         <Toggle checked={rv.enabled} onChange={(v) => patch({ reverb: { ...rv, enabled: v } })} theme={theme} />

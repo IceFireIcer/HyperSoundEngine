@@ -1,10 +1,9 @@
 /**
- * HyperSoundEngine 音频效果引擎 v3 —— 类型与参数模型
+ * HyperSoundEngine v1 —— 类型与参数模型
  *
  * 设计依据：
  *  - research/docs/音频算法设计文档.md §3（功能→算法→采用方式映射）
  *  - research/docs/MIT套用与自研决策表.md（可套用/自研边界）
- *  - HyperSoundEngine v2（src/services/audio-effects-v2）参数命名与语义兼容（便于融合）
  *
  * 约定：所有参数为不可变快照语义；HyperSoundEngine.setParams 每次接收完整 HyperSoundEngineParams。
  */
@@ -15,9 +14,9 @@ export type ReverbMode = 'convolution' | 'algorithmic' | 'fdn' | 'off'
 export type EqMode = 'simple' | 'pro'
 /** 虚拟低频谐波非线性类型 */
 export type HarmonicType = 'odd' | 'even' | 'atan' | 'soft'
-/** 频响补偿模式（v2 兼容）：auto=ISO 226 等响度自适应 / preset=场景预设 / custom=自定义频段 */
+/** 频响补偿模式：auto=ISO 226 等响度自适应 / preset=场景预设 / custom=自定义频段 */
 export type CompensationMode = 'auto' | 'preset' | 'custom'
-/** 算法混响类型（v2 兼容 5 种） */
+/** 算法混响类型（5 种） */
 export type ReverbType = 'hall' | 'room' | 'plate' | 'spring' | 'stage'
 /** 智能均衡目标曲线 */
 export type IeqTargetCurve = 'flat' | 'warm' | 'bright' | 'vocal'
@@ -33,19 +32,19 @@ export interface EqBand {
 export interface EqSettings {
   enabled: boolean
   mode: EqMode
-  /** 简约版 5 段：[低音, 中低, 中音, 中高, 高音] 增益 dB（v2 兼容） */
+  /** 简约版 5 段：[低音, 中低, 中音, 中高, 高音] 增益 dB */
   simpleBands: number[]
-  /** 专业版 bands（v2 兼容：proBands；v3 支持 10/20 段） */
+  /** 专业版 bands（proBands；支持 10/20 段） */
   proBands: EqBand[]
-  /** 专业版段数：10（v2 兼容，octave）或 20（v3 扩展，1/2 octave） */
+  /** 专业版段数：10（octave）或 20（1/2 octave） */
   bandCount: 10 | 20
-  /** 级联 Q 补偿：迭代修正相邻段叠加误差（v3 新增，技术文档 §1.3） */
+  /** 级联 Q 补偿：迭代修正相邻段叠加误差（技术文档 §1.3） */
   qCompensation: boolean
-  /** EQ 锁定（防误改，v3 新增） */
+  /** EQ 锁定（防误改） */
   locked: boolean
 }
 
-/** 齿音抑制（v3 新增，技术文档 §4） */
+/** 齿音抑制（技术文档 §4） */
 export interface DeesserSettings {
   enabled: boolean
   /** 侧链中心频率 Hz，默认 6000（4–8kHz 齿音频段） */
@@ -68,7 +67,7 @@ export interface DeesserSettings {
   sidechainEnabled?: boolean
 }
 
-/** 动态压缩（v2 兼容 + knee + sidechain） */
+/** 动态压缩（knee + sidechain） */
 export interface CompressorSettings {
   enabled: boolean
   thresholdDb: number
@@ -78,20 +77,20 @@ export interface CompressorSettings {
   releaseMs: number
   /** 补偿增益 dB */
   makeupDb: number
-  /** 输出线性增益 0..2，默认 1（v2 兼容 outputGain） */
+  /** 输出线性增益 0..2，默认 1 */
   outputGain: number
   /** 是否使用外部 sidechain 信号驱动包络（默认 false） */
   sidechainEnabled?: boolean
 }
 
-/** 夜间模式（v2 兼容：动态压缩增强 + 高频衰减，深夜语义） */
+/** 夜间模式（动态压缩增强 + 高频衰减，深夜语义） */
 export interface NightModeSettings {
   enabled: boolean
   /** 强度 0..10 */
   amount: number
 }
 
-/** 虚拟低频增强（v3 参数化，技术文档 §5） */
+/** 虚拟低频增强（技术文档 §5） */
 export interface BassEnhancerSettings {
   enabled: boolean
   /** 低通截止 Hz，默认 90 */
@@ -163,7 +162,7 @@ export interface ModEffectsSettings {
   tremolo: TremoloSettings
 }
 
-/** 混响（v3：卷积 + 算法双路，IR 去周期化） */
+/** 混响（卷积 + 算法双路，IR 去周期化） */
 export interface ReverbSettings {
   enabled: boolean
   /** 路由：convolution=分区卷积 / algorithmic=Freeverb 类 / off */
@@ -184,12 +183,12 @@ export interface ReverbSettings {
     irName: string | null
     mix: number
     preDelayMs: number
-    /** IR 去周期化：尾部指数衰减窗消除循环伪影（v3 新增） */
+    /** IR 去周期化：尾部指数衰减窗消除循环伪影 */
     dePeriodize: boolean
   }
 }
 
-/** 3D 环绕（v2 兼容；v3 为轻量立体声旋转实现） */
+/** 3D 环绕（轻量立体声旋转实现） */
 export interface Surround3dSettings {
   enabled: boolean
   distance: number
@@ -198,11 +197,11 @@ export interface Surround3dSettings {
   direction: 1 | -1
 }
 
-/** 频响补偿（v2 兼容：auto/preset/custom + 音量线性等响度） */
+/** 频响补偿（auto/preset/custom + 音量线性等响度） */
 export interface LoudnessCompSettings {
   enabled: boolean
   mode: CompensationMode
-  /** preset 模式预设 id：flat/bass/vocal/warm/bright/night（v2 兼容） */
+  /** preset 模式预设 id：flat/bass/vocal/warm/bright/night */
   preset: string
   /** custom 模式目标曲线控制点 */
   bands: { frequency: number; gain: number }[]
@@ -210,24 +209,24 @@ export interface LoudnessCompSettings {
   volumePercent: number
   /** 最大提升 dB，默认 12 */
   maxBoostDb: number
-  /** 增益平滑时间常数 s，默认 0.2（v2 兼容） */
+  /** 增益平滑时间常数 s，默认 0.2 */
   smoothingSeconds: number
 }
 
-/** 响度归一化（v2 兼容目标 -14 LUFS + v3 引擎内实时测量） */
+/** 响度归一化（目标 -14 LUFS + 引擎内实时测量） */
 export interface LoudnessNormSettings {
   enabled: boolean
   /** 目标响度 LUFS，默认 -14 */
   targetLufs: number
   maxGainDb: number
   minGainDb: number
-  /** true=引擎内实时 LUFS 测量驱动（v3 新增，替代 3003 Python 服务）/ false=外部给定增益 */
+  /** true=引擎内实时 LUFS 测量驱动（替代旧外部测量服务）/ false=外部给定增益 */
   useRealtimeMeter: boolean
-  /** useRealtimeMeter=false 时使用（v2 兼容：由整曲测量换算的增益） */
+  /** useRealtimeMeter=false 时使用（由整曲测量换算的增益） */
   externalGainDb: number
 }
 
-/** 前瞻限幅器（v3：lookahead + true peak，技术文档 §3.3） */
+/** 前瞻限幅器（lookahead + true peak，技术文档 §3.3） */
 export interface LimiterSettings {
   enabled: boolean
   thresholdDb: number
@@ -255,7 +254,7 @@ export interface DynamicEqSettings {
   bands: { enabled: boolean; targetGainDb: number }[]
 }
 
-/** 智能均衡 IEQ（v3 新增，技术文档 §1.4） */
+/** 智能均衡 IEQ（技术文档 §1.4） */
 export interface IeqSettings {
   enabled: boolean
   /** 修正强度 0..1 */
@@ -268,17 +267,17 @@ export interface IeqSettings {
 /** 
  * 机型频响补偿（DeviceProfile）已移除：该功能由 `LoudnessComp`（等响度补偿）承担——
  * 按音量大小实施通用补偿曲线（auto 模式：音量越低，低频 0-12dB / 高频 0-6dB 提升越多，
- * ISO 226 简化近似，v2 兼容公式），无需设备实测档案。
+ * ISO 226 简化近似公式），无需设备实测档案。
  */
 
-/** 变调/变速（v2 兼容 + v3 MIT 实现路径） */
+/** 变调/变速（MIT 实现路径） */
 export interface PitchSettings {
   enabled: boolean
   /** 半音 -10..10 */
   semitones: number
   /** 速率 0.25..3 */
   rate: number
-  /** 人声/伴奏比例 -1(仅伴奏)..0(原声)..+1(仅人声)（v2 兼容，M/S 处理） */
+  /** 人声/伴奏比例 -1(仅伴奏)..0(原声)..+1(仅人声)（M/S 处理） */
   voiceBalance: number
 }
 
@@ -321,7 +320,7 @@ export interface ModulationSettings {
   routes: ModulationRoute[]
 }
 
-/** 听力分析（v3 新增，技术文档 §12） */
+/** 听力分析（技术文档 §12） */
 export interface HearingSettings {
   enabled: boolean
 }
@@ -339,7 +338,7 @@ export interface EngineStats {
   engineLatencySamples: number
 }
 
-/** 频谱特征（v3 新增，meyda 式自研，技术文档 §12） */
+/** 频谱特征（meyda 式自研，技术文档 §12） */
 export interface SpectralFeatures {
   rms: number
   zcr: number
@@ -356,7 +355,7 @@ export interface EngineAnalysis {
   features: SpectralFeatures | null
 }
 
-/** 场景预设快照（v2 兼容快照语义，v3 全参数快照） */
+/** 场景预设快照（全参数快照） */
 export interface ScenePreset {
   id: string
   name: string
@@ -451,11 +450,11 @@ export function createDefaultParams(sampleRate: number): HyperSoundEngineParams 
   }
 }
 
-/** v2 兼容：简约 5 段中心频率 */
+/** 简约 5 段中心频率 */
 export const SIMPLE_EQ_FREQUENCIES = [80, 250, 1000, 4000, 12000]
-/** v2 兼容：专业 10 段（octave） */
+/** 专业 10 段（octave） */
 export const PRO_EQ_DEFAULT_BANDS = [31.5, 63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
-/** v3 扩展：20 段（1/2 octave，20Hz–20kHz） */
+/** 20 段（1/2 octave，20Hz–20kHz） */
 export const PRO_EQ_20_BANDS = [20, 31.5, 50, 63, 100, 125, 200, 250, 400, 500, 800, 1000, 1600, 2000, 3200, 4000, 6300, 8000, 12500, 16000, 20000].slice(0, 20)
 
 // ==================== MIDI / 参数自动化（P1：MIDI Learn + 块速率自动化） ====================

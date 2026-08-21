@@ -1,5 +1,5 @@
 /**
- * HyperSoundEngine 音频效果引擎 v3 —— 频谱分析器（SpectrumAnalyzer）
+ * HyperSoundEngine v1 —— 频谱分析器（SpectrumAnalyzer）
  *
  * 出处/许可：自研实现；特征公式参考 meyda(MIT) extractors（rms/zcr/spectralCentroid/
  *   spectralRolloff/spectralFlatness/spectralCrest，技术文档 §12 / 映射表 #14）；

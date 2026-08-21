@@ -1,7 +1,7 @@
 /**
- * HyperSoundEngine v3 调音室 UI —— 参数快照 hooks
+ * HyperSoundEngine v1 调音室 UI —— 参数快照 hooks
  *
- * 参数语义（v3 引擎约定）：完整快照（HyperSoundEngineParams），setParams 每次替换整包。
+ * 参数语义（引擎约定）：完整快照（HyperSoundEngineParams），setParams 每次替换整包。
  * 本 hook 提供：
  *  - params：当前快照（深拷贝展示值）
  *  - patch(partial)：深合并后提交（UI 局部修改的惯用入口）

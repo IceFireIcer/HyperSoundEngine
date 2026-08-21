@@ -1,7 +1,7 @@
 /**
- * HyperSoundEngine v3 调音室 UI —— 调音器页（分享串 / WAV 导出 / 引擎信息）
+ * HyperSoundEngine v1 调音室 UI —— 调音器页（分享串 / WAV 导出 / 引擎信息）
  *
- * v3 分享串：完整参数快照（版本 + FNV-1a 校验 + 白名单解码），比 v2 的 EQ JSON 更完整。
+ * 分享串：完整参数快照（版本 + FNV-1a 校验 + 白名单解码），涵盖全部参数（比 EQ 局部导入导出更完整）。
  * WAV 导出与引擎信息（latency/采样率）供融合侧接线。
  */
 
@@ -81,7 +81,7 @@ export function SharePanel({ controller, bridge, theme, exportWav, exporting }: 
             style={{ background: theme.inputBg, border: `1px solid ${theme.glassBorder}` }} />
         )}
         <div className="flex gap-2">
-          <textarea value={importText} onChange={(e) => setImportText(e.target.value)} placeholder="粘贴 v3 分享串（以 wf3: 开头的字符串）"
+          <textarea value={importText} onChange={(e) => setImportText(e.target.value)} placeholder="粘贴分享串（引擎导出的完整参数串）"
             className={`flex-1 h-16 px-3 py-2 rounded-lg text-xs outline-none ${theme.textPrimary}`}
             style={{ background: theme.inputBg, border: `1px solid ${theme.glassBorder}` }} />
           <ActionButton onClick={handleImportShare} theme={theme}>

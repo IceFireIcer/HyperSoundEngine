@@ -1,5 +1,5 @@
 /**
- * HyperSoundEngine 音频引擎 v3 —— 引擎总成（HyperSoundEngine）
+ * HyperSoundEngine v1 —— 引擎总成（HyperSoundEngine）
  *
  * 出处/许可：
  *  - 链式架构与参数模型：本项目《音频算法设计文档.md》§2 总体架构（自研）；
@@ -8,7 +8,7 @@
  *    的概念来源与许可见各自源文件头部注释（RBJ Cookbook / DSPFilters(MIT) /
  *    kissfft(BSD-3) / stk FreeVerb(MIT) / ITU-R BS.1770 / ISO 226 等）；
  *  - 智能均衡 IEQ（Post）为本文件内置实现，思路参考技术文档 §1.4（自研）；
- *  - 夜间模式（压缩增强 + 6kHz 高频衰减）为 v2 兼容语义（本项目历史功能，自研）。
+ *  - 夜间模式（压缩增强 + 6kHz 高频衰减）为本项目历史功能（自研）。
  *
  * 处理链（顺序固定，见 API_SPEC 辅助模块 A）：
  *   输入 → 响度归一化增益 → 3D 环绕(轻量立体声旋转) → M/S(width + voiceBalance，可被调制矩阵驱动)
@@ -75,7 +75,7 @@ const ANALYSIS_WINDOW = 2048
 const MAX_PRE_EQ_BANDS = 20
 /** IEQ（Post）内部参数 EQ 段数（1 倍频程 10 段） */
 const IEQ_BAND_COUNT = 10
-/** IEQ 控制频率（1 倍频程，与 v2 专业 10 段一致） */
+/** IEQ 控制频率（1 倍频程，对齐专业 10 段） */
 const IEQ_FREQS = [31.5, 63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
 /** DynamicEq 固定 5 带交叉频率（与 dsp/DynamicEq.ts 默认一致） */
 const DYNAMIC_EQ_CROSSOVERS = [200, 800, 2500, 8000]
@@ -173,7 +173,7 @@ export class HyperSoundEngine implements AudioEngine {
   // —— 多通道逐对处理子引擎池（processBus perChannelPair；懒创建，setParams/reset 同步） ——
   private readonly _pairEngines: HyperSoundEngine[] = []
 
-  // —— 夜间模式（压缩增强 + 6kHz 高频 shelf，v2 兼容语义） ——
+  // —— 夜间模式（压缩增强 + 6kHz 高频 shelf） ——
   private readonly _nightCompressor: Compressor
   private readonly _nightShelfL: Biquad
   private readonly _nightShelfR: Biquad
@@ -914,7 +914,7 @@ export class HyperSoundEngine implements AudioEngine {
         id: 'loudness-normalization',
         active: () => this._params.loudnessNormalization.enabled,
         run: (L, R, n) => {
-          // 响度归一化增益（v2 兼容目标 LUFS + v3 引擎内实时测量驱动）
+          // 响度归一化增益（目标 LUFS + 引擎内实时测量驱动）
           const ln = this._params.loudnessNormalization
           if (ln.useRealtimeMeter) {
             const integrated = this._lufs.getIntegratedLufs()
@@ -927,7 +927,7 @@ export class HyperSoundEngine implements AudioEngine {
             const alpha = 1 - Math.exp(-(n / this._fs) / NORM_SMOOTH_SEC)
             this._normGain += alpha * (targetLin - this._normGain)
           } else {
-            // 外部给定增益：平滑过渡（v2 整曲测量换算语义；审计修复：不再瞬时阶跃）
+            // 外部给定增益：平滑过渡（整曲测量换算语义；审计修复：不再瞬时阶跃）
             const targetLin = Math.pow(10, Math.min(ln.maxGainDb, Math.max(ln.minGainDb, ln.externalGainDb)) / 20)
             const alpha = 1 - Math.exp(-(n / this._fs) / NORM_SMOOTH_SEC)
             this._normGain += alpha * (targetLin - this._normGain)
@@ -943,7 +943,7 @@ export class HyperSoundEngine implements AudioEngine {
         id: 'surround3d',
         active: () => this._params.surround3d.enabled,
         run: (L, R, n) => {
-          // 3D 环绕：轻量立体声旋转（v3 语义，angle 静态旋转 + speed 随时间缓慢旋转）
+          // 3D 环绕：轻量立体声旋转（angle 静态旋转 + speed 随时间缓慢旋转）
           const s3 = this._params.surround3d
           const dt = n / this._fs
           this._surroundPhase += 2 * Math.PI * s3.speed * dt * 0.125 // speed=1 → 0.125 圈/秒

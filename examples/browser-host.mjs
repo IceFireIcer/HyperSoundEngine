@@ -15,10 +15,10 @@ import { createDefaultParams } from '../dist/index.js'
  * @param {GainNode} masterGain
  * @param {AnalyserNode} analyser
  */
-export async function startV3(audioContext, masterGain, analyser) {
+export async function startEngine(audioContext, masterGain, analyser) {
   const host = createHyperSoundEngineHost({
     mode: 'auto',
-    workletUrl: '/v3-worklet-bundle.js', // 未打包时会自动回退 ScriptProcessor
+    workletUrl: '/hse-worklet-bundle.js', // 未打包时会自动回退 ScriptProcessor
   })
 
   const params = createDefaultParams(audioContext.sampleRate)

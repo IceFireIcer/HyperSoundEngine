@@ -466,8 +466,6 @@ interface HyperSoundEngineMixingStudioProps {
   onClose: () => void                    // 必需:关闭回调
   playerTheme: 'dark' | 'light'          // 必需:主题
   anchorRect?: { x, y, width, height } | null  // 弹窗锚点(CSS 动画)
-  engineVersion?: 'v1' | 'v2' | 'v3'     // 版本切换入口(可选)
-  onSwitchEngine?: (v) => void           // 请求切换引擎(可选)
   exportWav?: (() => Promise<void>) | null  // 离线导出(可选)
   exporting?: boolean
 }

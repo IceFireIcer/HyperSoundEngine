@@ -1,5 +1,5 @@
 /**
- * HyperSoundEngine v3 —— 前瞻限幅器（Lookahead Limiter + True Peak）
+ * HyperSoundEngine v1 —— 前瞻限幅器（Lookahead Limiter + True Peak）
  *
  * 概念来源：《音频算法技术文档.md》§3.3 —— 输入延迟 L → 检测窗峰值 →
  * 平滑增益 g = min(1, 10^(thresholdDb/20)/peak)，施加到延迟后的音频上（brickwall 零过冲）；
@@ -13,7 +13,7 @@
  * 增益平滑：target < gain 时用 attack（快，默认 0.5ms），否则用 release（慢，默认 150ms）。
  * 延迟线 / 检测队列 / 插值历史均预分配，process 内零分配。
  *
- * 真峰值插值优化（v3.1）：
+ * 真峰值插值优化：
  *  - 3 相位 × 8 taps 双声道内联展开，tap 索引与历史样本一次性取入局部变量
  *    （消除逐 tap 的 &7 索引与数组重取）；
  *  - 相位 2（frac=1/2）利用窗函数 sinc 对称性合并系数相同的 tap 对

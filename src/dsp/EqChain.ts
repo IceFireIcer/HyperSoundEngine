@@ -1,5 +1,5 @@
 /**
- * EqChain.ts —— 多段参数 EQ 级联 + Q 补偿（v3 核心，技术文档 §1.3）
+ * EqChain.ts —— 多段参数 EQ 级联 + Q 补偿（技术文档 §1.3）
  *
  * 出处/许可：
  *  - 每段滤波器为 RBJ peaking（公式见 biquad.ts，RBJ Audio EQ Cookbook 公开公式）；
@@ -22,7 +22,7 @@ export interface EqBandParam {
   q: number
 }
 
-/** 增益 clamp 范围（dB，v2 兼容语义，超出自动收窄） */
+/** 增益 clamp 范围（dB，超出自动收窄） */
 const GAIN_MIN_DB = -24
 const GAIN_MAX_DB = 24
 /** Q clamp 范围 */

@@ -14,16 +14,16 @@
 | 2 | 智能均衡 IEQ（Post） | `src/engine/HyperSoundEngine.ts` 内部 | §1.4 | engine(12) | ✅ 链内实现，3s 慢速平滑防抽吸 |
 | 3 | 齿音抑制 De-esser（分带/宽带） | `src/dsp/Deesser.ts` | §4（侧链带通+LR-4 交叉） | deesser(5) | ✅ 8kHz 衰减 >3dB（理论 -24dB）、200Hz 不受影响 |
 | 4 | 动态压缩（软拐点） | `src/dsp/Compressor.ts` | §3 | compressor(6) | ✅ 1/4 斜率 ±0.1；0dBFS→≈-15dBFS；makeup 生效 |
-| 5 | 夜间模式（压缩增强+高频衰减） | `HyperSoundEngine.ts` 内部 | v2 语义 | engine(12) | ✅ 参数语义与 v2 一致 |
+| 5 | 夜间模式（压缩增强+高频衰减） | `HyperSoundEngine.ts` 内部 | 既有语义 | engine(12) | ✅ 参数语义验证通过 |
 | 6 | 前瞻限幅器 + **真峰值** | `src/dsp/Limiter.ts` | §3.3（4× 过采样 sinc） | limiter(6) | ✅ 峰值 ≤-0.95dBFS；方波零过冲；latency=lookahead |
 | 7 | 虚拟低频增强（4 种谐波非线性） | `src/dsp/BassEnhancer.ts` | §5 | bassenhancer(6) | ✅ even→120Hz/odd→180Hz 谐波 DFT 验证；四类型无 NaN |
 | 8 | 分区卷积混响 + **IR 去周期化** | `src/dsp/Convolver.ts` | §2.1 | convolver(6) | ✅ 恒等/延迟/能量单调/去周期全通过；流式延迟=分区长 |
 | 9 | 算法混响（Freeverb 类，5 类型） | `src/dsp/ReverbSimple.ts` | §2.2 | reverbsimple(5) | ✅ 能量衰减单调、干湿比、preDelay |
-| 10 | 等响度补偿（auto/preset/custom） | `src/dsp/LoudnessComp.ts` | §6（v2 兼容公式） | loudnesscomp(7) | ✅ 音量 20%→120Hz 提升 >3dB、1kHz≈0dB；bass/flat/custom 全过 |
+| 10 | 等响度补偿（auto/preset/custom） | `src/dsp/LoudnessComp.ts` | §6 | loudnesscomp(7) | ✅ 音量 20%→120Hz 提升 >3dB、1kHz≈0dB；bass/flat/custom 全过 |
 | 11 | 响度测量 **BS.1770 LUFS/LRA/真峰值** | `src/dsp/LufsMeter.ts` | §7 | lufsmeter(7) | ✅ 1kHz 满刻度 ≈-3.01 LUFS（±0.5）；门限/LRA/44.1k/32k 近似 |
 | 12 | 响度归一化（实时测量驱动） | `HyperSoundEngine.ts` 内部 | §7.2 | engine(12) | ✅ -14 LUFS 目标、±9dB clamp、3s 平滑 |
 | 13 | M/S 处理（宽度+人声比例） | `src/dsp/MidSide.ts` | §8 | mside(5) | ✅ 恒等路径误差=0；width=0→单声道 |
-| 14 | 3D 环绕（轻量立体声旋转） | `HyperSoundEngine.ts` 内部 | v2 语义（降级实现） | engine(12) | ✅ 确定性旋转级 |
+| 14 | 3D 环绕（轻量立体声旋转） | `HyperSoundEngine.ts` 内部 | 既有语义（降级实现） | engine(12) | ✅ 确定性旋转级 |
 | 15 | ~~设备频响补偿（机型档案+拟合）~~ **已移除**（并入 #10） | — | — | — | ✅ 需求变更：改为按音量实施补偿的通用曲线（LoudnessComp auto，见 #10） |
 | 16 | 听力分析流程 | `src/analysis/HearingTest.ts` | §12 | hearing(8) | ✅ 7 频点二分 5 轮，阈值收敛 |
 | 17 | 频谱特征（质心/滚降/平坦度等） | `src/dsp/features.ts`、`analysis/Spectrum.ts` | §12（meyda 概念） | features(8)+spectrum(7) | ✅ 白噪声 flatness>0.8、单音≈0、质心/滚降正确 |
@@ -36,7 +36,7 @@
 | 24 | 12 组合场景预设 | `src/engine/ScenePresets.ts` | 设计文档 §3 | scenes(6) | ✅ id 唯一、参数合法 |
 | 25 | 引擎总成（双路径实时/离线） | `src/engine/HyperSoundEngine.ts` | 设计文档 §2/§5 | engine(12) | ✅ 确定性、零分配、latency 计算、限幅峰值约束 |
 | 26 | AudioWorklet 处理器 | `src/worklet/AudioEffectsProcessor.ts` | 设计文档 §2 | （打包期验证） | ✅ 结构正确；融合时 esbuild 打包单文件 |
-| 27 | **引擎宿主/切换接线**（HyperSoundEngineHost） | `src/integration/HyperSoundEngineHost.ts` | 切换语义同 v2（先断后连/恢复直连/幂等/竞态防护） | integration(9) | ✅ worklet/script 双模式 + 回退；dispose 恢复直连；竞态下不接线；script 通路限幅实测生效 |
+| 27 | **引擎宿主/切换接线**（HyperSoundEngineHost） | `src/integration/HyperSoundEngineHost.ts` | 切换语义（先断后连/恢复直连/幂等/竞态防护） | integration(9) | ✅ worklet/script 双模式 + 回退；dispose 恢复直连；竞态下不接线；script 通路限幅实测生效 |
 
 **合计 27 项条目（#15 已移除并入 #10，有效 26 项功能）/ 32 测试文件 / 331 用例全绿（含 UI 冒烟 9 项）/ tsc 0 错误。**
 
@@ -66,7 +66,7 @@ DSPFilters(MIT, biquad TDF2 思路)、kissfft(BSD-3, FFT 蝶形)、stk(MIT 类, 
 ### 2.5 响度归一化目标（-14 LUFS）说明
 
 - **-14 LUFS 是主流流媒体响度目标**：Spotify / YouTube / TIDAL 均以 -14 LUFS 为整曲目标
-  （v2 同款 `TARGET_LUFS = -14`），对音乐播放器合理；EBU R128 广播标准为 -23 LUFS、
+  （`TARGET_LUFS = -14`），对音乐播放器合理；EBU R128 广播标准为 -23 LUFS、
   Apple Music 为 -16 LUFS。
 - 引擎的 `loudnessNormalization.targetLufs` 字段**可配置**，融合期可做成用户可调
   （如 -14 流媒体 / -16 Apple / -23 广播三档），HyperSoundEngine 链内实时测量驱动（实时动态增益，非整曲静态测量）。

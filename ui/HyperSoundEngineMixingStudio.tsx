@@ -1,7 +1,7 @@
 /**
- * HyperSoundEngine v3 调音室 UI —— 主面板（HyperSoundEngineMixingStudio）
+ * HyperSoundEngine v1 调音室 UI —— 主面板（HyperSoundEngineMixingStudio）
  *
- * 布局与设计语言完全沿用 v1/v2 调音室（MixingStudio / MixingStudioV2）：
+ * 布局与设计语言沿用调音室设计语言：
  * 玻璃拟态面板 + 顶部渐变高光 + 胶囊 Tab + 锚点弹出动画（CSS 版）。
  * 四个页签：音效场景 / 均衡器 / 调音器 / 分析。
  *
@@ -27,18 +27,12 @@ import { LoudnessModal } from './modalsLoudness'
 import { ModulationModal } from './modalsModulation'
 import { MidiPanel } from './midiPanel'
 
-export type HyperSoundEngineVersion = 'v1' | 'v2' | 'v3'
-
 export interface HyperSoundEngineMixingStudioProps {
   bridge: HyperSoundEngineUiBridge
   onClose: () => void
   playerTheme: 'dark' | 'light'
   /** 打开按钮的锚点位置（弹窗从按钮侧弹出，CSS 动画实现） */
   anchorRect?: { x: number; y: number; width: number; height: number } | null
-  /** 当前引擎版本（切换入口显示用） */
-  engineVersion?: HyperSoundEngineVersion
-  /** 请求切换引擎（App 负责热/冷切换与弹窗） */
-  onSwitchEngine?: (version: HyperSoundEngineVersion) => void
   /** 离线导出（融合侧实现）；缺省时按钮区显示占位提示 */
   exportWav?: (() => Promise<void>) | null
   exporting?: boolean
@@ -47,15 +41,15 @@ export interface HyperSoundEngineMixingStudioProps {
 type Tab = 'effects' | 'eq' | 'tuner' | 'analyze' | 'midi'
 
 const PANEL_KEYFRAMES = `
-@keyframes v3-panel-backdrop { from { opacity: 0 } to { opacity: 1 } }
-@keyframes v3-panel-in {
+@keyframes hse-panel-backdrop { from { opacity: 0 } to { opacity: 1 } }
+@keyframes hse-panel-in {
   from { opacity: 0; transform: translate(var(--fx, 0px), var(--fy, 0px)) scale(0.5); }
   to { opacity: 1; transform: translate(0, 0) scale(1); }
 }
-@keyframes v3-tab-fade { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes hse-tab-fade { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 `
 
-export default function HyperSoundEngineMixingStudio({ bridge, onClose, playerTheme, anchorRect, engineVersion = 'v3', onSwitchEngine, exportWav = null, exporting = false }: HyperSoundEngineMixingStudioProps) {
+export default function HyperSoundEngineMixingStudio({ bridge, onClose, playerTheme, anchorRect, exportWav = null, exporting = false }: HyperSoundEngineMixingStudioProps) {
   const theme = useHyperSoundEngineTheme(playerTheme)
   const controller = useHyperSoundEngineParams(bridge)
   const [activeTab, setActiveTab] = useState<Tab>('effects')
@@ -79,7 +73,7 @@ export default function HyperSoundEngineMixingStudio({ bridge, onClose, playerTh
           backgroundColor: theme.dark ? 'rgba(0,0,0,0.35)' : 'rgba(0,0,0,0.18)',
           backdropFilter: 'blur(6px) saturate(140%)',
           WebkitBackdropFilter: 'blur(6px) saturate(140%)',
-          animation: 'v3-panel-backdrop 0.18s ease-out',
+          animation: 'hse-panel-backdrop 0.18s ease-out',
         }}
         onClick={onClose}
       >
@@ -93,7 +87,7 @@ export default function HyperSoundEngineMixingStudio({ bridge, onClose, playerTh
             WebkitBackdropFilter: theme.glassBlur,
             border: `1px solid ${theme.glassBorder}`,
             boxShadow: '0 24px 64px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.2)',
-            animation: 'v3-panel-in 0.26s cubic-bezier(0.2, 0.9, 0.3, 1.15)',
+            animation: 'hse-panel-in 0.26s cubic-bezier(0.2, 0.9, 0.3, 1.15)',
             ['--fx' as string]: `${fx}px`,
             ['--fy' as string]: `${fy}px`,
           }}
@@ -114,18 +108,6 @@ export default function HyperSoundEngineMixingStudio({ bridge, onClose, playerTh
               </div>
             </div>
             <div className="flex items-center gap-2">
-              {onSwitchEngine && (
-                <div className="flex items-center rounded-full p-0.5"
-                  style={{ background: theme.inputBg, border: `1px solid ${theme.glassBorder}`, backdropFilter: 'blur(8px)' }}>
-                  {(['v1', 'v2', 'v3'] as const).map((v) => (
-                    <button key={v} type="button" onClick={() => onSwitchEngine(v)}
-                      className="px-2.5 py-1 rounded-full text-[11px] font-medium transition-all"
-                      style={engineVersion === v ? { backgroundColor: theme.accentColor, color: '#fff', boxShadow: `0 0 10px ${theme.accentColor}55` } : { color: theme.textSecondary }}>
-                      {v}
-                    </button>
-                  ))}
-                </div>
-              )}
               <button type="button" onClick={onClose} aria-label="关闭调音室"
                 className={`p-2 rounded-full transition-colors ${theme.dark ? 'hover:bg-white/15' : 'hover:bg-black/10'}`}>
                 <X className={`w-5 h-5 ${theme.textSecondary}`} />
@@ -163,7 +145,7 @@ export default function HyperSoundEngineMixingStudio({ bridge, onClose, playerTh
 
           {/* 内容 */}
           <div className="relative p-4 sm:p-5 overflow-y-auto" style={{ height: 'calc(88vh - 140px)' }}>
-            <div key={activeTab} style={{ animation: 'v3-tab-fade 0.2s ease-out' }}>
+            <div key={activeTab} style={{ animation: 'hse-tab-fade 0.2s ease-out' }}>
               {activeTab === 'effects' && (
                 <EffectsPanel controller={controller} bridge={bridge} theme={theme} onOpenEffect={setEffectModal} />
               )}

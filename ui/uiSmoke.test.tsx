@@ -1,5 +1,5 @@
 /**
- * HyperSoundEngine v3 调音室 UI —— 渲染冒烟测试（jsdom）
+ * HyperSoundEngine v1 调音室 UI —— 渲染冒烟测试（jsdom）
  *
  * 验证主面板可渲染、页签切换、效果弹窗开合、场景应用、分享串往返、
  * 听力测试流程状态机推进。不依赖真实 Web Audio（桥由 HyperSoundEngine 真实实例提供）。
@@ -27,7 +27,7 @@ function clickTab(label: string) {
   fireEvent.click(screen.getAllByText(label)[0])
 }
 
-describe('V3 调音室 UI 冒烟', () => {
+describe('调音室 UI 冒烟', () => {
   beforeEach(() => cleanup())
 
   it('主面板渲染：标题 + 4 页签 + 默认音效场景页', () => {

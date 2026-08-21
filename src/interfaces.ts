@@ -1,5 +1,5 @@
 /**
- * HyperSoundEngine v3 独立音频引擎 —— 对外统一接口（Seam）
+ * HyperSoundEngine v1 独立音频引擎 —— 对外统一接口（Seam）
  *
  * 设计意图（deep module）：
  *  - 外部软件/宿主只需要依赖 `AudioEngine` 这一小接口，就能接入完整引擎；

@@ -27,7 +27,7 @@
 
 import type { ReverbType } from '../types'
 
-/** 算法混响参数（v2 兼容 5 种 type） */
+/** 算法混响参数（5 种 type） */
 export interface ReverbSimpleParams {
   roomSize: number
   damping: number

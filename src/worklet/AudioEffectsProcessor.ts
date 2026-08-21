@@ -1,5 +1,5 @@
 /**
- * HyperSoundEngine 音频效果引擎 v3 —— AudioWorklet 处理器（实时渲染线程）
+ * HyperSoundEngine v1 —— AudioWorklet 处理器（实时渲染线程）
  *
  * 出处/许可：架构借鉴 Tone.js(MIT) 的 AudioWorklet 消息管道思路（设计文档 §15 /
  *   映射表 #20 🟡 借鉴架构），处理器本体为自研封装，不含第三方代码。

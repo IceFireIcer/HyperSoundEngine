@@ -1,5 +1,5 @@
 /**
- * WaveForge 专属适配层 —— v3 引擎接线
+ * WaveForge 专属适配层 —— HyperSoundEngine v1 引擎接线
  *
  * 本文件不属于独立引擎核心包（`src/`），而是 WaveForge 项目侧的适配代码：
  *  - 引擎本体从 `hypersoundengine`（或本仓库 `src/`）导入；
@@ -17,19 +17,19 @@ import type { AudioEngine } from '../../src/interfaces'
 import type { HyperSoundEngineParams } from '../../src/types'
 import { createHyperSoundEngineUiBridge, deepMerge } from '../../ui'
 import type { HyperSoundEngineUiBridge, DeepPartial } from '../../ui'
-// 变速变调：v3 引擎链内 Stretch 为离线语义（不内联实时主链），实时变速变调
-// 复用 WaveForge 既有 SoundTouch AudioWorklet 方案（与 v1/v2 同款），串接在
-// masterGain 与 v3 处理节点之间（masterGain → SoundTouch → v3 → analyser）。
+// 变速变调：引擎链内 Stretch 为离线语义（不内联实时主链），实时变速变调
+// 复用 WaveForge 既有 SoundTouch AudioWorklet 方案，串接在
+// masterGain 与引擎处理节点之间（masterGain → SoundTouch → 引擎 → analyser）。
 import { SoundTouchNode } from '@soundtouchjs/audio-worklet'
 import processorUrl from '@soundtouchjs/audio-worklet/processor?url'
 
-/** 参数持久化键（v3 独立命名空间） */
-const PARAMS_KEY = 'waveforge:v3-params'
+/** 参数持久化键（独立命名空间） */
+const PARAMS_KEY = 'waveforge:hse-params'
 /** 听力测试纯音时长（UI_GUIDE §4：约 0.6s） */
 const HEARING_TONE_SECONDS = 0.6
 
 /** 音频图句柄（与 src/hooks/useAudioPlayer.ts 的 AudioGraphHandle 结构一致；鸭子类型传入 HyperSoundEngineHost） */
-export interface V3GraphHandle {
+export interface EngineGraphHandle {
   audioContext: AudioContext
   masterGain: GainNode
   analyser: AnalyserNode
@@ -39,7 +39,7 @@ let host: HyperSoundEngineHost | null = null
 let wrappedBridge: HyperSoundEngineUiBridge | null = null
 let bridgedEngine: AudioEngine | null = null
 let currentParams: HyperSoundEngineParams | null = null
-let lastHandle: V3GraphHandle | null = null
+let lastHandle: EngineGraphHandle | null = null
 let hearingTone: { osc: OscillatorNode; gain: GainNode } | null = null
 let onHearingPlay: ((e: Event) => void) | null = null
 let persistTimer: number | null = null
@@ -115,7 +115,7 @@ function stopHearingTone(): void {
   hearingTone = null
 }
 
-// ==================== 变速变调（SoundTouch 前置链，与 v1/v2 同款） ====================
+// ==================== 变速变调（SoundTouch 前置链） ====================
 
 let soundtouchNode: SoundTouchNode | null = null
 let soundtouchWired = false
@@ -129,7 +129,7 @@ function pitchActive(p: HyperSoundEngineParams | null): boolean {
   return Math.abs(p.pitch.semitones) > 1e-9 || Math.abs(p.pitch.rate - 1) > 1e-9
 }
 
-/** 把 pitch 参数写到 SoundTouch 节点（AudioParam 平滑过渡，与 v2 applyPitchSettings 一致） */
+/** 把 pitch 参数写到 SoundTouch 节点（AudioParam 平滑过渡） */
 function applySoundTouchParams(node: SoundTouchNode, ctx: AudioContext, pitch: HyperSoundEngineParams['pitch']): void {
   try {
     const t = ctx.currentTime
@@ -140,24 +140,24 @@ function applySoundTouchParams(node: SoundTouchNode, ctx: AudioContext, pitch: H
   }
 }
 
-/** 撤除 SoundTouch 前置链，恢复 masterGain → v3 处理节点直连 */
+/** 撤除 SoundTouch 前置链，恢复 masterGain → 引擎处理节点直连 */
 function unwireSoundTouch(): void {
   if (soundtouchNode) {
     try { soundtouchNode.disconnect() } catch { /* noop */ }
     soundtouchNode = null
   }
   if (soundtouchWired && host && lastHandle) {
-    const v3Node = host.getAudioNode()
+    const engineNode = host.getAudioNode()
     try {
       lastHandle.masterGain.disconnect()
-      if (v3Node) lastHandle.masterGain.connect(v3Node as unknown as AudioNode)
+      if (engineNode) lastHandle.masterGain.connect(engineNode as unknown as AudioNode)
     } catch { /* noop */ }
   }
   soundtouchWired = false
 }
 
 /**
- * 按当前参数同步 SoundTouch 前置链（masterGain → SoundTouch → v3 节点 → analyser）。
+ * 按当前参数同步 SoundTouch 前置链（masterGain → SoundTouch → 引擎节点 → analyser）。
  * 激活时按需接线（注册异步、竞态防护）；关闭时撤除恢复直连；未激活不占链（零额外延迟）。
  */
 async function syncPitchChain(): Promise<void> {
@@ -179,8 +179,8 @@ async function syncPitchChain(): Promise<void> {
     soundtouchCtx = ctx
   }
 
-  const v3Node = host.getAudioNode()
-  if (!v3Node) return // 引擎未接入音频图（冷启动仅存参数，下次 attach 生效）
+  const engineNode = host.getAudioNode()
+  if (!engineNode) return // 引擎未接入音频图（冷启动仅存参数，下次 attach 生效）
 
   if (soundtouchWired && soundtouchNode) {
     applySoundTouchParams(soundtouchNode, ctx, currentParams!.pitch)
@@ -207,18 +207,18 @@ async function syncPitchChain(): Promise<void> {
     soundtouchNode = node
     soundtouchWired = true
   } catch {
-    // 接线失败：保持 masterGain → v3 直连（音频不中断）
+    // 接线失败：保持 masterGain → 引擎直连（音频不中断）
     soundtouchNode = null
     soundtouchWired = false
   }
 }
 
 /**
- * 把 v3 引擎接入音频图（幂等：同一 handle 重复调用直接复用）。
- * 语义与 v1/v2 attach 一致：masterGain 全断 → v3 处理节点 → analyser。
+ * 把引擎接入音频图（幂等：同一 handle 重复调用直接复用）。
+ * 语义：masterGain 全断 → 引擎处理节点 → analyser。
  */
-export async function attachV3Engine(handle: V3GraphHandle): Promise<void> {
-  if (!host) host = new HyperSoundEngineHost({ mode: 'auto', workletUrl: './v3-worklet.js' })
+export async function attachEngine(handle: EngineGraphHandle): Promise<void> {
+  if (!host) host = new HyperSoundEngineHost({ mode: 'auto', workletUrl: './hse-worklet.js' })
   lastHandle = handle
   const fs = handle.audioContext.sampleRate
 
@@ -229,7 +229,7 @@ export async function attachV3Engine(handle: V3GraphHandle): Promise<void> {
   // UI 桥按引擎实例缓存；attach 可能因采样率变化重建引擎，故在 attach 后构建
   ensureBridge(fs)
 
-  // 变速变调：host.attach 重建了 v3 处理节点，旧 SoundTouch 接线指向失联节点，
+  // 变速变调：host.attach 重建了引擎处理节点，旧 SoundTouch 接线指向失联节点，
   // 先丢弃再按当前参数重新同步（pitch 激活时接入，否则保持直连）
   if (soundtouchNode) { try { soundtouchNode.disconnect() } catch { /* noop */ } soundtouchNode = null }
   soundtouchWired = false
@@ -242,13 +242,13 @@ export async function attachV3Engine(handle: V3GraphHandle): Promise<void> {
       if (!detail || typeof detail.freqHz !== 'number') return
       if (lastHandle) startHearingTone(lastHandle.audioContext, detail.freqHz, detail.levelDb ?? -20)
     }
-    window.addEventListener('v3HearingPlay', onHearingPlay)
+    window.addEventListener('hseHearingPlay', onHearingPlay)
   }
 }
 
 /** 构建或复用 UI 桥（包装 worklet 模式下参数/统计的同步下发与回传） */
 function ensureBridge(fs: number): HyperSoundEngineUiBridge {
-  if (!host) host = new HyperSoundEngineHost({ mode: 'auto', workletUrl: './v3-worklet.js' })
+  if (!host) host = new HyperSoundEngineHost({ mode: 'auto', workletUrl: './hse-worklet.js' })
   if (wrappedBridge === null || bridgedEngine !== host.engine) {
     const raw = createHyperSoundEngineUiBridge(host.engine, fs)
     wrappedBridge = {
@@ -271,11 +271,11 @@ function ensureBridge(fs: number): HyperSoundEngineUiBridge {
   return wrappedBridge
 }
 
-/** 切走/关闭：恢复 masterGain→analyser 直连（与 v2 dispose 同款语义） */
-export function detachV3Engine(): void {
+/** 切走/关闭：恢复 masterGain→analyser 直连 */
+export function detachEngine(): void {
   stopHearingTone()
   if (onHearingPlay) {
-    window.removeEventListener('v3HearingPlay', onHearingPlay)
+    window.removeEventListener('hseHearingPlay', onHearingPlay)
     onHearingPlay = null
   }
   // 变速变调前置链先摘除（masterGain 的断开重连交给 host.dispose）
@@ -292,12 +292,12 @@ export function detachV3Engine(): void {
  * 音频图未接入时以默认引擎实例兜底创建（fs 按宿主惯例取 48000）；
  * 真实接入后若采样率不同，host 会重建引擎实例，桥随之重建并回放当前参数快照。
  */
-export function getV3Bridge(): HyperSoundEngineUiBridge {
+export function getBridge(): HyperSoundEngineUiBridge {
   return ensureBridge(48000)
 }
 
 /** 是否已接入音频图 */
-export function isV3Attached(): boolean {
+export function isAttached(): boolean {
   return host !== null && host.getMode() !== null
 }
 
@@ -305,7 +305,7 @@ export function isV3Attached(): boolean {
  * 系统音量 → 等响度补偿（0-100）：LoudnessComp auto 模式按音量提升低/高频。
  * 无音量源时引擎默认 80；此函数仅更新 volumePercent 字段，是否生效由 mode 决定。
  */
-export function setV3SystemVolume(volumePercent: number): void {
+export function setSystemVolume(volumePercent: number): void {
   if (!wrappedBridge || !currentParams) return
   const v = Math.max(0, Math.min(100, Math.round(volumePercent)))
   if (currentParams.loudnessCompensation?.volumePercent === v) return
@@ -314,7 +314,7 @@ export function setV3SystemVolume(volumePercent: number): void {
   wrappedBridge.setParams(next)
 }
 
-/** 16-bit PCM WAV 编码（与 v2 引擎导出同规格） */
+/** 16-bit PCM WAV 编码 */
 function encodeWav(channels: Float32Array[], sampleRate: number): Blob {
   const numChannels = channels.length
   const frames = channels[0].length
@@ -353,7 +353,7 @@ function encodeWav(channels: Float32Array[], sampleRate: number): Blob {
  * 离线导出：解码源音频 → 独立 HyperSoundEngine 分块处理（与实时链同一内核，逐样本一致）
  * → 16-bit WAV 下载。尾部以 1s 静音冲刷卷积混响/限幅器 lookahead 余量。
  */
-export async function exportV3Wav(sourceUrl: string, durationSeconds: number): Promise<void> {
+export async function exportWav(sourceUrl: string, durationSeconds: number): Promise<void> {
   const ctx = lastHandle?.audioContext
   if (!ctx) throw new Error('音频引擎尚未就绪')
   if (!currentParams) currentParams = restoreParams(ctx.sampleRate)
@@ -431,7 +431,7 @@ export async function exportV3Wav(sourceUrl: string, durationSeconds: number): P
   const url = URL.createObjectURL(wavBlob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `waveforge-v3-${Date.now()}.wav`
+  a.download = `waveforge-hse-${Date.now()}.wav`
   document.body.appendChild(a)
   a.click()
   a.remove()

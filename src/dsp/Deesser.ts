@@ -1,5 +1,5 @@
 /**
- * HyperSoundEngine v3 —— 动态齿音抑制（De-esser）
+ * HyperSoundEngine v1 —— 动态齿音抑制（De-esser）
  *
  * 概念来源：Stanford EE264 数字音频处理课程公开的 de-esser 设计思路
  *   （侧链带通提取齿音频段 → 包络检测 → dB 域阈值压缩 → 分带/宽带增益施加），

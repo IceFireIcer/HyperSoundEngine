@@ -1,5 +1,5 @@
 /**
- * HyperSoundEngine 音频效果引擎 v3 —— 声源分离任务队列（offline）
+ * HyperSoundEngine v1 —— 声源分离任务队列（offline）
  *
  * 出处/许可：模型方案 spleeter(Deezer, MIT) / demucs(Meta, MIT)，浏览器经
  *   ONNX Runtime Web 推理（技术文档 §11 / 映射表 #16 🟢 套用模型 + 🔴 任务队列自研）；

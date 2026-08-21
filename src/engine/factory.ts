@@ -1,5 +1,5 @@
 /**
- * HyperSoundEngine v3 —— 引擎工厂（独立接入入口）
+ * HyperSoundEngine v1 —— 引擎工厂（独立接入入口）
  *
  * 外部软件只需：
  *   import { createEngine } from 'hypersoundengine'

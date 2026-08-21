@@ -1,7 +1,7 @@
 /**
- * HyperSoundEngine v3 调音室 UI —— 设计语言（Design Tokens）
+ * HyperSoundEngine v1 调音室 UI —— 设计语言（Design Tokens）
  *
- * 与 HyperSoundEngine v1/v2 调音室（MixingStudio / MixingStudioV2）完全一致的设计语言：
+ * 调音室统一设计语言：
  *  - liquid glass 玻璃拟态：低不透明度面板 + 强毛玻璃 + 顶部渐变高光 + 内高光描边；
  *  - 全局主题色 accent（默认 #8b5cf6，跟随 accentColorChanged 事件实时联动）；
  *  - 三级文本层级 textPrimary / textSecondary / textTertiary（暗/亮双主题）；
@@ -26,11 +26,11 @@ export interface HyperSoundEngineTheme {
   textSecondary: string
   textTertiary: string
   inputBg: string
-  /** 渐变填充的 range 轨道背景（v2 同款公式） */
+  /** 渐变填充的 range 轨道背景 */
   sliderTrack: (value: number, min: number, max: number) => string
 }
 
-/** 跟随全局主题色（accentColorChanged 事件 + localStorage，与 v1/v2 面板一致） */
+/** 跟随全局主题色（accentColorChanged 事件 + localStorage，与全局面板一致） */
 function useAccentColor(): string {
   const [accentColor, setAccentColor] = useState(() => {
     try {
@@ -51,7 +51,7 @@ function useAccentColor(): string {
   return accentColor
 }
 
-/** 构造 v3 UI 设计语言变量（每次渲染调用一次即可） */
+/** 构造 UI 设计语言变量（每次渲染调用一次即可） */
 export function useHyperSoundEngineTheme(playerTheme: 'dark' | 'light'): HyperSoundEngineTheme {
   const dark = playerTheme === 'dark'
   const accentColor = useAccentColor()

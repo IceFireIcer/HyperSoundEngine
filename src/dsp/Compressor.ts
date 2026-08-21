@@ -1,5 +1,5 @@
 /**
- * HyperSoundEngine v3 —— 动态压缩器（v2 兼容语义 + 软拐点 knee）
+ * HyperSoundEngine v1 —— 动态压缩器（软拐点 knee）
  *
  * 概念来源：《音频算法技术文档.md》§3（包络检测 + dB 域压缩曲线 + makeup 补偿），
  * 软拐点采用行业标准公式（DAW 压缩器通用形式）；本文件为自研实现。

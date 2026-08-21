@@ -1,8 +1,8 @@
 /**
- * HyperSoundEngine v3 调音室 UI —— 均衡器页
+ * HyperSoundEngine v1 调音室 UI —— 均衡器页
  *
- * v3 EQ：简约 5 段 / 专业 10-20 段 + 级联 Q 补偿 + 锁定 + 曲线编辑器拖拽。
- * 预设（localStorage）与导入/导出沿用 v2 的 JSON 格式（{mode, simpleBands, proBands}）。
+ * EQ：简约 5 段 / 专业 10-20 段 + 级联 Q 补偿 + 锁定 + 曲线编辑器拖拽。
+ * 预设（localStorage）与导入/导出沿用 JSON 格式（{mode, simpleBands, proBands}）。
  */
 
 import { useCallback, useState } from 'react'
@@ -14,7 +14,7 @@ import { ActionButton, GlassCard, GlassRangeStyle, InfoLine, SectionTitle, TextI
 import { EqCurveEditor, type EqPoint } from './eqCurveEditor'
 import type { DeepPartial, HyperSoundEngineParamsController } from './hooks'
 
-const PRESETS_KEY = 'hypersound:v3-eq-presets'
+const PRESETS_KEY = 'hypersound:hse-eq-presets'
 
 interface EqPreset {
   id: string
@@ -284,7 +284,7 @@ export function EqPanel({ controller, theme }: { controller: HyperSoundEnginePar
             )}
           </GlassCard>
 
-          {/* 导入导出（EQ 部分；完整 v3 分享串在调音器页） */}
+          {/* 导入导出（EQ 部分；完整分享串在调音器页） */}
           <GlassCard theme={theme}>
             <div className={`${theme.textPrimary} font-medium mb-2`}>导入 / 导出</div>
             <div className="flex gap-2 mb-2">
@@ -305,7 +305,7 @@ export function EqPanel({ controller, theme }: { controller: HyperSoundEnginePar
                 <ClipboardPaste className="w-4 h-4" /> 导入
               </ActionButton>
             </div>
-            <InfoLine theme={theme}><Info className="w-3 h-3 shrink-0" /> 分享完整 v3 参数（含场景/混响/补偿）请用调音器页的「分享串」。</InfoLine>
+            <InfoLine theme={theme}><Info className="w-3 h-3 shrink-0" /> 分享完整参数（含场景/混响/补偿）请用调音器页的「分享串」。</InfoLine>
           </GlassCard>
         </>
       )}

@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- **版本谱系重置**：废止旧 WaveForge v1/v2/v3 引擎谱系描述，现引擎定名 **HyperSoundEngine v1**（版本策略见 `docs/VERSIONING.md`）。
+- 适配层 `attachV3Engine.ts` 重命名为 `attachEngine.ts`；导出 `attachV3Engine/detachV3Engine/getV3Bridge/isV3Attached/setV3SystemVolume/exportV3Wav/V3GraphHandle` 相应改为 `attachEngine/detachEngine/getBridge/isAttached/setSystemVolume/exportWav/EngineGraphHandle`。
+- 调音室 UI 移除引擎版本切换入口（`engineVersion`/`onSwitchEngine` props 与 v1/v2/v3 切换器）。
+- 命名去版本化：`v3HearingPlay`→`hseHearingPlay`、存储键 `hypersound:v3-*`/`waveforge:v3-params`→`hse-*`、worklet URL `v3-worklet*`→`hse-worklet*`、CSS 动画 `v3-*`→`hse-*`、WAV 导出文件名前缀 `waveforge-v3-`→`waveforge-hse-`。
+
+### Added
+- 版本策略文档 `docs/VERSIONING.md`（生成代号 ↔ semver 映射、bump 规则、向量纪律、命名规范）。
+
 ## [0.2.0] - 2026-08
 
 ### Added
@@ -33,8 +44,8 @@
 
 ### Changed
 - LICENSE 改为 CC BY-NC-ND 4.0。
-- 引擎目录由 `waveforge-engine-v3` 重构为 `HyperSoundEngine`。
-- 核心类名：`EngineV3` → `HyperSoundEngine`，`EngineV3Host` → `HyperSoundEngineHost`。
+- 引擎目录重构为 `HyperSoundEngine`。
+- 核心类名统一为 `HyperSoundEngine` / `HyperSoundEngineHost`。
 - Worklet 处理器名：`hypersoundengine`。
 - DSP 内部去重：Deesser/BassEnhancer 共用 `dsp/biquad.ts`，Stretch 共用 `dsp/fft.ts`。
 - `EqChain.processStereo` 改为块处理，减少每样本方法调用开销。
@@ -45,4 +56,3 @@
 
 ## [0.1.0] - 2026-08
 
-- 初始 WaveForge v3 引擎（历史版本，已重构为 HyperSoundEngine）。

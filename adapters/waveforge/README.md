@@ -5,14 +5,14 @@
 ## 为什么单独放
 
 - 引擎核心 `src/` 保持纯 TypeScript、零 WaveForge 依赖；
-- WaveForge 侧只需要复制/引用本目录的 `attachV3Engine.ts` 即可完成 v3 接入；
+- WaveForge 侧只需要复制/引用本目录的 `attachEngine.ts` 即可完成引擎接入；
 - 其他软件接入时不要依赖本目录，直接使用 `src/index.ts`、`src/browser.ts` 或构建产物 `dist/`。
 
 ## 文件
 
 | 文件 | 作用 |
 |---|---|
-| `attachV3Engine.ts` | 把 HyperSoundEngineHost 接进 WaveForge 音频图；参数持久化、UI 桥、SoundTouch 前置链、听力测试、离线 WAV 导出 |
+| `attachEngine.ts` | 把 HyperSoundEngineHost 接进 WaveForge 音频图；参数持久化、UI 桥、SoundTouch 前置链、听力测试、离线 WAV 导出 |
 
 ## 依赖
 
@@ -22,15 +22,15 @@
 
 ## 使用
 
-将 `attachV3Engine.ts` 复制到 WaveForge 源码目录，然后：
+将 `attachEngine.ts` 复制到 WaveForge 源码目录，然后：
 
 ```ts
-import { attachV3Engine, detachV3Engine, getV3Bridge } from './attachV3Engine'
+import { attachEngine, detachEngine, getBridge } from './attachEngine'
 
-await attachV3Engine({ audioContext, masterGain, analyser })
+await attachEngine({ audioContext, masterGain, analyser })
 // 调音室渲染
-const bridge = getV3Bridge()
+const bridge = getBridge()
 bridge.setParams(nextParams)
 // 切走
-detachV3Engine()
+detachEngine()
 ```

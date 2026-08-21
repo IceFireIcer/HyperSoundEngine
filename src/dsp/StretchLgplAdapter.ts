@@ -19,7 +19,7 @@
 export interface StretchLgplAdapter {
   /** 是否成功加载 LGPL 库（未安装时 false） */
   readonly available: boolean
-  /** semitones -10..+10；rate 0.25..3.0（与 v2 PitchSettings 范围一致） */
+  /** semitones -10..+10；rate 0.25..3.0 */
   setParams(semitones: number, rate: number): void
   /**
    * 喂入一个立体声块并返回本轮新产出的输出。

@@ -4,7 +4,7 @@
  * 覆盖：
  * - Compressor 由外部 sidechain 驱动包络
  * - Deesser 由外部 sidechain 驱动齿音检测
- * - EngineV3.process 的 sidechain 参数在 sidechainEnabled 时生效
+ * - HyperSoundEngine.process 的 sidechain 参数在 sidechainEnabled 时生效
  */
 
 import { describe, it, expect } from 'vitest'

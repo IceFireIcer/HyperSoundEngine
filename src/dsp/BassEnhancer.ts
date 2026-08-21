@@ -1,5 +1,5 @@
 /**
- * HyperSoundEngine v3 —— 虚拟低频增强（Virtual Bass / Bass Enhancer）
+ * HyperSoundEngine v1 —— 虚拟低频增强（Virtual Bass / Bass Enhancer）
  *
  * 概念来源：IEEE 虚拟低音论文思路（Gerstle et al. / "Synthesis of polynomial-based
  *   nonlinear device..." / "Virtual Bass Enhancement Based on Harmonics Control"，

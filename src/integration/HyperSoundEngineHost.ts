@@ -1,10 +1,9 @@
 /**
- * HyperSoundEngineHost —— v3 引擎宿主接线模块（供 HyperSoundEngine 引擎切换逻辑使用）
+ * HyperSoundEngineHost —— 引擎宿主接线模块（供 HyperSoundEngine 引擎切换逻辑使用）
  *
- * 定位：v2 与 v3 是**完全独立的两个引擎**，本模块不做任何 API 兼容层；
- * 只保证一件事：**切换时能正常切到 v3 进行处理**。
- * 切换语义（与 v2 dispose 相同的关键约束，防新旧双链并联打架）：
- *  - attach：masterGain 全断 → 接入 v3 处理节点 → 连 analyser；
+ * 只保证一件事：**接入后音频正确经过引擎处理**。
+ * 接入语义（关键约束，防新旧双链并联打架）：
+ *  - attach：masterGain 全断 → 接入引擎处理节点 → 连 analyser；
  *  - dispose：断开处理节点 → masterGain 全断 → 恢复 masterGain→analyser 直连；
  *  - 幂等：重复 attach 同一 handle 直接 return；
  *  - 竞态：attach 的异步注册期间被 dispose → 完成后放弃接线（防旧节点插进新图）。
@@ -112,8 +111,8 @@ export class HyperSoundEngineHost {
   }
 
   /**
-   * 把 v3 引擎接入音频图（幂等：同一 handle 重复调用直接 return）。
-   * 语义：masterGain 全断 → 接 v3 处理节点 → 连 analyser；防新旧双链并联。
+   * 把引擎接入音频图（幂等：同一 handle 重复调用直接 return）。
+   * 语义：masterGain 全断 → 接引擎处理节点 → 连 analyser；防新旧双链并联。
    */
 async attach(handle: HyperSoundEngineHostHandle, params?: HyperSoundEngineParams): Promise<void> {
     if (this.handle === handle) {
@@ -137,7 +136,7 @@ async attach(handle: HyperSoundEngineHostHandle, params?: HyperSoundEngineParams
     //   dispose 也能据此恢复 masterGain→analyser 直连（否则音频会死）
     this.handle = handle
 
-    // 先全断 masterGain（v2 同款语义：避免与旧引擎并联打架）
+    // 先全断 masterGain（避免与旧引擎并联打架）
     try {
       handle.masterGain.disconnect?.()
     } catch {
@@ -203,7 +202,7 @@ async attach(handle: HyperSoundEngineHostHandle, params?: HyperSoundEngineParams
         /* noop */
       }
       this.handle = null
-      throw new Error('v3 host: no audio path available（worklet 未打包或 script 不可用）')
+      throw new Error('host: no audio path available（worklet 未打包或 script 不可用）')
     }
 
     handle.masterGain.connect?.(node)
@@ -220,7 +219,7 @@ async attach(handle: HyperSoundEngineHostHandle, params?: HyperSoundEngineParams
     if (this.node?.port) this.node.port.postMessage({ type: 'params', params: p })
   }
 
-  /** 拆除 v3 链路并恢复 masterGain→analyser 直连（v2 dispose 同款语义） */
+  /** 拆除引擎链路并恢复 masterGain→analyser 直连（恢复直连语义） */
   dispose(): void {
     this.disposed = true
     this.attachSeq++
@@ -266,7 +265,7 @@ async attach(handle: HyperSoundEngineHostHandle, params?: HyperSoundEngineParams
     return this.lastAnalysis
   }
 
-  /** 当前 v3 处理节点（未接入返回 null）。供融合层在 masterGain 与处理节点之间
+  /** 当前引擎处理节点（未接入返回 null）。供融合层在 masterGain 与处理节点之间
    *  插入前置节点（如 SoundTouch 变速变调），接线方负责断开重连语义。 */
   getAudioNode(): HyperSoundEngineAudioNodeLike | null {
     return this.node
@@ -276,7 +275,7 @@ async attach(handle: HyperSoundEngineHostHandle, params?: HyperSoundEngineParams
 /**
  * 浏览器宿主工厂：创建 HyperSoundEngineHost 实例。
  * 这是接入 Web Audio 图的最简入口：
- *   const host = createHyperSoundEngineHost({ mode: 'auto', workletUrl: '/v3-worklet.js' })
+ *   const host = createHyperSoundEngineHost({ mode: 'auto', workletUrl: '/hse-worklet.js' })
  */
 export function createHyperSoundEngineHost(opts?: HyperSoundEngineHostOptions): HyperSoundEngineHost {
   return new HyperSoundEngineHost(opts)

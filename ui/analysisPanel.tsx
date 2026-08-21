@@ -1,5 +1,5 @@
 /**
- * HyperSoundEngine v3 调音室 UI —— 分析页
+ * HyperSoundEngine v1 调音室 UI —— 分析页
  *
  * 实时读数：LUFS/LRA/峰值/真峰值 + 频谱条形图 + 频谱特征（质心/滚降/平坦度等）；
  * 听力测试流程（7 频点 × 5 轮二分逼近听阈），播放/合成由融合侧按 nextStep 电平执行。
@@ -41,7 +41,7 @@ export function AnalysisPanel({ bridge, theme, controller }: { bridge: HyperSoun
 
   const playStep = useCallback((freqHz: number, levelDb: number) => {
     // 实际发声由融合侧监听 showToast 事件或替换本实现；这里派发宿主事件
-    window.dispatchEvent(new CustomEvent('v3HearingPlay', { detail: { freqHz, levelDb } }))
+    window.dispatchEvent(new CustomEvent('hseHearingPlay', { detail: { freqHz, levelDb } }))
   }, [])
 
   const answerHearing = useCallback((heard: boolean) => {
@@ -209,7 +209,7 @@ export function AnalysisPanel({ bridge, theme, controller }: { bridge: HyperSoun
             </ActionButton>
           </div>
         )}
-        <InfoLine theme={theme}>播放由融合侧监听 `v3HearingPlay` 事件合成纯音（正弦，电平按 dBFS 换算）；本页为状态机与流程 UI。</InfoLine>
+        <InfoLine theme={theme}>播放由融合侧监听 `hseHearingPlay` 事件合成纯音（正弦，电平按 dBFS 换算）；本页为状态机与流程 UI。</InfoLine>
       </GlassCard>
     </div>
   )

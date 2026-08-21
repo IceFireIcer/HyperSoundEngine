@@ -15,7 +15,7 @@
 8. 测试：每个模块配 `test/<module>.test.ts`，用 vitest；断言数值用容差（1e-3 级），注释说明物理意义。
 9. 边界（严格遵守）：
    - **允许读取**：`src/types.ts`、`src/dsp/API_SPEC.md`（本文件）、`research/docs/*.md`（算法参考：技术文档/设计文档/决策表）、`research/notes/`；
-   - **禁止读取**：`docs/`（逆向分析文档，另一个对话的产物）、`decompiled/`、`business-code/`、`apktool-out/`、`reference/`、`HyperSoundEngine/src/services/audio-effects-v3/`（另一个对话正在做的工作）；
+   - **禁止读取**：`docs/`（逆向分析文档，另一个对话的产物）、`decompiled/`、`business-code/`、`apktool-out/`、`reference/`；
    - **禁止写入**：除自己负责的文件外的一切文件；HyperSoundEngine/、research/、docs/ 一律只读；
    - **禁止修改**：`src/types.ts`、`src/dsp/API_SPEC.md`、其他子代理的文件。
 
@@ -128,7 +128,7 @@ enabled=false 时输出=输入。
 
 ---
 
-## 模块 6：src/dsp/Compressor.ts —— 动态压缩（v2 兼容 + knee，技术文档 §3）
+## 模块 6：src/dsp/Compressor.ts —— 动态压缩（knee，技术文档 §3）
 
 ```ts
 export class Compressor {
@@ -274,10 +274,10 @@ export class LoudnessComp {
 }
 ```
 
-实现：内置 1/3 倍频程"等响度近似"增益表（低频 0–12dB、高频 0–6dB，随 volumePercent 线性，v2 语义：
+实现：内置 1/3 倍频程"等响度近似"增益表（低频 0–12dB、高频 0–6dB，随 volumePercent 线性，系数语义：
 低频系数 0.35、高频 0.15，100%→0dB；mid 保持 0dB）→ 拟合为 2–6 段 biquad（low shelf 120Hz Q0.707、
 high shelf 12kHz Q0.707 + custom 段 peaking）→ 增益平滑（smoothingSeconds，一阶）。
-注意：表数据在注释中标注"ISO 226 简化近似（v2 兼容），正式发布前可与官方表核对"。
+注意：表数据在注释中标注"ISO 226 简化近似，正式发布前可与官方表核对"。
 测试要点：volumePercent=100 → 增益≈0dB（全频）；volumePercent=20 → 低频 120Hz 处响应提升 >3dB、
 1kHz 处 ≈0dB（±0.3dB）；平滑切换不产生跳变。
 
@@ -444,7 +444,7 @@ export class HearingTest {
 
 > **2026-08 需求变更：机型频响补偿不再使用真实设备档案**，改为**按音量大小实施补偿的通用曲线**——
 > 由 `dsp/LoudnessComp.ts` 的 `auto` 模式承担（音量越低 → 低频 0-12dB / 高频 0-6dB 提升，
-> 120Hz/12kHz shelf，v2 兼容公式 0.35/0.15）。原 `src/device/DeviceProfile.ts`（6 示例档案 +
+> 120Hz/12kHz shelf，公式 0.35/0.15）。原 `src/device/DeviceProfile.ts`（6 示例档案 +
 > fitParametricEq 拟合）与 `HyperSoundEngineParams.deviceProfile` 字段已整体删除（编号不回填，后续模块保持原编号）。
 
 ### H. src/offline/Separator.ts —— 声源分离任务队列（F2 负责，spleeter/demucs 适配层）

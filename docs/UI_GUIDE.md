@@ -57,7 +57,6 @@ const bridge = createHyperSoundEngineUiBridge(engine, ctx.sampleRate)
   onClose={() => setShowStudio(false)}
   playerTheme={playerTheme}
   anchorRect={anchorRect}
-  engineVersion={'v1'}
   exportWav={exportWav}    // 可选：离线导出
 />
 ```
@@ -68,7 +67,7 @@ const bridge = createHyperSoundEngineUiBridge(engine, ctx.sampleRate)
 
 | 能力 | 事件/接口 | 宿主侧实现 |
 |---|---|---|
-| **听力测试播放** | 监听 `v3HearingPlay` 自定义事件：`{ freqHz, levelDb }` | Web Audio 合成正弦（如 OscillatorNode），电平按 `10^(levelDb/20)` 换算幅度；播放时长约 0.6s 后停止，或由下一次事件/用户作答停止 |
+| **听力测试播放** | 监听 `hseHearingPlay` 自定义事件：`{ freqHz, levelDb }` | Web Audio 合成正弦（如 OscillatorNode），电平按 `10^(levelDb/20)` 换算幅度；播放时长约 0.6s 后停止，或由下一次事件/用户作答停止 |
 | **系统音量 → 补偿曲线** | 写 `loudnessCompensation.volumePercent`（0-100） | 监听系统音量，变化时 `bridge.setParams` 更新；无音量源时默认 80 |
 | **WAV 离线导出** | `exportWav` prop | 解码音频 → `HyperSoundEngine.process` 分块 → 写 WAV |
 
@@ -90,6 +89,6 @@ const bridge = createHyperSoundEngineUiBridge(engine, ctx.sampleRate)
    宿主可替换桥实现（如包一层 Web Audio 适配）。
 2. **快照语义**：`useHyperSoundEngineParams` 的 patch 做深合并后整包提交（`setParams` 完整快照），符合引擎契约；
    场景/分享串/恢复默认走 replace。
-3. **零动画依赖**：CSS keyframes（`v3-panel-in` 支持锚点偏移变量 `--fx/--fy`）。
+3. **零动画依赖**：CSS keyframes（`hse-panel-in` 支持锚点偏移变量 `--fx/--fy`）。
 4. **测试策略**：ui/ 为纯受控组件 + 桥接口；
    本地保证：`npm run typecheck:ui` 0 错误；引擎回归 + UI 冒烟（9）全绿。

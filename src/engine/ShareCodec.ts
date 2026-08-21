@@ -1,5 +1,5 @@
 /**
- * HyperSoundEngine 音频效果引擎 v3 —— 分享串编解码（ShareCodec）
+ * HyperSoundEngine v1 —— 分享串编解码（ShareCodec）
  *
  * 出处/许可：自研实现（设计文档 §4.10 / 映射表 #19，决策为 🔴 必须自研）。
  *   - FNV-1a 32 位哈希：Fowler–Noll–Vo 公开算法（公有领域，无版权限制）。
@@ -135,7 +135,7 @@ function numArray(v: unknown, min: number, max: number, def: number[], maxLen: n
   return out
 }
 
-/** v2 兼容专业 10 段默认频点（与 src/types.ts PRO_EQ_DEFAULT_BANDS 一致） */
+/** 专业 10 段默认频点（与 src/types.ts PRO_EQ_DEFAULT_BANDS 一致） */
 function defaultEqProBands(): EqBand[] {
   return [31.5, 63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000].map((f) => ({
     frequency: f,

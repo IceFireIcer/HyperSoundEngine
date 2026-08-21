@@ -1,9 +1,9 @@
 /**
- * HyperSoundEngine v3 调音室 UI —— 音效场景页（场景栏 + 效果卡片网格 + 响度相关卡片）
+ * HyperSoundEngine v1 调音室 UI —— 音效场景页（场景栏 + 效果卡片网格 + 响度相关卡片）
  *
- * 布局沿用 v1/v2 调音室：场景方案区（chips）+ 音效卡片（可叠加，"使用/已启用"式
+ * 布局结构：场景方案区（chips）+ 音效卡片（可叠加，"使用/已启用"式
  * 大按钮切换开关，点卡片本体开配置弹窗）+ 频响补偿/响度归一化独立卡片行。
- * v3 新增卡片：齿音抑制、智能均衡、限幅器、变速变调、立体声宽度、混响（双路由）。
+ * 引擎卡片：齿音抑制、智能均衡、限幅器、变速变调、立体声宽度、混响（双路由）。
  */
 
 import { AudioLines, Headphones, Music2, Activity, Moon, Mic2, Sparkles, Shield, Music, Columns2, Volume2, Gauge, RotateCcw, Save, Info, Trash2, Timer, Waves, Wind, Zap, Radio } from 'lucide-react'
@@ -25,7 +25,7 @@ export type EffectUiKey =
 
 export const EFFECT_META: Record<EffectUiKey, { name: string; desc: string; intro: string; icon: LucideIcon; row?: boolean }> = {
   reverb: {
-    name: '混响', desc: '卷积 / 算法双路由', intro: 'v3 混响支持两种路由：分区卷积混响（可导入 IR，带去周期化处理）与算法混响（大厅/房间/板式/弹簧/舞台五种类型），可自由切换。', icon: AudioLines,
+    name: '混响', desc: '卷积 / 算法双路由', intro: '混响支持两种路由：分区卷积混响（可导入 IR，带去周期化处理）与算法混响（大厅/房间/板式/弹簧/舞台五种类型），可自由切换。', icon: AudioLines,
   },
   surround3d: {
     name: '3D 环绕', desc: '耳机内环绕旋转', intro: '轻量立体声旋转实现：在圆形图上拖动圆点调整角度与距离，并设置旋转方向与速度，让声音在耳机内绕头旋转。', icon: Headphones,

@@ -1,8 +1,8 @@
 /**
- * HyperSoundEngine v3 调音室 UI —— 调制类效果配置弹窗
+ * HyperSoundEngine v1 调音室 UI —— 调制类效果配置弹窗
  *
  * 延迟 / 合唱 / 镶边 / 移相 / 颤音 + 参数调制矩阵（LFO / Envelope Follower → 路由）。
- * 视觉与交互沿用 v1/v2 弹窗规范（Modal + Slider + Toggle + Segmented）。
+ * 视觉与交互沿用弹窗规范（Modal + Slider + Toggle + Segmented）。
  */
 
 import { Timer, Waves, Wind, Zap, Volume2, Radio, Plus, Trash2 } from 'lucide-react'
