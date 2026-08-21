@@ -15,7 +15,7 @@
 - `specs/` — 双支线共享规格 + 测试向量（建设中，见规划书 Phase 0）
 - `HyperSoundEngineRust/` — **Rust 支线**（规划中）：全量原生重写，承接 Windows 引擎服务进程与性能目标
 - `referencesDocs/` — 各模型调研参考（**独立 git 仓库**，已被 .gitignore 排除）
-- `.scratch/`、`.hse-bench/` — 规划草稿与基准脚手架（gitignored）
+- `.scratch/` — 规划草稿（PLAN/PRD，被规划书引用；gitignored）
 
 ## 常用命令（工作目录 = 本目录）
 
@@ -25,7 +25,8 @@ npx vitest run test/xxx.test.ts # 单个测试文件
 npm run typecheck               # 核心 tsc --noEmit
 npm run typecheck:ui            # ui/ 的独立类型检查（tsconfig.ui.json）
 npm run build                   # types + core(esbuild) + worklet 单文件包 → dist/
-npm run benchmark               # 先 build 再跑 scripts/benchmark.mjs（48kHz/128 帧）
+npm run benchmark               # 先 build 再跑 scripts/benchmark.mjs（48kHz/128 帧，默认链）
+npm run benchmark:scenes        # 场景化基准（卷积/FDN 混响、DynamicEq）
 ```
 
 依赖未安装时先 `npm install`。平台为 Windows + Git Bash。

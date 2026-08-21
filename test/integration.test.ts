@@ -151,8 +151,8 @@ describe('HyperSoundEngineHost —— worklet 模式', () => {
 
 describe('HyperSoundEngineHost —— script 兜底模式（切换后音频真实经过引擎处理）', () => {
   it('无 AudioWorkletNode 时自动回退 script；onaudioprocess 通路限幅生效', async () => {
-    // HyperSoundEngine 的 test/setup.ts 为引擎测试全局 stub 了 AudioWorkletNode；
-    // 此处以 undefined 覆盖（afterEach unstub 恢复），模拟"宿主无 worklet"环境
+    // Node 环境本身无 AudioWorkletNode；显式置 undefined（afterEach unstub 恢复）
+    // 确保"宿主无 worklet"语义不依赖运行环境，模拟回退 ScriptProcessor 的条件
     vi.stubGlobal('AudioWorkletNode', undefined)
     const { handle, masterGain, scriptNodes } = makeHandle()
     const host = new HyperSoundEngineHost({ mode: 'auto', workletUrl: '/hse-worklet.js' })

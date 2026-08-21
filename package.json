@@ -41,6 +41,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "benchmark": "npm run build && node scripts/benchmark.mjs",
+    "benchmark:scenes": "npm run build && node scripts/benchmark-optimized.mjs",
     "typecheck": "tsc --noEmit",
     "typecheck:ui": "tsc -p tsconfig.ui.json --noEmit",
     "prepack": "npm run build"
