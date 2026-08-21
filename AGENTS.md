@@ -14,8 +14,13 @@
 - `空间音频实现规划书.md` — 空间音频规格输入（§3.2 契约、§八性能目标有效）
 - `specs/` — 双支线共享规格 + 测试向量（建设中，见规划书 Phase 0）
 - `HyperSoundEngineRust/` — **Rust 支线**（规划中）：全量原生重写，承接 Windows 引擎服务进程与性能目标
-- `referencesDocs/` — 各模型调研参考（**独立 git 仓库**，已被 .gitignore 排除）
-- `.scratch/` — 规划草稿（PLAN/PRD，被规划书引用；gitignored）
+
+> 规则：README/AGENTS 等仓库文档只描述已跟踪文件，**不得引用 .gitignore 排除的路径**（本地参考资料、草稿目录等不入文档）。
+
+## 远程与 CI
+
+- 远程仓库：`https://github.com/IceFireIcer/HyperSoundEngine`（origin），工作分支 `main`
+- push 到 `main` 触发 `.github/workflows/ci.yml`：`typecheck` → `typecheck:ui` → `test` → `build`，全绿才算过
 
 ## 常用命令（工作目录 = 本目录）
 

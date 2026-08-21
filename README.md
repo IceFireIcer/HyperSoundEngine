@@ -1,5 +1,7 @@
 # HyperSoundEngine（独立音频引擎）
 
+[![CI](https://github.com/IceFireIcer/HyperSoundEngine/actions/workflows/ci.yml/badge.svg)](https://github.com/IceFireIcer/HyperSoundEngine/actions/workflows/ci.yml)
+
 HyperSoundEngine 是一个**不依赖任何特定宿主**的独立软件 DSP 音频效果引擎：
 
 - 纯 TypeScript 实现，无运行时第三方依赖（可选增强依赖除外）；
@@ -7,14 +9,16 @@ HyperSoundEngine 是一个**不依赖任何特定宿主**的独立软件 DSP 音
 - 核心零 DOM / AudioContext / React 依赖，可跑在 Node、浏览器、Electron、AudioWorklet；
 - 浏览器宿主（`HyperSoundEngineHost`）与 WaveForge 适配层分离，其他软件可直接接入。
 
+> 当前生成代号 **HyperSoundEngine v1**（包版本 0.x 为其预发布阶段）；版本与命名规则见 [docs/VERSIONING.md](docs/VERSIONING.md)。
+
 ## 快速开始
 
 ```bash
-cd HyperSoundEngine
 npm install
-npm test          # 全量测试
-npm run build     # 产出 dist/（核心 ESM + 类型声明 + worklet 单文件包）
-npm run benchmark # 本地性能基准（48kHz/128 帧默认全链）
+npm test              # 全量测试（40+ 文件 / 400+ 用例）
+npm run build         # 产出 dist/（核心 ESM + 类型声明 + worklet 单文件包）
+npm run benchmark     # 本地性能基准（48kHz/128 帧默认全链）
+npm run benchmark:scenes  # 场景化基准（卷积/FDN 混响、DynamicEq）
 ```
 
 ### Node / 任意 JS 运行时（纯离线处理）
@@ -58,19 +62,17 @@ HyperSoundEngine/
 │   ├── worklet.ts            # AudioWorklet 打包入口
 │   ├── interfaces.ts         # 对外统一接口（AudioEngine / StereoProcessor）
 │   ├── types.ts              # 参数模型与默认值
-│   ├── dsp/                  # 16 个纯 DSP 模块
+│   ├── dsp/                  # 20+ 纯 DSP 模块（滤波/动态/混响/调制/变速/分析）
 │   ├── engine/               # HyperSoundEngine 引擎总成、场景、分享串、工厂
 │   ├── integration/          # 浏览器宿主 HyperSoundEngineHost
 │   ├── worklet/              # AudioWorkletProcessor 源码
 │   ├── analysis/             # 频谱分析、听力测试
+│   ├── io/                   # WAV 编解码
 │   └── offline/              # 声源分离任务队列
 ├── adapters/
 │   └── waveforge/            # ★ WaveForge 专属接线（独立于引擎核心）
 ├── ui/                       # 可选 React 调音室 UI（不参与核心构建）
-├── docs/
-│   ├── API.md                # 对外接口文档
-│   ├── ARCHITECTURE.md       # 架构说明
-│   └── INTEGRATION.md        # 接入其他软件指南
+├── docs/                     # 文档 + adr/（架构决策记录）
 ├── examples/                 # 独立接入示例
 ├── test/ + ui/uiSmoke.test.tsx
 └── vendor/soundtouchjs/      # LGPL-2.1 原包副本（可选变速变调路径）
@@ -88,8 +90,11 @@ HyperSoundEngine/
 
 - [接口文档](docs/API.md)
 - [架构说明](docs/ARCHITECTURE.md)
+- [版本策略与命名规范](docs/VERSIONING.md)
+- [架构决策记录（ADR）](docs/adr/)
 - [接入其他软件指南](docs/INTEGRATION.md)
 - [WaveForge 适配说明](adapters/waveforge/README.md)
+- [双支线原生化与 Windows 音频接入规划](原生化双支线与Windows音频接入规划书.md)（TS 支线 + Rust 支线路线图）
 
 ## 许可
 
