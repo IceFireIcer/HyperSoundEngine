@@ -31,7 +31,7 @@
 | 15 | PitchYin | src/dsp/PitchYin.ts | 440/220Hz±1、噪声/静音/短窗 -1、fs=8k、非法 fs 抛错 |
 | 16 | features | src/dsp/features.ts | 平坦谱/单音 flatness、质心、rolloff、zcr、空输入安全 |
 
-辅助阅读：src/types.ts（参数模型）、src/dsp/StretchLgplAdapter.ts（适配层，未列入 16 模块，未深审）。
+辅助阅读：src/types.ts（参数模型）。
 
 ---
 

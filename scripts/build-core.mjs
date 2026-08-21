@@ -20,7 +20,7 @@ const common = {
   platform: 'neutral',
   target: ['es2022'],
   // 可选增强依赖保持 external，由使用方按需安装；核心引擎不强制捆绑它们。
-  external: ['meyda', 'signalsmith-stretch', 'soundtouchjs'],
+  external: ['meyda', 'signalsmith-stretch'],
   legalComments: 'external',
   logLevel: 'info',
 }

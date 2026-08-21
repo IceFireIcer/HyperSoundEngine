@@ -74,8 +74,7 @@ HyperSoundEngine/
 ├── ui/                       # 可选 React 调音室 UI（不参与核心构建）
 ├── docs/                     # 文档 + adr/（架构决策记录）
 ├── examples/                 # 独立接入示例
-├── test/ + ui/uiSmoke.test.tsx
-└── vendor/soundtouchjs/      # LGPL-2.1 原包副本（可选变速变调路径）
+└── test/ + ui/uiSmoke.test.tsx
 ```
 
 ## 子路径导入
@@ -99,4 +98,4 @@ HyperSoundEngine/
 ## 许可
 
 核心代码自研；算法概念与公式来源见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
-可选依赖 soundtouchjs 为 LGPL-2.1，以“不修改源码、链接调用”方式使用。
+可选依赖（meyda、signalsmith-stretch）均为 MIT；引擎包零 LGPL 依赖。

@@ -46,7 +46,7 @@
 
 - 代码标识符、localStorage 键、自定义事件名、CSS 动画名、worklet 文件 URL 一律**无版本前缀**或使用 `hse-` / `hse` 前缀（如 `hseHearingPlay`、`hypersound:hse-*`、`/hse-worklet.js`、`hse-panel-in`）。
 - 行文中需要指明引擎版本时写作 **HyperSoundEngine v1**（可简称 HSE v1）。
-- 禁止在上述标识位置再引入 `v1/v2/v3` 字样；例外：第三方名称（GPLv3、Freeverb3、soundtouchjs v1.x 等）与文档自身修订号。
+- 禁止在上述标识位置再引入 `v1/v2/v3` 字样；例外：第三方名称（GPLv3、Freeverb3 等）与文档自身修订号。
 
 ## 公开标识符命名分层（2026-08-22 审计确立）
 

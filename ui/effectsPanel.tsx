@@ -49,7 +49,7 @@ export const EFFECT_META: Record<EffectUiKey, { name: string; desc: string; intr
     name: '限幅器', desc: '前瞻 + 真峰值', intro: '前瞻式限幅保护输出：4× 过采样真峰值检测，默认 -1dBFS 阈值，杜绝削波。', icon: Shield,
   },
   pitch: {
-    name: '变速变调', desc: '相位声码器 / LGPL 链接', intro: '独立变调与变速（相位声码器自研实现；可选 soundtouchjs LGPL 链接或 signalsmith WASM 路径）。', icon: Music,
+    name: '变速变调', desc: '相位声码器（自研）', intro: '独立变调与变速（相位声码器自研实现；融合侧可选 signalsmith WASM 路径）。', icon: Music,
   },
   stereoWidth: {
     name: '立体声宽度', desc: 'M/S 宽度 + 人声比例', intro: '基于中/侧声道分离：宽度 0-2 控制声场开合，人声比例 -1..+1 在伴奏与纯人声之间滑动（卡拉OK级）。', icon: Columns2,

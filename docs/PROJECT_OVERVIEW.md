@@ -104,7 +104,7 @@ HyperSoundEngine 是一个**纯 TypeScript 实现的实时音频效果引擎**,�
 | **实时安全** | `process()` 稳态零分配,无 Math.random / Date / console |
 | **确定性** | 同输入同参数 → 同输出(可复现、可测试) |
 | **快照语义** | `setParams` 整包替换 + 深拷贝;`getParams` 返回深拷贝 |
-| **零依赖** | 核心 DSP 纯 TS;meyda/signalsmith-stretch/soundtouchjs 为可选 |
+| **零依赖** | 核心 DSP 纯 TS;meyda/signalsmith-stretch 为可选 |
 | **跨环境** | Node 离线 / 浏览器实时 / Electron,同一内核 |
 | **深模块** | 对外 8 方法 `AudioEngine` 接口,内部 21 级链封装 |
 

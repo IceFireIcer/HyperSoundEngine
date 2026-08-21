@@ -164,7 +164,7 @@ export function PitchModal({ controller, theme, onClose }: { controller: HyperSo
   const pitch = params.pitch
   return (
     <Modal title="变速变调" icon={<Music className="w-4.5 h-4.5" />} onClose={onClose} theme={theme}>
-      <p className={`${theme.textSecondary} text-xs leading-relaxed mb-4`}>独立变调与变速（相位声码器自研实现；融合侧可切 soundtouchjs LGPL 链接或 signalsmith WASM 路径）。</p>
+      <p className={`${theme.textSecondary} text-xs leading-relaxed mb-4`}>独立变调与变速（相位声码器自研实现；融合侧可选 signalsmith WASM 路径）。</p>
       <div className="flex items-center justify-between mb-4">
         <span className={`${theme.textPrimary} text-sm font-medium`}>启用 变速变调</span>
         <Toggle checked={pitch.enabled} onChange={(v) => patch({ pitch: { ...pitch, enabled: v } })} theme={theme} />

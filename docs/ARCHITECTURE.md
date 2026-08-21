@@ -34,7 +34,7 @@
 │  - fft / biquad / EqChain / MidSide / Deesser / Compressor  │
 │  - Limiter / BassEnhancer / Convolver / ReverbSimple        │
 │  - LufsMeter / LoudnessComp / Resampler / HseStretch / PitchYin│
-│  - features / StretchLgplAdapter                            │
+│  - features                                                 │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -130,5 +130,5 @@ interface ProcessingStage {
 2. **参数快照语义**：`setParams` 整体替换、`getParams` 返回深拷贝，避免状态分叉；
 3. **确定性**：无随机、无 Date、无 console，同输入同参数同输出；
 4. **零分配稳态**：`prepare(maxBlockSize)` 预分配后，`process()` 稳态零分配；
-5. **LGPL 合规**：soundtouchjs 以“不修改源码 + 链接调用”方式使用；
+5. **零 LGPL 依赖**：可选路径 soundtouchjs 与适配层已于 2026-08-22 移除；宿主侧实时变速变调由 WaveForge 自有的 @soundtouchjs/audio-worklet 承担；
 6. **工程化**：提供 `npm run benchmark`、性能冒烟测试与 GitHub Actions CI。

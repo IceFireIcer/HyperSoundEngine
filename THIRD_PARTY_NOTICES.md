@@ -28,12 +28,13 @@
 - `meyda`：MIT，Copyright (c) 2014 Hugh A. Rawlinson, Nevo Segal, Jakub Fiala
 - `signalsmith-stretch`：MIT，Copyright (c) 2022 Geraint Luff / Signalsmith Audio Ltd.
 
-## LGPL 链接使用（用户策略：不修改 LGPL 源码，动态/静态链接调用打包）
+## LGPL（仅宿主侧；引擎包零 LGPL 依赖）
+
+> 2026-08-22：引擎包的可选依赖 soundtouchjs（含 `vendor/` 原包副本、`StretchLgplAdapter.ts` 与其测试）已整体移除；引擎包现无任何 LGPL 依赖。以下仅涉及宿主/融合侧。
 
 | 库 | 许可 | 使用方式（不修改） | 合规要点 |
 |---|---|---|---|
-| **soundtouchjs**（SoundTouch 核心） | LGPL-2.1 | `src/dsp/StretchLgplAdapter.ts` 动态 import 原包、仅调用公开 API（SoundTouch 类）；未安装时自动回退自研相位声码器 | ① 库作为独立 npm 依赖分发，不并入我方源码；② 随附 LGPL-2.1 LICENSE 全文（node_modules/soundtouchjs/LICENSE）；③ 源码即 npm 包本身，满足"可重新链接"要求；④ 不修改其任何源码 |
-| @soundtouchjs/audio-worklet | LGPL-2.1 | 融合时可按需保留，同样以"未修改、链接调用"方式 | 同上；其核心与 soundtouchjs 同源 |
+| @soundtouchjs/audio-worklet | LGPL-2.1 | WaveForge 宿主侧实时变速变调（`adapters/waveforge/attachEngine.ts` 依赖宿主自有包），以"未修改、链接调用"方式 | 库作为宿主独立依赖分发，不并入我方源码；随附 LICENSE；不修改其源码 |
 | FFmpeg 滤波器（f_ebur128 等）/ libsoxr / sox | LGPL | 仅作公式与算法对照；如需引入须保持"未修改、独立链接"，并随附 LICENSE | 同上原则 |
 | ebur128（Rust crate）等 | 视具体项目 | 引入前核对 SPDX | — |
 

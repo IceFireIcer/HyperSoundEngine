@@ -46,7 +46,7 @@ npm run benchmark:scenes        # 场景化基准（卷积/FDN 混响、DynamicE
 
 - 生成代号 **HyperSoundEngine vN ↔ semver MAJOR N**；当前线 HyperSoundEngine v1（包版本 0.x 为其预发布）。旧 WaveForge v1/v2/v3 引擎谱系已废止，不得再引入其描述。
 - MAJOR=破坏兼容契约三层；MINOR=新功能/新向量；PATCH=行为不变修复。bump 与 CHANGELOG 更新由实施变更的会话按 `docs/VERSIONING.md` 规则自动完成，不需用户手动管理。
-- 标识符/存储键/事件名/CSS 动画/worklet URL 一律无版本前缀或 `hse-` 前缀；禁止 `v1/v2/v3` 字样（第三方名称如 GPLv3、soundtouchjs v1.x 除外）。
+- 标识符/存储键/事件名/CSS 动画/worklet URL 一律无版本前缀或 `hse-` 前缀；禁止 `v1/v2/v3` 字样（第三方名称如 GPLv3、Freeverb3 除外）。
 - 已冻结对拍向量的期望值永不修改；行为变更=新增向量或走 MAJOR。
 
 ## 架构铁律（改代码前必读 `docs/ARCHITECTURE.md`）
@@ -63,7 +63,7 @@ npm run benchmark:scenes        # 场景化基准（卷积/FDN 混响、DynamicE
 - **双路径一致**：实时播放与离线导出必须走同一个 `HyperSoundEngine.process`
 - **对外唯一接缝是 `AudioEngine` 接口**；DSP 模块走 `StereoProcessor` 形态（setParams/processStereo/reset）；处理链阶段实现 `ProcessingStage`
 - **参数快照语义**：`setParams` 整体替换，`getParams` 返回深拷贝
-- 许可：核心 CC-BY-NC-ND-4.0；soundtouchjs 为 LGPL-2.1，只能"不修改源码 + 链接调用"（vendor/ 存原包副本）
+- 许可：核心 CC-BY-NC-ND-4.0；引擎包零 LGPL 依赖（WaveForge 适配层的 @soundtouchjs/audio-worklet 为宿主侧 LGPL-2.1 依赖，不属引擎包）
 
 ## 测试与 UI 约定
 

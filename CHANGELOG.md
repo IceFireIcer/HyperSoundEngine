@@ -14,6 +14,7 @@
 - `npm run benchmark:scenes`：接入场景化基准脚本（卷积/FDN 混响、DynamicEq；原 `scripts/benchmark-optimized.mjs` 无人引用，本次纳入 npm scripts）。
 
 ### Removed
+- **移除引擎侧 soundtouchjs（LGPL）全部相关物**：该可选路径备而未用（`createStretchLgplAdapter` 全库零调用方，实际变速变调走自研 `HseStretch`）。删除 `optionalDependencies` 条目、`src/dsp/StretchLgplAdapter.ts`、`src/dsp/soundtouchjs.d.ts`、`test/stretchlgpl.test.ts`、`vendor/soundtouchjs/` 原包副本，及 build 脚本 external 与各文档引用。**引擎包现零 LGPL 依赖**；WaveForge 宿主侧的 `@soundtouchjs/audio-worklet` 不受影响。
 - 死文件审计（入口可达性分析 54/55 全可达）：删除 `.hse-bench/` 实验脚手架（含优化前 `old/` 算法副本，结论已记录于本 CHANGELOG）；修正 integration 测试引用不存在的 `test/setup.ts` 的过时注释。
 
 ## [0.2.0] - 2026-08

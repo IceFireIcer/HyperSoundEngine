@@ -28,7 +28,7 @@
 | 16 | 听力分析流程 | `src/analysis/HseHearingTest.ts` | §12 | hearing(8) | ✅ 7 频点二分 5 轮，阈值收敛 |
 | 17 | 频谱特征（质心/滚降/平坦度等） | `src/dsp/features.ts`、`analysis/Spectrum.ts` | §12（meyda 概念） | features(8)+spectrum(7) | ✅ 白噪声 flatness>0.8、单音≈0、质心/滚降正确 |
 | 18 | 变速/变调（相位声码器） | `src/dsp/HseStretch.ts` | §9 | stretch(8) | ✅ rate=2 长度 ±3%；+12 半音 440→880Hz ±1% |
-| 19 | **LGPL 链接**：SoundTouch 变速/变调 | `src/dsp/StretchLgplAdapter.ts` + `vendor/soundtouchjs` | LGPL-2.1 未修改链接 | stretchlgpl(5) | ✅ rate=2 时长 ±8%；+10 半音 440→784Hz；位级确定 |
+| 19 | **LGPL 链接**：SoundTouch 变速/变调 | — | — | — | 🗑 已移除（2026-08-22）：soundtouchjs 备而未用（零调用方），连同适配器/测试/vendor 一并删除 |
 | 20 | 音高检测 YIN | `src/dsp/PitchYin.ts` | §10.1 | pitchyin(8) | ✅ 440/220 ±1Hz；谐波信号；噪声→-1 |
 | 21 | 重采样（多相 Kaiser-sinc） | `src/dsp/Resampler.ts` | §13 | resampler(9) | ✅ 44.1↔48k ±0.5Hz；RMS 守恒 <1%；流式=一次性 |
 | 22 | 声源分离任务队列 | `src/offline/Separator.ts` | §11 | separator(10) | ✅ 状态机/取消/失败恢复；ONNX 占位 |
@@ -49,10 +49,9 @@
 
 ## 2. MIT / LGPL 使用统计
 
-### 2.1 LGPL（链接使用，用户策略：不修改源码）—— 1 个
+### 2.1 LGPL（链接使用）—— 0 个（soundtouchjs 已于 2026-08-22 移除）
 | 库 | 许可 | 用途 | 位置 |
 |---|---|---|---|
-| **soundtouchjs** v0.3.0（SoundTouch 核心） | LGPL-2.1 | 变速/变调可选路径 | `optionalDependencies` + **`vendor/soundtouchjs/`（原包副本，含 LICENSE）** + `StretchLgplAdapter.ts` |
 
 ### 2.2 MIT 直接套用（可选依赖）—— 2 个
 | 库 | 许可 | 用途 | 状态 |
@@ -75,7 +74,7 @@ DSPFilters(MIT, biquad TDF2 思路)、kissfft(BSD-3, FFT 蝶形)、stk(MIT 类, 
 - **pitchfinder（GPLv3）**：YIN/AMDF 的 JS 实现，**许可证不符，不采用**——自研 PitchYin 正确避免了 GPL；
 - Rubber Band(GPL)、Essentia(AGPL)、Freeverb3(GPL)、Superpowered(商业许可) 均不采用。
 
-> 统计结论：**直接链接使用 LGPL 1 个 + MIT 可选 2 个 + MIT/BSD 概念移植 8 个 + 自研核心（16 DSP 模块 + 引擎）**；
+> 统计结论：**LGPL 0 个（soundtouchjs 已移除）+ MIT 可选 2 个 + MIT/BSD 概念移植 8 个 + 自研核心（16 DSP 模块 + 引擎）**；
 > 全部许可有据可查（LICENSE 原文/源码头声明），GPL 零引入。
 
 ---
@@ -94,14 +93,14 @@ DSPFilters(MIT, biquad TDF2 思路)、kissfft(BSD-3, FFT 蝶形)、stk(MIT 类, 
 | `@discord-player/equalizer` | MIT | EQ | 功能过简（BiquadFilterNode 封装），引擎的 20 段+Q 补偿已超集 |
 
 **结论**：本轮调研未发现需要"替换自研"的库——引擎已正确使用 MIT/LGPL 生态
-（soundtouchjs 链接 + meyda/signalsmith 可选），自研部分均有正当理由
+（meyda/signalsmith 可选），自研部分均有正当理由
 （纯 TS 双路径架构 / 许可证规避 / 功能超集）。轮子没有白造，但每个轮子都有出处。
 
 ---
 
 ## 4. 交付自检清单
 
-- [x] `npm install` 一键完成（vendor 含 LGPL 原包，离线可用）
+- [x] `npm install` 一键完成
 - [x] `npm test` 331/331 通过（32 文件，含 uiSmoke 9 项）
 - [x] `npm run typecheck` 0 错误
-- [x] 许可声明 `THIRD_PARTY_NOTICES.md` + `vendor/README.md`（含 LGPL 合规指引）
+- [x] 许可声明 `THIRD_PARTY_NOTICES.md`
