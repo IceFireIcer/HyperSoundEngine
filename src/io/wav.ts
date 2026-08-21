@@ -3,7 +3,7 @@
  *
  * 用途：
  * - 核心包内置音频文件读写（WaveForge 适配层复用本模块，不再内嵌实现）；
- * - 解码结果为非交错 Float32Array[]，可直接构造 AudioBus 进入 processBus；
+ * - 解码结果为非交错 Float32Array[]，可直接构造 HseAudioBus 进入 processBus；
  * - 编码支持 16-bit PCM（消费级）与 32-bit Float（专业级）。
  *
  * 约定（与引擎一致）：

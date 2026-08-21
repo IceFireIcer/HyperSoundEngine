@@ -6,7 +6,7 @@
  *  - 信号功率保持 ±3dB（相位声码器保持 STFT 幅度 + 幅度归一化 4Hs/N）。
  */
 import { describe, it, expect } from 'vitest'
-import { Stretch } from '../src/dsp/Stretch'
+import { HseStretch } from '../src/dsp/HseStretch'
 
 const FS = 48000
 
@@ -34,10 +34,10 @@ function rms(x: Float32Array, from: number, to: number): number {
   return Math.sqrt(s / (to - from))
 }
 
-describe('Stretch', () => {
+describe('HseStretch', () => {
   it('rate=2 输出长度 ≈ 2× 输入（±3%）', () => {
     const x = sine(FS, 440, 1)
-    const s = new Stretch(FS, 2)
+    const s = new HseStretch(FS, 2)
     s.setParams({ semitones: 0, rate: 2 })
     const out = s.processStereo(x, x)
     const expected = x.length * 2
@@ -48,7 +48,7 @@ describe('Stretch', () => {
 
   it('rate=1, semitones=+12：440Hz → ≈880Hz（±1%）', () => {
     const x = sine(FS, 440, 2)
-    const s = new Stretch(FS, 2)
+    const s = new HseStretch(FS, 2)
     s.setParams({ semitones: 12, rate: 1 })
     const out = s.processStereo(x, x)
     const f = estimateFreq(out.l, FS)
@@ -59,7 +59,7 @@ describe('Stretch', () => {
 
   it('信号功率量级保持（输出 RMS 与输入 RMS 差 <3dB）', () => {
     const x = sine(FS, 440, 2, 0.5)
-    const s = new Stretch(FS, 2)
+    const s = new HseStretch(FS, 2)
     s.setParams({ semitones: 12, rate: 1 })
     const out = s.processStereo(x, x)
     const rmsIn = rms(x, Math.floor(x.length * 0.25), Math.floor(x.length * 0.75))
@@ -71,7 +71,7 @@ describe('Stretch', () => {
 
   it('rate=1, semitones=0：长度≈输入、幅度基本保持', () => {
     const x = sine(FS, 440, 1, 0.5)
-    const s = new Stretch(FS, 2)
+    const s = new HseStretch(FS, 2)
     s.setParams({ semitones: 0, rate: 1 })
     const out = s.processStereo(x, x)
     expect(Math.abs(out.l.length - x.length) / x.length).toBeLessThan(0.03)
@@ -82,10 +82,10 @@ describe('Stretch', () => {
 
   it('确定性：同输入同参数两次调用逐样本一致', () => {
     const x = sine(FS, 220, 1)
-    const s1 = new Stretch(FS, 2)
+    const s1 = new HseStretch(FS, 2)
     s1.setParams({ semitones: 3, rate: 1.5 })
     const a = s1.processStereo(x, x)
-    const s2 = new Stretch(FS, 2)
+    const s2 = new HseStretch(FS, 2)
     s2.setParams({ semitones: 3, rate: 1.5 })
     const b = s2.processStereo(x, x)
     expect(a.l.length).toBe(b.l.length)
@@ -99,7 +99,7 @@ describe('Stretch', () => {
 
   it('setParams 即时生效；reset 后再次处理结果一致', () => {
     const x = sine(FS, 440, 1)
-    const s = new Stretch(FS, 2)
+    const s = new HseStretch(FS, 2)
     s.setParams({ semitones: 0, rate: 1 })
     const a = s.processStereo(x, x)
     s.setParams({ semitones: 0, rate: 2 }) // 改参数立即影响输出长度
@@ -120,7 +120,7 @@ describe('Stretch', () => {
   it('输入输出为独立数组（不就地修改输入）', () => {
     const x = sine(FS, 440, 0.5)
     const copy = Float32Array.from(x)
-    const s = new Stretch(FS, 2)
+    const s = new HseStretch(FS, 2)
     s.setParams({ semitones: 5, rate: 1.3 })
     const out = s.processStereo(x, x)
     expect(out.l).not.toBe(x)
@@ -136,8 +136,8 @@ describe('Stretch', () => {
   })
 
   it('非法采样率抛 Error；isSignalsmithAvailable 返回布尔', async () => {
-    expect(() => new Stretch(0)).toThrow('invalid sample rate')
-    const ok = await Stretch.isSignalsmithAvailable()
+    expect(() => new HseStretch(0)).toThrow('invalid sample rate')
+    const ok = await HseStretch.isSignalsmithAvailable()
     expect(typeof ok).toBe('boolean')
   })
 })

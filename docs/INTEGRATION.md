@@ -187,4 +187,4 @@ const code = encodeShareCode(engine.getParams?.() ?? createDefaultParams(48000))
 | 有爆音 | 参数变更不要在音频线程；确认 `outputs.length >= inputs.length` |
 | worklet 404 | `workletUrl` 路径与打包产物不一致 |
 | 想接 5.1/7.1 | 当前引擎为立体声核心，可在接入层多实例/拆分通道 |
-| 需要实时变速变调 | 实时链建议使用外部 SoundTouch 节点（见 HyperSoundEngine 适配层），离线用 `Stretch` |
+| 需要实时变速变调 | 实时链建议使用外部 SoundTouch 节点（见 HyperSoundEngine 适配层），离线用 `HseStretch` |

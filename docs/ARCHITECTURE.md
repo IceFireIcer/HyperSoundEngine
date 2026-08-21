@@ -18,7 +18,7 @@
 ┌───────────────────────────┴────────────────────────────────┐
 │ 宿主层（Host）                                              │
 │  - browser.ts / integration/HyperSoundEngineHost.ts                 │
-│  - worklet/AudioEffectsProcessor.ts                         │
+│  - worklet/HseAudioEffectsProcessor.ts                         │
 │  - 负责音频图接线、消息管道、模式回退                         │
 └───────────────────────────┬────────────────────────────────┘
                             │ 调用 AudioEngine
@@ -33,7 +33,7 @@
 │ DSP 内核（dsp/）                                             │
 │  - fft / biquad / EqChain / MidSide / Deesser / Compressor  │
 │  - Limiter / BassEnhancer / Convolver / ReverbSimple        │
-│  - LufsMeter / LoudnessComp / Resampler / Stretch / PitchYin│
+│  - LufsMeter / LoudnessComp / Resampler / HseStretch / PitchYin│
 │  - features / StretchLgplAdapter                            │
 └─────────────────────────────────────────────────────────────┘
 ```

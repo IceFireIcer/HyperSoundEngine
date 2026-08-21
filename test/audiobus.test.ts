@@ -1,23 +1,23 @@
 /**
- * 多通道 AudioBus 测试
+ * 多通道 HseAudioBus 测试
  *
  * 覆盖：
- * - AudioBus 通道/帧访问与 downmix/upmix
+ * - HseAudioBus 通道/帧访问与 downmix/upmix
  * - HyperSoundEngine.processBus 处理 4 通道输入
- * - processBus 支持 sidechain AudioBus
+ * - processBus 支持 sidechain HseAudioBus
  */
 
 import { describe, it, expect } from 'vitest'
-import { AudioBus } from '../src/dsp/AudioBus'
+import { HseAudioBus } from '../src/dsp/HseAudioBus'
 import { HyperSoundEngine, createDefaultParams } from '../src/index'
 
-describe('AudioBus', () => {
+describe('HseAudioBus', () => {
   it('downmixes to stereo and writes back to multichannel', () => {
     const n = 64
     const ch0 = new Float32Array(n).fill(0.1)
     const ch1 = new Float32Array(n).fill(0.2)
     const ch2 = new Float32Array(n).fill(0.3)
-    const bus = new AudioBus([ch0, ch1, ch2])
+    const bus = new HseAudioBus([ch0, ch1, ch2])
 
     expect(bus.channelCount).toBe(3)
     expect(bus.frameCount).toBe(n)
@@ -28,7 +28,7 @@ describe('AudioBus', () => {
 
     const outL = new Float32Array(n).fill(0.5)
     const outR = new Float32Array(n).fill(0.6)
-    const outBus = new AudioBus([new Float32Array(n), new Float32Array(n), new Float32Array(n)])
+    const outBus = new HseAudioBus([new Float32Array(n), new Float32Array(n), new Float32Array(n)])
     outBus.writeStereo(outL, outR)
     expect(outBus.getChannel(0)[0]).toBeCloseTo(0.5, 6)
     expect(outBus.getChannel(1)[0]).toBeCloseTo(0.6, 6)
@@ -43,13 +43,13 @@ describe('AudioBus', () => {
     engine.setParams(params)
 
     const n = 128
-    const input = new AudioBus([
+    const input = new HseAudioBus([
       new Float32Array(n).fill(0.1),
       new Float32Array(n).fill(0.1),
       new Float32Array(n).fill(0.1),
       new Float32Array(n).fill(0.1),
     ])
-    const output = new AudioBus([
+    const output = new HseAudioBus([
       new Float32Array(n),
       new Float32Array(n),
       new Float32Array(n),
@@ -63,28 +63,28 @@ describe('AudioBus', () => {
     expect(output.getChannel(3)[0]).toBeCloseTo(0.1, 6)
   })
 })
-describe('AudioBus 多通道工具', () => {
+describe('HseAudioBus 多通道工具', () => {
   it('create / fromInterleaved / toInterleaved 往返一致', () => {
-    const bus = AudioBus.create(4, 3)
+    const bus = HseAudioBus.create(4, 3)
     bus.channels[0].set([0, 1, 2])
     bus.channels[1].set([3, 4, 5])
     bus.channels[2].set([6, 7, 8])
     bus.channels[3].set([9, 10, 11])
     const inter = bus.toInterleaved()
     expect(Array.from(inter)).toEqual([0, 3, 6, 9, 1, 4, 7, 10, 2, 5, 8, 11])
-    const back = AudioBus.fromInterleaved(inter, 4)
+    const back = HseAudioBus.fromInterleaved(inter, 4)
     for (let c = 0; c < 4; c++) {
       expect(Array.from(back.channels[c])).toEqual(Array.from(bus.channels[c]))
     }
   })
 
   it('copyTo / fill / applyGain / mixFrom / downmixToMono / extract', () => {
-    const a = AudioBus.create(3, 4)
+    const a = HseAudioBus.create(3, 4)
     a.channels[0].set([1, 1, 1, 1])
     a.channels[1].set([2, 2, 2, 2])
     a.channels[2].set([3, 3, 3, 3])
 
-    const b = AudioBus.create(3, 4)
+    const b = HseAudioBus.create(3, 4)
     a.copyTo(b)
     expect(b.getChannel(0)[0]).toBe(1)
     expect(b.getChannel(2)[3]).toBe(3)
@@ -131,7 +131,7 @@ describe('AudioBus 多通道工具', () => {
     engine.setParams(params)
 
     const n = 256
-    const input = new AudioBus([
+    const input = new HseAudioBus([
       new Float32Array(n).fill(0.1), // 对0 L
       new Float32Array(n).fill(0.1), // 对0 R
       new Float32Array(n).fill(0.2), // 对1 L
@@ -139,7 +139,7 @@ describe('AudioBus 多通道工具', () => {
       new Float32Array(n).fill(0.3), // 对2 L
       new Float32Array(n).fill(0.3), // 对2 R
     ])
-    const output = new AudioBus(AudioBus.create(6, n).channels)
+    const output = new HseAudioBus(HseAudioBus.create(6, n).channels)
     engine.processBus(input, output, undefined, { mode: 'perChannelPair' })
     // 直通下每对独立:输出应近似等于输入(无效果链)
     for (let c = 0; c < 6; c++) {
@@ -166,14 +166,14 @@ describe('AudioBus 多通道工具', () => {
     engine.setParams(params)
 
     const n = 128
-    const input = new AudioBus([
+    const input = new HseAudioBus([
       new Float32Array(n).fill(0.1),
       new Float32Array(n).fill(0.1),
       new Float32Array(n).fill(0.2),
       new Float32Array(n).fill(0.2),
       new Float32Array(n).fill(0.3), // 单声道剩余
     ])
-    const output = new AudioBus(AudioBus.create(5, n).channels)
+    const output = new HseAudioBus(HseAudioBus.create(5, n).channels)
     engine.processBus(input, output, undefined, { mode: 'perChannelPair' })
     for (let c = 0; c < 5; c++) {
       expect(output.getChannel(c)[0]).toBeCloseTo(input.getChannel(c)[0], 6)
@@ -205,19 +205,19 @@ describe('AudioBus 多通道工具', () => {
 
     const n = 4800
     // 4 通道:对0 有强 sidechain,对1 无 sidechain
-    const input = new AudioBus([
+    const input = new HseAudioBus([
       new Float32Array(n).fill(0.01),
       new Float32Array(n).fill(0.01),
       new Float32Array(n).fill(0.01),
       new Float32Array(n).fill(0.01),
     ])
-    const side = new AudioBus([
+    const side = new HseAudioBus([
       new Float32Array(n).fill(1.0),
       new Float32Array(n).fill(1.0),
       new Float32Array(n).fill(0.01), // 对1 的 sidechain 很弱
       new Float32Array(n).fill(0.01),
     ])
-    const output = new AudioBus(AudioBus.create(4, n).channels)
+    const output = new HseAudioBus(HseAudioBus.create(4, n).channels)
     engine.processBus(input, output, side, { mode: 'perChannelPair' })
     // 对0 被强 sidechain 压缩
     expect(output.getChannel(0)[output.getChannel(0).length - 1]).toBeLessThan(0.005)

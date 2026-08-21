@@ -9,7 +9,7 @@
  *  - 引擎统计/分析读取（LUFS、频谱、特征）；
  *  - 场景：内置 11 场景 + 我的场景（localStorage 持久化，快照去 IR 数据）；
  *  - 分享串：encode/decode（版本+校验+白名单，非法输入抛错）；
- *  - 听力测试状态机（HearingTest 封装）。
+ *  - 听力测试状态机（HseHearingTest 封装）。
  */
 
 import type { EngineAnalysis, EngineStats, ScenePreset, HyperSoundEngineParams, MidiEvent, MidiBinding, AutomationTarget } from '../src/types'
@@ -17,7 +17,7 @@ import { createDefaultParams } from '../src/types'
 import type { AudioEngine } from '../src/interfaces'
 import { SCENE_PRESETS, getSceneById } from '../src/engine/ScenePresets'
 import { encodeShareCode, decodeShareCode } from '../src/engine/ShareCodec'
-import { HearingTest, type AudiogramPoint } from '../src/analysis/HearingTest'
+import { HseHearingTest, type AudiogramPoint } from '../src/analysis/HseHearingTest'
 
 /** 我的场景存储键（独立命名空间） */
 const MY_SCENES_KEY = 'hypersound:hse-my-scenes'
@@ -95,7 +95,7 @@ function saveMyScenes(list: ScenePreset[]): void {
 
 /** 把任意 AudioEngine 包装成 UI 桥（融合时在 HyperSoundEngine 侧调用） */
 export function createHyperSoundEngineUiBridge(engine: AudioEngine, sampleRate: number): HyperSoundEngineUiBridge {
-  const hearing = new HearingTest(sampleRate)
+  const hearing = new HseHearingTest(sampleRate)
   let current: HyperSoundEngineParams = createDefaultParams(sampleRate)
   engine.setParams(current)
 

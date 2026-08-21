@@ -34,7 +34,7 @@ import { createHyperSoundEngineHost, HyperSoundEngineHost } from 'hypersoundengi
 
 ```ts
 // 仅供 esbuild/vite 打包，不可在 Node 主线程直接 import
-import { AudioEffectsProcessor, WORKLET_PROCESSOR_NAME } from 'hypersoundengine/worklet'
+import { HseAudioEffectsProcessor, WORKLET_PROCESSOR_NAME } from 'hypersoundengine/worklet'
 ```
 
 ---
@@ -100,7 +100,7 @@ interface AudioEngine {
 - `outputs[i].length` 应 >= `inputs[i].length`；
 - 当前支持单声道（`channelCount=1`）与立体声（`channelCount=2`）；
 - `sidechain`：可选外部侧链输入（与 inputs 同长度的 Float32Array[]）。只有开启 `sidechainEnabled` 的效果器（Compressor / Deesser）会使用它驱动包络/检测；
-- 多通道便捷入口 `processBus(input: AudioBus, output: AudioBus, sidechain?: AudioBus, options?)`：
+- 多通道便捷入口 `processBus(input: HseAudioBus, output: HseAudioBus, sidechain?: HseAudioBus, options?)`：
   - 默认（`mode: 'downmix'`）：>2 声道下混为立体声处理，输出不足 2 声道写第一声道、超过 2 声道复制到其余声道；
   - `mode: 'perChannelPair'`：按立体声对 (0,1)、(2,3)… 逐对独立处理（每对独立子引擎，参数与主引擎同步），支持 5.1/7.1 各通道独立 DSP；奇数剩余通道复制成立体声处理取 L 写回；sidechain 按对切片；
   - 非实时路径，会分配临时缓冲；
@@ -137,13 +137,13 @@ interface EngineAnalysis {
 
 复位所有滤波器、包络、响度计、分析缓冲与内部状态；同时调用自定义 `ProcessingStage` 的可选 `reset()`。
 
-### `AudioBus` 多通道缓冲（`dsp/AudioBus.ts`）
+### `HseAudioBus` 多通道缓冲（`dsp/HseAudioBus.ts`）
 
-非交错 N 通道缓冲抽象，通道级工具均为确定性、纯函数（`AudioBus` 自身不持有状态）：
+非交错 N 通道缓冲抽象，通道级工具均为确定性、纯函数（`HseAudioBus` 自身不持有状态）：
 
 ```ts
-const bus = AudioBus.create(6, 1024)            // 5.1：6 通道 × 1024 帧（零填充）
-const bus2 = AudioBus.fromInterleaved(inter, 6) // 交错 → 非交错（拷贝）
+const bus = HseAudioBus.create(6, 1024)            // 5.1：6 通道 × 1024 帧（零填充）
+const bus2 = HseAudioBus.fromInterleaved(inter, 6) // 交错 → 非交错（拷贝）
 const inter = bus.toInterleaved()               // 非交错 → 交错（新分配）
 bus.copyTo(target)                              // 拷贝到目标 bus
 bus.fill(0); bus.applyGain(0.5)                 // 填充 / 线性增益
@@ -211,7 +211,7 @@ decodeWav(buffer: ArrayBuffer | Uint8Array): { sampleRate: number; channels: Flo
 ```
 
 - 16-bit PCM（format=1）/ 32-bit Float（format=3），标准 RIFF/WAVE 头。
-- 多通道直接对应 `AudioBus` 非交错布局，解码结果可零拷贝进入 `processBus`。
+- 多通道直接对应 `HseAudioBus` 非交错布局，解码结果可零拷贝进入 `processBus`。
 - 畸形输入（坏魔数 / 缺 chunk / 块不对齐 / 0 声道 / 不支持位深）一律抛错（防注入）。
 
 ---
@@ -249,7 +249,7 @@ engine.setParams(params)
 | `limiter` | 前瞻限幅器 |
 | `ieq` | 智能均衡 |
 | `dynamicEq` | 自适应动态均衡（频谱包络自动混音，5 带全通交叉） |
-| `pitch` | 变速/变调（离线 Stretch 参数） |
+| `pitch` | 变速/变调（离线 HseStretch 参数） |
 | `modulation` | 参数调制矩阵（LFO / Envelope Follower → masterGain / stereoWidth 路由） |
 | `modEffects` | 调制类效果：delay / chorus / flanger / phaser / tremolo |
 | `hearing` | 听力分析 |

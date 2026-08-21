@@ -32,7 +32,7 @@ export interface SeparationTask {
 /** 默认分离声部：人声/鼓/贝斯/其他 */
 export const DEFAULT_STEMS: SeparationStem[] = ['vocals', 'drums', 'bass', 'other']
 
-export class SeparationQueue {
+export class HseSeparationQueue {
   private readonly adapter: StemSeparatorAdapter
   private readonly tasks: SeparationTask[] = []
   private readonly inputs = new Map<number, Float32Array>()

@@ -17,7 +17,7 @@ import type { AudioEngine } from '../../src/interfaces'
 import type { HyperSoundEngineParams } from '../../src/types'
 import { createHyperSoundEngineUiBridge, deepMerge } from '../../ui'
 import type { HyperSoundEngineUiBridge, DeepPartial } from '../../ui'
-// 变速变调：引擎链内 Stretch 为离线语义（不内联实时主链），实时变速变调
+// 变速变调：引擎链内 HseStretch 为离线语义（不内联实时主链），实时变速变调
 // 复用 WaveForge 既有 SoundTouch AudioWorklet 方案，串接在
 // masterGain 与引擎处理节点之间（masterGain → SoundTouch → 引擎 → analyser）。
 import { SoundTouchNode } from '@soundtouchjs/audio-worklet'
@@ -416,7 +416,7 @@ export async function exportWav(sourceUrl: string, durationSeconds: number): Pro
   }
 
   // 变速变调（离线与实时同效果）：实时链由 SoundTouch 前置承担，导出走引擎自带
-  // Stretch（同一参数语义）对整段输出做一次性处理，保证导出与实时听感一致
+  // HseStretch（同一参数语义）对整段输出做一次性处理，保证导出与实时听感一致
   let finalL = asL
   let finalR = asR
   if (pitchActive(currentParams)) {

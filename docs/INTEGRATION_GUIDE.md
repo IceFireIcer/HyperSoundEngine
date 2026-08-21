@@ -202,13 +202,13 @@ worklet 模式下参数经 `port.postMessage({type:'params', params})` 下发,�
 `processBus` 是 `process` 的多通道便利入口(非实时,会分配临时缓冲):
 
 ```ts
-import { AudioBus, createHyperSoundEngine } from 'hypersoundengine'
+import { HseAudioBus, createHyperSoundEngine } from 'hypersoundengine'
 
 const engine = createHyperSoundEngine(48000, 2)
 
 // 5.1 = 6 通道输入
-const input = AudioBus.create(6, 4096)
-const output = AudioBus.create(6, 4096)
+const input = HseAudioBus.create(6, 4096)
+const output = HseAudioBus.create(6, 4096)
 
 // 模式一:downmix(默认)—— 下混立体声处理,结果复制到各通道
 engine.processBus(input, output)
@@ -220,11 +220,11 @@ engine.processBus(input, output, undefined, { mode: 'perChannelPair' })
 //   sidechain 同样按对切片
 ```
 
-### AudioBus 通道工具
+### HseAudioBus 通道工具
 
 ```ts
-AudioBus.create(channelCount, frameCount)         // 零填充创建
-AudioBus.fromInterleaved(interleaved, channelCount) // 交错 → 非交错
+HseAudioBus.create(channelCount, frameCount)         // 零填充创建
+HseAudioBus.fromInterleaved(interleaved, channelCount) // 交错 → 非交错
 bus.toInterleaved()                                 // 非交错 → 交错
 bus.copyTo(target) / fill(v) / applyGain(g) / mixFrom(other, g)
 bus.extract([0, 1])                                 // 提取通道子集
@@ -244,13 +244,13 @@ const buf = encodeWav([left, right], 48000, { bitDepth: 16 })  // 或 32(float)
 // 解码:ArrayBuffer/Uint8Array → 非交错 Float32Array[]
 const { sampleRate, channels, bitDepth } = decodeWav(buf)
 
-// 解码结果可直接构造 AudioBus
-import { AudioBus } from 'hypersoundengine'
-const bus = new AudioBus(channels)
+// 解码结果可直接构造 HseAudioBus
+import { HseAudioBus } from 'hypersoundengine'
+const bus = new HseAudioBus(channels)
 ```
 
 - 支持 **16-bit PCM**(format=1)与 **32-bit Float**(format=3)
-- 多通道直接对应 AudioBus 非交错布局
+- 多通道直接对应 HseAudioBus 非交错布局
 - **防注入**:坏魔数 / 缺 chunk / 块不对齐 / 0 声道 / 不支持位深 → 一律抛 `Error`
 
 ---
@@ -582,7 +582,7 @@ engine.getMidiBindings(): MidiBinding[]
 engine.getMidiDroppedCount(): number
 
 // 多通道
-AudioBus.create(ch, frames) / AudioBus.from(arr)
+HseAudioBus.create(ch, frames) / HseAudioBus.from(arr)
 engine.processBus(input, output, sidechain?, options?): void
 
 // UI

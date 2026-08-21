@@ -15,7 +15,7 @@
 | H-1 | **Convolver 流式长流必出 NaN**（约 32–85ms 后；@8k 10s 长跑 77440 个 NaN；引擎卷积混响 128 块在样本 3584 整链 NaN） | pending 队列指针线性增长不环绕 → 越界读 undefined；且旧测试被 `NaN > maxDiff` 恒假掩盖 | pending 改为**滑动窗口**（写前队尾越界即 copyWithin 压缩回头部）；convolver.test.ts 补显式 NaN 检测 |
 | H-2 | **Convolver 流式分区 1..P 贡献丢失**（IR 长于分区时湿路只剩前 512 tap；delta@1000 流式湿路全 0） | ① `processWetBlock` 每块 `outAccum.fill(0)` 清空 Gardner overlap-add 累加器；② L/R 共用 outAccum、各左移一次 → 历史被后处理通道提前消耗 | ① 移除块内 fill(0)（仅 loadIR 清零一次）；② **每通道独立 outAccum**（outAccumL/outAccumR）；验证：delta@1000 → 位置 1512 峰值 1.0 ✓ |
 | M-1 | **LoudnessComp fs=8k 输出 31811/32000 NaN**（auto 低音量/bright/warm/night 预设触发） | 内部 `designPeaking/designShelf` 无 fs/2 clamp：12kHz/6.3kHz 频点在 8k（Nyquist 4k）下 sin(w0)<0 → 极点出圆 | f0 clamp 到 `[1, fs·0.45]`；另补 `clamp` 拒绝 NaN（L-1 一并修复） |
-| — | **Stretch 参数突变输出膨胀 14 倍**（rate/semitones 热切换后峰值 14.57，炸音级） | 合成 hop 突变 → 旧帧相位状态不匹配；且 WOLA 归一化阈值 1e-4 太苛刻，**部分帧（补零帧）IDFT 重建的窗边缘误差被除法放大**（实测 out/sArr = −14.4） | ① setParams 检测参数变化 → reset 内部状态；② 归一化阈值 1e-4 → **0.01**（窗边缘自然淡出）；修复后峰值 14.57 → 2.65 |
+| — | **HseStretch 参数突变输出膨胀 14 倍**（rate/semitones 热切换后峰值 14.57，炸音级） | 合成 hop 突变 → 旧帧相位状态不匹配；且 WOLA 归一化阈值 1e-4 太苛刻，**部分帧（补零帧）IDFT 重建的窗边缘误差被除法放大**（实测 out/sArr = −14.4） | ① setParams 检测参数变化 → reset 内部状态；② 归一化阈值 1e-4 → **0.01**（窗边缘自然淡出）；修复后峰值 14.57 → 2.65 |
 
 ### 🟡 中严重度（听感/语义错误）
 
@@ -60,7 +60,7 @@
 
 1. 修复前：3 子代理审计测试（it.fails 锁定缺陷）→ 全部复现
 2. 修复后：审计测试断言反转（it.fails → it）+ 缺陷快照移除 → 全绿
-3. 关键修复专项验证：Convolver delta@1000 → 延迟 1512 峰值 1.0；Stretch 突变峰值 14.57→2.65；LoudnessComp 8k NaN→0
+3. 关键修复专项验证：Convolver delta@1000 → 延迟 1512 峰值 1.0；HseStretch 突变峰值 14.57→2.65；LoudnessComp 8k NaN→0
 4. 最终：**29 文件 / 320 用例全绿、tsc 0 错误、git 干净**（2026-08 设备档案移除后：**28 文件 / 313 用例**，见文末追加）
 
 ---

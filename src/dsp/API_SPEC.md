@@ -303,13 +303,13 @@ export class Resampler {
 
 ---
 
-## 模块 14：src/dsp/Stretch.ts —— 变速/变调（相位声码器自研 + signalsmith-stretch(MIT) 可选适配，技术文档 §9）
+## 模块 14：src/dsp/HseStretch.ts —— 变速/变调（相位声码器自研 + signalsmith-stretch(MIT) 可选适配，技术文档 §9）
 
 ```ts
-export interface StretchParams { semitones: number; rate: number }
-export class Stretch {
+export interface HseStretchParams { semitones: number; rate: number }
+export class HseStretch {
   constructor(fs: number, channels?: number) // 默认 2
-  setParams(p: StretchParams): void
+  setParams(p: HseStretchParams): void
   /** 变速不变调处理立体声（输出长度≈输入*rate） */
   processStereo(l: Float32Array, r: Float32Array): { l: Float32Array; r: Float32Array }
   reset(): void
@@ -363,7 +363,7 @@ centroid≈音高频率；zcr 白噪声 > 正弦。
 ### A. src/engine/HyperSoundEngine.ts —— 引擎总成（F1 负责）
 ```ts
 import type { HyperSoundEngineParams, EngineStats, EngineAnalysis } from '../types'
-import { Stretch } from '../dsp/Stretch'
+import { HseStretch } from '../dsp/HseStretch'
 export class HyperSoundEngine {
   constructor(sampleRate: number, channelCount?: number) // 默认 2
   setParams(p: HyperSoundEngineParams): void
@@ -373,7 +373,7 @@ export class HyperSoundEngine {
   getAnalysis(): EngineAnalysis // 内部 FFT(2048, Hann) 频谱 + 特征；每 N 帧更新一次
   getLatencySamples(): number
   /** 变速/变调处理器（不内联进主链；供 gapless/过渡场景调用） */
-  getStretch(): Stretch
+  getStretch(): HseStretch
   reset(): void
 }
 ```
@@ -400,15 +400,15 @@ export function encodeShareCode(p: HyperSoundEngineParams): string
 export function decodeShareCode(s: string): HyperSoundEngineParams
 ```
 
-### D. src/worklet/AudioEffectsProcessor.ts —— AudioWorklet 处理器（F2 负责）
+### D. src/worklet/HseAudioEffectsProcessor.ts —— AudioWorklet 处理器（F2 负责）
 ```ts
 import { HyperSoundEngine } from '../engine/HyperSoundEngine'
 export const WORKLET_PROCESSOR_NAME = 'hypersoundengine'
-export class AudioEffectsProcessor extends AudioWorkletProcessor {
+export class HseAudioEffectsProcessor extends AudioWorkletProcessor {
   constructor() // 用全局 sampleRate 创建 HyperSoundEngine；port.onmessage 接 {type:'params'|'reset'}
   process(inputs: Float32Array[][], outputs: Float32Array[][], parameters: Record<string, Float32Array>): boolean
 }
-// 文件末尾：typeof registerProcessor !== 'undefined' && registerProcessor(WORKLET_PROCESSOR_NAME, AudioEffectsProcessor)
+// 文件末尾：typeof registerProcessor !== 'undefined' && registerProcessor(WORKLET_PROCESSOR_NAME, HseAudioEffectsProcessor)
 // 注意注释：AudioWorklet 运行时不支持裸 import，融合时需打包为单文件（esbuild/vite worklet 插件）。
 ```
 
@@ -424,10 +424,10 @@ export class SpectrumAnalyzer {
 }
 ```
 
-### F. src/analysis/HearingTest.ts —— 听力分析流程（F2 负责）
+### F. src/analysis/HseHearingTest.ts —— 听力分析流程（F2 负责）
 ```ts
 export interface AudiogramPoint { freqHz: number; thresholdDb: number }
-export class HearingTest {
+export class HseHearingTest {
   constructor(fs: number)
   begin(): void
   /** 返回当前测试步骤（频率 + 播放电平 dB）；全部完成返回 null */
@@ -454,7 +454,7 @@ export interface StemSeparatorAdapter {
   separate(input: Float32Array, stems: SeparationStem[], onProgress?: (p: number) => void): Promise<Record<string, Float32Array>>
 }
 export interface SeparationTask { id: number; state: 'queued' | 'running' | 'done' | 'cancelled' | 'failed'; stems: SeparationStem[]; error?: string }
-export class SeparationQueue {
+export class HseSeparationQueue {
   constructor(adapter: StemSeparatorAdapter)
   enqueue(input: Float32Array, stems?: SeparationStem[]): SeparationTask
   cancel(taskId: number): void

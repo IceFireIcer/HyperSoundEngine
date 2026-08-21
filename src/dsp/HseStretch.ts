@@ -1,5 +1,5 @@
 /**
- * Stretch —— 变速 / 变调（相位声码器自研 + signalsmith-stretch(MIT) 可选适配）
+ * HseStretch —— 变速 / 变调（相位声码器自研 + signalsmith-stretch(MIT) 可选适配）
  *
  * 出处/许可：
  *  - 相位声码器算法原理：research/docs/音频算法技术文档.md §9（相位差 → 瞬时频率 → 按目标步进累积相位）；
@@ -28,7 +28,7 @@
  * 确定性：无 Math.random / Date / console；同输入同参数同输出（signalsmith 路径仅在
  * 其纯 DSP 类接口可同步使用时启用，见 isSignalsmithAvailable 注释）。
  */
-export interface StretchParams {
+export interface HseStretchParams {
   /** 半音数（-36..36，超出 clamp） */
   semitones: number
   /** 时间伸缩速率（0.1..8，超出 clamp；1=原速） */
@@ -38,7 +38,7 @@ export interface StretchParams {
 const N = 2048 // FFT 窗长
 const HOP = 512 // 分析 hop
 
-export class Stretch {
+export class HseStretch {
   /** 采样率（公开只读，构造时校验 > 0） */
   readonly fs: number
   /** 声道数（API 兼容保留；processStereo 固定处理双声道） */
@@ -76,7 +76,7 @@ export class Stretch {
   }
 
   /** 参数即时生效；rate/semitones 做边界 clamp 避免 NaN/病态伸缩。 */
-  setParams(p: StretchParams): void {
+  setParams(p: HseStretchParams): void {
     const r = clamp(p.rate, 0.1, 8)
     const s = clamp(p.semitones, -36, 36)
     const ps = Math.pow(2, s / 12)
@@ -99,7 +99,7 @@ export class Stretch {
    * 返回 { l, r }，长度 ≈ 输入 × rate（±3% 量级，见测试）。
    */
   processStereo(l: Float32Array, r: Float32Array): { l: Float32Array; r: Float32Array } {
-    if (Stretch._signalsmith) {
+    if (HseStretch._signalsmith) {
       const via = this._processWithSignalsmith(l, r)
       if (via) return via // 适配成功；否则回退自研
     }
@@ -122,22 +122,22 @@ export class Stretch {
   /**
    * 探测 signalsmith-stretch 是否可用于同步处理。
    * 说明：官方 npm 包（v1.x）为 Web Audio / AudioWorklet 包装，需要 AudioContext 且为异步，
-   * 无法在纯 JS 环境同步调用，故本探测只认可"同步纯 DSP 类接口"（模块导出 Stretch 类且含
+   * 无法在纯 JS 环境同步调用，故本探测只认可"同步纯 DSP 类接口"（模块导出 HseStretch 类且含
    * process 方法）；否则返回 false 并回退自研相位声码器。动态 import 失败（未安装）同样回退。
    */
   static async isSignalsmithAvailable(): Promise<boolean> {
     try {
       const spec = 'signalsmith-stretch' // 变量形式：避免 TS 静态解析缺失模块
       const mod: unknown = await import(spec)
-      const m = mod as { Stretch?: unknown }
-      if (m && typeof m.Stretch === 'function') {
-        Stretch._signalsmith = m
+      const m = mod as { HseStretch?: unknown }
+      if (m && typeof m.HseStretch === 'function') {
+        HseStretch._signalsmith = m
         return true
       }
-      Stretch._signalsmith = null
+      HseStretch._signalsmith = null
       return false
     } catch {
-      Stretch._signalsmith = null
+      HseStretch._signalsmith = null
       return false
     }
   }
@@ -266,9 +266,9 @@ export class Stretch {
 
   private _processWithSignalsmith(l: Float32Array, r: Float32Array): { l: Float32Array; r: Float32Array } | null {
     try {
-      const mod = Stretch._signalsmith as { Stretch: new (channels: number, block: number) => unknown }
+      const mod = HseStretch._signalsmith as { HseStretch: new (channels: number, block: number) => unknown }
       const block = N // 2048 样本/块
-      const s = new mod.Stretch(2, block) as Record<string, unknown>
+      const s = new mod.HseStretch(2, block) as Record<string, unknown>
       if (typeof s.reset === 'function') (s.reset as () => void)()
       if (typeof s.setTransposeSemitones === 'function') {
         ;(s.setTransposeSemitones as (v: number) => void)(this.semitones)

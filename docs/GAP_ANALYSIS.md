@@ -47,7 +47,7 @@
 | 动态图（copy-on-write + 原子切换） | 运行时增删节点/连线 | 固定 `ProcessingStage[]`，不支持热改拓扑 | P0 |
 | 节点/处理器注册系统 | 新增效果器无需改核心 | 接口存在，缺公开注册 API | P0 |
 | 参数自动化/调制矩阵 | LFO→参数、事件队列、sample-accurate | 无 | P1 |
-| 多通道 AudioBus | 任意通道、总线/通道协商 | 无 | P1 |
+| 多通道 HseAudioBus | 任意通道、总线/通道协商 | 无 | P1 |
 | Worker 并行调度 | 独立分支并行渲染 | 无 | P2 |
 | WASM/SIMD 加速层 | FFT/卷积/热路径 | 纯 JS | P2 |
 | 背压/降级 | 高负载切简化算法 | 无 | P2 |
@@ -66,7 +66,7 @@
 4. **Sidechain 输入**：为 Compressor/Deesser 增加可选 sidechain 输入。
 5. **参数调制矩阵**：LFO/Envelope Follower + 可寻址参数映射。
 6. **MIDI 事件接口**：至少提供事件队列与 MIDI Learn 映射。
-7. **多通道支持**：引入 `AudioBus` 抽象，逐步把立体声 DSP 扩展到 N 通道。
+7. **多通道支持**：引入 `HseAudioBus` 抽象，逐步把立体声 DSP 扩展到 N 通道。
 8. **调制效果器**：Delay、Chorus、Flanger、Phaser、Tremolo。
 9. **文件 I/O**：WAV 编解码入库，FLAC/MP3 作为可选适配。
 
@@ -88,12 +88,12 @@
 已落地 **P1 四项** ✅：
 - **Sidechain 输入**：`process()` 增加第三参数 `sidechain?`；Compressor/Deesser 支持 `sidechainEnabled` 用外部信号驱动包络/齿音检测（test/sidechain.test.ts）。
 - **参数调制矩阵**：`dsp/modulation.ts` 提供 LFO（sine/triangle/square/saw）+ Envelope Follower，经 `ModulationMatrix` 路由到 masterGain / stereoWidth（test/modulation.test.ts）。
-- **多通道 AudioBus**：`dsp/AudioBus.ts` 非交错 N 通道容器 + `downmixToStereo/writeStereo` + 引擎 `processBus()` 入口（test/audiobus.test.ts）。
+- **多通道 HseAudioBus**：`dsp/HseAudioBus.ts` 非交错 N 通道容器 + `downmixToStereo/writeStereo` + 引擎 `processBus()` 入口（test/audiobus.test.ts）。
 - **调制类效果**：`dsp/ModEffects.ts` —— Delay / Chorus / Flanger / Phaser / Tremolo 五个效果器接入处理链（delay→chorus→flanger→phaser→tremolo，位于 NightMode 与 Reverb 之间）。
 - 分享串（ShareCodec）已同步 `modEffects` 字段编解码。
 
 已落地 **多通道深化 + 调制/Sidechain UI** ✅：
-- **AudioBus 多通道工具**：`create/fromInterleaved/toInterleaved/copyTo/fill/applyGain/mixFrom/extract/downmixToMono`（test/audiobus.test.ts）。
+- **HseAudioBus 多通道工具**：`create/fromInterleaved/toInterleaved/copyTo/fill/applyGain/mixFrom/extract/downmixToMono`（test/audiobus.test.ts）。
 - **processBus perChannelPair 模式**：按立体声对逐对独立处理（子引擎池，参数/复位与主引擎同步），支持 5.1/7.1 各通道独立 DSP；奇数通道复制 L 写回；sidechain 按对切片。
 - **调制类效果 UI**：效果页新增 Delay/Chorus/Flanger/Phaser/Tremolo 五卡片 + 参数调制矩阵卡片与弹窗（`ui/modalsModulation.tsx`）。
 - **Sidechain UI 开关**：Compressor/Deesser 弹窗新增外部 Sidechain 开关。

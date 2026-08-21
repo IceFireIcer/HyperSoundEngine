@@ -3,7 +3,7 @@
 > 审计对象：`HyperSoundEngine/src/dsp/` 下 16 个模块
 > 契约依据：`src/dsp/API_SPEC.md`（模块 1–16 签名与语义）
 > 交付：`test/audit-dsp.test.ts`（82 项）+ 本报告
-> 审计维度：① 参数无效/边界直通性 ② 零输入零输出（IIR 衰减/无 DC 泄漏/自激）③ 边界 clamp（fs 8k/96k/192k、频率 20Hz–20kHz/Nyquist、Q 0.05/30、增益 ±24dB/±60dB）④ 10s 长跑稳定性 ⑤ 参数突变（setParams 后立即处理，逐样本差值有界）⑥ 模块专项（Convolver 分区边界、Resampler 0.1x/8x、Stretch 极端 rate）
+> 审计维度：① 参数无效/边界直通性 ② 零输入零输出（IIR 衰减/无 DC 泄漏/自激）③ 边界 clamp（fs 8k/96k/192k、频率 20Hz–20kHz/Nyquist、Q 0.05/30、增益 ±24dB/±60dB）④ 10s 长跑稳定性 ⑤ 参数突变（setParams 后立即处理，逐样本差值有界）⑥ 模块专项（Convolver 分区边界、Resampler 0.1x/8x、HseStretch 极端 rate）
 >
 > 测试运行：`npx vitest run test/audit-dsp.test.ts` → **87/87 通过**（其中 修复后 0 项 it.fails（全部转正断言）——契约行为断言当前实现未满足，修复后应改回普通 `it()`）。
 > 全量回归：`npx vitest run` → **29 文件 / 320 测试全部通过**（与并行子代理的 audit-chain/audit-combo 等共存）。
@@ -27,7 +27,7 @@
 | 11 | LufsMeter | src/dsp/LufsMeter.ts | 1kHz ≈-3.01 LUFS、静音 NaN、fs 8k/192k、10s、LRA |
 | 12 | LoudnessComp | src/dsp/LoudnessComp.ts | volumePercent=100 恒等、低频提升、零输入衰减、参数突变平滑、fs=8k |
 | 13 | Resampler | src/dsp/Resampler.ts | 恒等 1e-6、44.1↔48k、0.1x/8x、10s、流式一致性 |
-| 14 | Stretch | src/dsp/Stretch.ts | rate=2 长度、semitones=+12→880Hz、rate=8/0.1、10s、参数突变 |
+| 14 | HseStretch | src/dsp/HseStretch.ts | rate=2 长度、semitones=+12→880Hz、rate=8/0.1、10s、参数突变 |
 | 15 | PitchYin | src/dsp/PitchYin.ts | 440/220Hz±1、噪声/静音/短窗 -1、fs=8k、非法 fs 抛错 |
 | 16 | features | src/dsp/features.ts | 平坦谱/单音 flatness、质心、rolloff、zcr、空输入安全 |
 
@@ -96,7 +96,7 @@
 - **结论**：不构成数值爆音；±24dB 级切换是电平阶跃（听感为音量骤变），建议引擎/UI 层做数 ms 短斜坡。
 - 动态模块（Deesser/Compressor/Limiter/BassEnhancer/LoudnessComp/ReverbSimple）参数突变均平滑（包络/分块增益平滑），测试通过。
 
-#### L-4. Stretch 极端 rate 下输出长度偏差（固定 N 尾放大）
+#### L-4. HseStretch 极端 rate 下输出长度偏差（固定 N 尾放大）
 - **现象**：rate=0.1、10s 输入 → 输出长度 ≈ 期望 **+3.5%**（固定 N=2048 尾 + 尾部部分帧补零占比放大）；rate=8、短输入（0.5s）偏差可达 −7%（5s 输入时 ±0.7% 正常）。无 NaN/发散。
 - **说明**：属相位声码器固定窗尾特性，引擎变速用例 rate 0.25..3 且输入较长时影响可忽略。
 
@@ -123,7 +123,7 @@
 - **LufsMeter**：1kHz 满刻度单声道 ≈−3.01±0.5 LUFS（48k/44.1k）；静音 → NaN/-Infinity；fs 8k/192k 长处理读数有限且量级合理；10s 长跑读数稳定（0.5 幅度正弦 ≈−9.0 LUFS、peak −6.02dBFS）；LRA 两电平节目 ≈20±2.5 —— **通过**。
 - **LoudnessComp**：volumePercent=100 全频恒等（±0.3dB，auto/preset/custom 三模式）；volumePercent=20 → 120Hz 提升 >3dB、1kHz ≈0dB（±0.3dB）；fs=48k 零输入 2s 衰减 <1e-3；参数突变分块平滑（跳变 <0.3）—— **通过**（fs=8k 见 M-1、NaN 参数见 L-1）。
 - **Resampler**：44.1k→44.1k 恒等（1e-6）；44.1↔48k 频率 ±0.5Hz、RMS 误差 <1%；0.1x（48k→4.8k）与 8x（8k→64k）无 NaN、长度/频率/能量正确；10s 长跑无 NaN；processStreaming 与 process 公共区间一致（1e-6）—— **通过**。
-- **Stretch**：rate=2 长度 ±3%；rate=1、semitones=+12 → 880±1%；RMS 功率保持 <3dB；极端 rate=8（5s）/0.1（10s）无 NaN、长度在容差内；10s 长跑无 NaN；参数突变（rate 1→2、semitones 0→12）无 NaN；rate/semitones 越界 clamp（100→8/+36）无 NaN —— **通过**。
+- **HseStretch**：rate=2 长度 ±3%；rate=1、semitones=+12 → 880±1%；RMS 功率保持 <3dB；极端 rate=8（5s）/0.1（10s）无 NaN、长度在容差内；10s 长跑无 NaN；参数突变（rate 1→2、semitones 0→12）无 NaN；rate/semitones 越界 clamp（100→8/+36）无 NaN —— **通过**。
 - **PitchYin**：440Hz→440±1、220Hz→220±1（48k）；纯噪声/静音/短窗 → -1；fs=8k 440Hz 检出 ±3Hz；非法 fs 抛 Error、minHz>maxHz → -1 —— **通过**。
 - **features**：理想平坦谱 flatness>0.99；单音 flatness<0.1、质心≈音高（±15Hz，整周期窗）；白噪声 flatness ∈[0.75,0.92]（Rayleigh 分布幅度谱渐近 ≈0.845，非 1）；rolloff 单调且 ≤Nyquist；zcr 噪声>正弦；空输入返回 0/安全默认（无 NaN/不抛）—— **通过**。
 
@@ -139,7 +139,7 @@
 3. **MidSide（M-2）**：vb<0 分支按契约"仅伴奏"改为与 vb>0 对称——`midGain=1−|vb|`（vb=−1 时 midGain=0、sideGain=2），并同步更新源码注释与 API_SPEC 说明，消除语义冲突。
 4. **数值防御（L-1/L-2）**：所有 clamp 前加 `Number.isFinite` 校验（NaN → 采用默认值或跳过，至少不产生 NaN 输出）；biquad f0 clamp 下限从 1e-6 提升到 ≥1Hz。
 5. **参数平滑（L-3）**：引擎层对静态滤波器（EQ 等）增益类参数突变施加数 ms 短斜坡，消除 ±24dB 级切换的电平阶跃听感。
-6. **Stretch（L-4，可选）**：若需严格满足 rate=0.1 的 ±3% 长度契约，可在输出后做精确长度裁剪/补零（当前引擎用例 rate 0.25..3 不受影响）。
+6. **HseStretch（L-4，可选）**：若需严格满足 rate=0.1 的 ±3% 长度契约，可在输出后做精确长度裁剪/补零（当前引擎用例 rate 0.25..3 不受影响）。
 
 ---
 

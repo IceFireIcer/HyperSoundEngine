@@ -10,6 +10,6 @@
  */
 
 export {
-  AudioEffectsProcessor,
+  HseAudioEffectsProcessor,
   WORKLET_PROCESSOR_NAME,
-} from './worklet/AudioEffectsProcessor'
+} from './worklet/HseAudioEffectsProcessor'

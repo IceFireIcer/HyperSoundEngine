@@ -1,5 +1,5 @@
 /**
- * AudioBus —— 多通道非交错音频缓冲抽象
+ * HseAudioBus —— 多通道非交错音频缓冲抽象
  *
  * 用途：
  * - 统一表达单声道/立体声/多通道音频块（5.1 / 7.1 / 任意 N 通道）；
@@ -13,11 +13,11 @@
  * - 工具方法均为确定性实现，process 内零分配由调用方保证（本类自身不持有状态）。
  */
 
-export class AudioBus {
+export class HseAudioBus {
   readonly channels: Float32Array[]
 
   constructor(channels: Float32Array[]) {
-    if (channels.length === 0) throw new Error('AudioBus: at least one channel required')
+    if (channels.length === 0) throw new Error('HseAudioBus: at least one channel required')
     this.channels = channels
   }
 
@@ -31,35 +31,35 @@ export class AudioBus {
 
   getChannel(index: number): Float32Array {
     const ch = this.channels[index]
-    if (!ch) throw new Error(`AudioBus: channel ${index} out of range`)
+    if (!ch) throw new Error(`HseAudioBus: channel ${index} out of range`)
     return ch
   }
 
-  /** 从 Float32Array[] 创建 AudioBus（直接引用，不拷贝） */
-  static from(inputs: Float32Array[]): AudioBus {
-    return new AudioBus(inputs)
+  /** 从 Float32Array[] 创建 HseAudioBus（直接引用，不拷贝） */
+  static from(inputs: Float32Array[]): HseAudioBus {
+    return new HseAudioBus(inputs)
   }
 
-  /** 创建 N 通道 × frameCount 帧的零填充 AudioBus */
-  static create(channelCount: number, frameCount: number): AudioBus {
+  /** 创建 N 通道 × frameCount 帧的零填充 HseAudioBus */
+  static create(channelCount: number, frameCount: number): HseAudioBus {
     if (!Number.isInteger(channelCount) || channelCount < 1) {
-      throw new Error('AudioBus: channelCount must be a positive integer')
+      throw new Error('HseAudioBus: channelCount must be a positive integer')
     }
     if (!Number.isInteger(frameCount) || frameCount < 0) {
-      throw new Error('AudioBus: frameCount must be a non-negative integer')
+      throw new Error('HseAudioBus: frameCount must be a non-negative integer')
     }
     const channels: Float32Array[] = []
     for (let c = 0; c < channelCount; c++) channels.push(new Float32Array(frameCount))
-    return new AudioBus(channels)
+    return new HseAudioBus(channels)
   }
 
   /** 由交错缓冲创建（length 必须为 channelCount 的整数倍；拷贝） */
-  static fromInterleaved(interleaved: Float32Array, channelCount: number): AudioBus {
+  static fromInterleaved(interleaved: Float32Array, channelCount: number): HseAudioBus {
     if (!Number.isInteger(channelCount) || channelCount < 1) {
-      throw new Error('AudioBus: channelCount must be a positive integer')
+      throw new Error('HseAudioBus: channelCount must be a positive integer')
     }
     if (interleaved.length % channelCount !== 0) {
-      throw new Error('AudioBus: interleaved length must be a multiple of channelCount')
+      throw new Error('HseAudioBus: interleaved length must be a multiple of channelCount')
     }
     const frames = interleaved.length / channelCount
     const channels: Float32Array[] = []
@@ -68,7 +68,7 @@ export class AudioBus {
       for (let i = 0; i < frames; i++) ch[i] = interleaved[i * channelCount + c]
       channels.push(ch)
     }
-    return new AudioBus(channels)
+    return new HseAudioBus(channels)
   }
 
   /** 输出交错缓冲（长度 = frameCount × channelCount；新分配） */
@@ -84,7 +84,7 @@ export class AudioBus {
   }
 
   /** 拷贝本 bus 到 target（取 min(channelCount, frameCount)；越界通道忽略） */
-  copyTo(target: AudioBus): void {
+  copyTo(target: HseAudioBus): void {
     const cc = Math.min(this.channelCount, target.channelCount)
     const n = Math.min(this.frameCount, target.frameCount)
     for (let c = 0; c < cc; c++) target.channels[c].set(this.channels[c].subarray(0, n))
@@ -103,7 +103,7 @@ export class AudioBus {
   }
 
   /** 将 other 各通道乘 gain 后混入本 bus（就地累加；取 min 通道数/帧数） */
-  mixFrom(other: AudioBus, gain = 1): void {
+  mixFrom(other: HseAudioBus, gain = 1): void {
     const cc = Math.min(this.channelCount, other.channelCount)
     const n = Math.min(this.frameCount, other.frameCount)
     for (let c = 0; c < cc; c++) {
@@ -113,11 +113,11 @@ export class AudioBus {
     }
   }
 
-  /** 提取通道子集为新 AudioBus（直接引用原通道，不拷贝） */
-  extract(channelIndices: number[]): AudioBus {
+  /** 提取通道子集为新 HseAudioBus（直接引用原通道，不拷贝） */
+  extract(channelIndices: number[]): HseAudioBus {
     const picked: Float32Array[] = []
     for (const idx of channelIndices) picked.push(this.getChannel(idx))
-    return new AudioBus(picked)
+    return new HseAudioBus(picked)
   }
 
   /** 下混为单声道（全部通道平均；新分配） */

@@ -45,7 +45,7 @@ declare function registerProcessor(name: string, ctor: new (options?: AudioWorkl
 /** stats 回传周期（process 回调次数） */
 const STATS_INTERVAL_CALLBACKS = 30
 
-export class AudioEffectsProcessor extends AudioWorkletProcessor {
+export class HseAudioEffectsProcessor extends AudioWorkletProcessor {
   private readonly engine: HyperSoundEngine
   private callbackCount = 0
   private scratch: Float32Array = new Float32Array(0)
@@ -105,4 +105,4 @@ export class AudioEffectsProcessor extends AudioWorkletProcessor {
 
 // AudioWorklet 全局作用域下才存在 registerProcessor；Node/测试环境跳过注册。
 typeof registerProcessor !== 'undefined' &&
-  registerProcessor(WORKLET_PROCESSOR_NAME, AudioEffectsProcessor)
+  registerProcessor(WORKLET_PROCESSOR_NAME, HseAudioEffectsProcessor)

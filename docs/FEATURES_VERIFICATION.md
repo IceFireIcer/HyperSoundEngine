@@ -25,9 +25,9 @@
 | 13 | M/S 处理（宽度+人声比例） | `src/dsp/MidSide.ts` | §8 | mside(5) | ✅ 恒等路径误差=0；width=0→单声道 |
 | 14 | 3D 环绕（轻量立体声旋转） | `HyperSoundEngine.ts` 内部 | 既有语义（降级实现） | engine(12) | ✅ 确定性旋转级 |
 | 15 | ~~设备频响补偿（机型档案+拟合）~~ **已移除**（并入 #10） | — | — | — | ✅ 需求变更：改为按音量实施补偿的通用曲线（LoudnessComp auto，见 #10） |
-| 16 | 听力分析流程 | `src/analysis/HearingTest.ts` | §12 | hearing(8) | ✅ 7 频点二分 5 轮，阈值收敛 |
+| 16 | 听力分析流程 | `src/analysis/HseHearingTest.ts` | §12 | hearing(8) | ✅ 7 频点二分 5 轮，阈值收敛 |
 | 17 | 频谱特征（质心/滚降/平坦度等） | `src/dsp/features.ts`、`analysis/Spectrum.ts` | §12（meyda 概念） | features(8)+spectrum(7) | ✅ 白噪声 flatness>0.8、单音≈0、质心/滚降正确 |
-| 18 | 变速/变调（相位声码器） | `src/dsp/Stretch.ts` | §9 | stretch(8) | ✅ rate=2 长度 ±3%；+12 半音 440→880Hz ±1% |
+| 18 | 变速/变调（相位声码器） | `src/dsp/HseStretch.ts` | §9 | stretch(8) | ✅ rate=2 长度 ±3%；+12 半音 440→880Hz ±1% |
 | 19 | **LGPL 链接**：SoundTouch 变速/变调 | `src/dsp/StretchLgplAdapter.ts` + `vendor/soundtouchjs` | LGPL-2.1 未修改链接 | stretchlgpl(5) | ✅ rate=2 时长 ±8%；+10 半音 440→784Hz；位级确定 |
 | 20 | 音高检测 YIN | `src/dsp/PitchYin.ts` | §10.1 | pitchyin(8) | ✅ 440/220 ±1Hz；谐波信号；噪声→-1 |
 | 21 | 重采样（多相 Kaiser-sinc） | `src/dsp/Resampler.ts` | §13 | resampler(9) | ✅ 44.1↔48k ±0.5Hz；RMS 守恒 <1%；流式=一次性 |
@@ -35,14 +35,14 @@
 | 23 | 分享串（版本+校验+白名单） | `src/engine/ShareCodec.ts` | 自研 | codec(12) | ✅ 往返一致；非法输入抛错；注入防护 |
 | 24 | 12 组合场景预设 | `src/engine/ScenePresets.ts` | 设计文档 §3 | scenes(6) | ✅ id 唯一、参数合法 |
 | 25 | 引擎总成（双路径实时/离线） | `src/engine/HyperSoundEngine.ts` | 设计文档 §2/§5 | engine(12) | ✅ 确定性、零分配、latency 计算、限幅峰值约束 |
-| 26 | AudioWorklet 处理器 | `src/worklet/AudioEffectsProcessor.ts` | 设计文档 §2 | （打包期验证） | ✅ 结构正确；融合时 esbuild 打包单文件 |
+| 26 | AudioWorklet 处理器 | `src/worklet/HseAudioEffectsProcessor.ts` | 设计文档 §2 | （打包期验证） | ✅ 结构正确；融合时 esbuild 打包单文件 |
 | 27 | **引擎宿主/切换接线**（HyperSoundEngineHost） | `src/integration/HyperSoundEngineHost.ts` | 切换语义（先断后连/恢复直连/幂等/竞态防护） | integration(9) | ✅ worklet/script 双模式 + 回退；dispose 恢复直连；竞态下不接线；script 通路限幅实测生效 |
 
 **合计 27 项条目（#15 已移除并入 #10，有效 26 项功能）/ 32 测试文件 / 331 用例全绿（含 UI 冒烟 9 项）/ tsc 0 错误。**
 
 > **链路健康审计（2026-08）**：3 个并行审计子代理 + 主代理完成全链路排查（`docs/audit/`：
 > chain-audit / dsp-audit / combo-audit / SUMMARY），发现并修复 12 类问题（含 Convolver 流式 NaN、
-> 分区丢失、LoudnessComp 8k NaN、MidSide 仅伴奏失效、Stretch 突变炸音、响度启动膨胀等 4 高 7 中），
+> 分区丢失、LoudnessComp 8k NaN、MidSide 仅伴奏失效、HseStretch 突变炸音、响度启动膨胀等 4 高 7 中），
 > 修复后全部断言转正、全量回归绿。
 
 ---

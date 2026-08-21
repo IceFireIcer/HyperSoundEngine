@@ -1,5 +1,5 @@
 /**
- * SeparationQueue 单元测试（API_SPEC 小节 H）
+ * HseSeparationQueue 单元测试（API_SPEC 小节 H）
  *
  * 断言语义：FIFO 顺序执行（同一时刻至多一个 running）；取消 queued 任务被跳过；
  * 取消 running 任务结果被丢弃且不触发 onComplete；失败任务记录 error 并继续队列；
@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_STEMS,
   OnnxStemSeparator,
-  SeparationQueue,
+  HseSeparationQueue,
   type SeparationStem,
   type StemSeparatorAdapter,
 } from '../src/offline/Separator'
@@ -53,10 +53,10 @@ describe('DEFAULT_STEMS 与适配器占位', () => {
   })
 })
 
-describe('SeparationQueue 状态机', () => {
+describe('HseSeparationQueue 状态机', () => {
   it('入队即启动第一个任务（running），第二个排队（queued），默认声部', () => {
     const adapter = new FakeAdapter()
-    const q = new SeparationQueue(adapter)
+    const q = new HseSeparationQueue(adapter)
     const t1 = q.enqueue(new Float32Array(4))
     expect(t1.state).toBe('running')
     expect(t1.stems).toEqual(DEFAULT_STEMS)
@@ -68,7 +68,7 @@ describe('SeparationQueue 状态机', () => {
 
   it('顺序执行：第一个完成后第二个自动开始，onComplete 收到 stems', async () => {
     const adapter = new FakeAdapter()
-    const q = new SeparationQueue(adapter)
+    const q = new HseSeparationQueue(adapter)
     const completed: { id: number; stems: Record<string, Float32Array> }[] = []
     q.onComplete = (taskId, stems) => completed.push({ id: taskId, stems })
 
@@ -94,7 +94,7 @@ describe('SeparationQueue 状态机', () => {
 
   it('取消排队任务：被跳过，不执行', async () => {
     const adapter = new FakeAdapter()
-    const q = new SeparationQueue(adapter)
+    const q = new HseSeparationQueue(adapter)
     const t1 = q.enqueue(new Float32Array(4))
     const t2 = q.enqueue(new Float32Array(4))
     const t3 = q.enqueue(new Float32Array(4))
@@ -112,7 +112,7 @@ describe('SeparationQueue 状态机', () => {
 
   it('取消运行中任务：结果被丢弃，不触发 onComplete，队列继续', async () => {
     const adapter = new FakeAdapter()
-    const q = new SeparationQueue(adapter)
+    const q = new HseSeparationQueue(adapter)
     const completed: number[] = []
     q.onComplete = (id) => completed.push(id)
 
@@ -135,7 +135,7 @@ describe('SeparationQueue 状态机', () => {
 
   it('失败任务：state=failed + error，队列继续', async () => {
     const adapter = new FakeAdapter()
-    const q = new SeparationQueue(adapter)
+    const q = new HseSeparationQueue(adapter)
     const t1 = q.enqueue(new Float32Array(4))
     const t2 = q.enqueue(new Float32Array(4))
 
@@ -152,7 +152,7 @@ describe('SeparationQueue 状态机', () => {
 
   it('进度回调：收到 0..1 的进度；取消后不再转发', async () => {
     const adapter = new FakeAdapter()
-    const q = new SeparationQueue(adapter)
+    const q = new HseSeparationQueue(adapter)
     const progress: number[] = []
     q.onProgress = (_id, p) => progress.push(p)
 
@@ -174,7 +174,7 @@ describe('SeparationQueue 状态机', () => {
 
   it('getTasks 返回副本：修改不影响内部状态', async () => {
     const adapter = new FakeAdapter()
-    const q = new SeparationQueue(adapter)
+    const q = new HseSeparationQueue(adapter)
     const t1 = q.enqueue(new Float32Array(4))
     const snap = q.getTasks()[0]
     snap.state = 'done'
@@ -185,7 +185,7 @@ describe('SeparationQueue 状态机', () => {
 
   it('队列空闲后新入队立即运行；任务 id 递增', async () => {
     const adapter = new FakeAdapter()
-    const q = new SeparationQueue(adapter)
+    const q = new HseSeparationQueue(adapter)
     const t1 = q.enqueue(new Float32Array(4))
     adapter.pending[0].resolve(stemsFor(1))
     await flush()

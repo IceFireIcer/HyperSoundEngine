@@ -1,5 +1,5 @@
 /**
- * HyperSoundEngine v1 —— 听力分析流程（HearingTest）
+ * HyperSoundEngine v1 —— 听力分析流程（HseHearingTest）
  *
  * 出处/许可：自研状态机（设计文档 §4.8 / 映射表 #13 🟡，流程参考临床听力测试的
  *   "升降法/二分法"阈值估计；特征统计配合 meyda(MIT) 式特征，技术文档 §12）。
@@ -24,7 +24,7 @@ export const HEARING_HI_DB = 0
 /** 每频点二分轮数 */
 export const HEARING_ROUNDS = 5
 
-export class HearingTest {
+export class HseHearingTest {
   private readonly freqCount = HEARING_TEST_FREQUENCIES.length
   private freqIndex = 0
   private round = 0

@@ -47,3 +47,16 @@
 - 代码标识符、localStorage 键、自定义事件名、CSS 动画名、worklet 文件 URL 一律**无版本前缀**或使用 `hse-` / `hse` 前缀（如 `hseHearingPlay`、`hypersound:hse-*`、`/hse-worklet.js`、`hse-panel-in`）。
 - 行文中需要指明引擎版本时写作 **HyperSoundEngine v1**（可简称 HSE v1）。
 - 禁止在上述标识位置再引入 `v1/v2/v3` 字样；例外：第三方名称（GPLv3、Freeverb3、soundtouchjs v1.x 等）与文档自身修订号。
+
+## 公开标识符命名分层（2026-08-22 审计确立）
+
+| 层级 | 规则 | 示例 |
+|------|------|------|
+| 引擎/宿主/UI/协议级类与类型 | **必须 `HyperSoundEngine*` 前缀** | `HyperSoundEngine`、`HyperSoundEngineHost`、`HyperSoundEngineParams`、`HyperSoundEngineMixingStudio` |
+| 泛词类（通用音频生态高撞名风险的单词/短词名） | **加 `Hse` 前缀，文件名同步** | `HseAudioBus`、`HseStretch`、`HseHearingTest`、`HseSeparationQueue`、`HseAudioEffectsProcessor` |
+| DSP 行业域名类 | 允许无前缀（经包命名空间导出无歧义） | `Biquad`、`Compressor`、`Convolver`、`FdnReverb`、`Limiter`、`EqChain`、`ModulationMatrix` |
+| 接口接缝 | 沿用架构文档既定名 | `AudioEngine`、`StereoProcessor`、`ProcessingStage`、`EngineStats` |
+| 动词起头的工厂/工具函数 | 不强制前缀 | `createEngine`、`createDefaultParams`、`encodeWav`、`fft`、`designBiquad` |
+| 运行时字符串（worklet 注册名/事件/存储键/CSS/URL） | `hypersoundengine` 或 `hse`/`hse-` 前缀 | `WORKLET_PROCESSOR_NAME='hypersoundengine'`、`hseHearingPlay` |
+
+新增公开导出时按本表选层；拿不准时：类名偏高疑似泛词就加 `Hse`。

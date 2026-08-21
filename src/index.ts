@@ -16,7 +16,7 @@
  * WaveForge 专属适配代码位于仓库 `adapters/waveforge/`，不属于本核心包。
  */
 
-/** AudioWorklet 处理器注册名（与 worklet/AudioEffectsProcessor.ts 中常量一致） */
+/** AudioWorklet 处理器注册名（与 worklet/HseAudioEffectsProcessor.ts 中常量一致） */
 export const WORKLET_PROCESSOR_NAME = 'hypersoundengine'
 
 export * from './types'
@@ -26,9 +26,9 @@ export type { AudioEngine, AudioEngineFactory, StereoProcessor, ProcessingStage 
 export { SCENE_PRESETS, getSceneById, SCENE_IDS } from './engine/ScenePresets'
 export { encodeShareCode, decodeShareCode, SHARE_CODEC_VERSION } from './engine/ShareCodec'
 export { SpectrumAnalyzer } from './analysis/Spectrum'
-export { HearingTest } from './analysis/HearingTest'
-export type { AudiogramPoint } from './analysis/HearingTest'
-export { SeparationQueue, OnnxStemSeparator, DEFAULT_STEMS } from './offline/Separator'
+export { HseHearingTest } from './analysis/HseHearingTest'
+export type { AudiogramPoint } from './analysis/HseHearingTest'
+export { HseSeparationQueue, OnnxStemSeparator, DEFAULT_STEMS } from './offline/Separator'
 export type { SeparationStem, StemSeparatorAdapter, SeparationTask } from './offline/Separator'
 
 // —— WAV 文件 I/O（核心包内置；WaveForge 适配层复用） ——
@@ -49,10 +49,10 @@ export * from './dsp/ReverbSimple'
 export * from './dsp/LufsMeter'
 export * from './dsp/LoudnessComp'
 export * from './dsp/Resampler'
-export * from './dsp/Stretch'
+export * from './dsp/HseStretch'
 export * from './dsp/PitchYin'
 export * from './dsp/modulation'
-export * from './dsp/AudioBus'
+export * from './dsp/HseAudioBus'
 export * from './dsp/ModEffects'
 export * from './dsp/FdnReverb'
 export * from './dsp/DynamicEq'

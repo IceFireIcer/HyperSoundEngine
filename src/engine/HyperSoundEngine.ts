@@ -4,7 +4,7 @@
  * 出处/许可：
  *  - 链式架构与参数模型：本项目《音频算法设计文档.md》§2 总体架构（自研）；
  *  - 链内各 DSP 模块（EqChain/MidSide/Deesser/Compressor/Limiter/BassEnhancer/
- *    Convolver/ReverbSimple/LufsMeter/LoudnessComp/Stretch/FFT/features）
+ *    Convolver/ReverbSimple/LufsMeter/LoudnessComp/HseStretch/FFT/features）
  *    的概念来源与许可见各自源文件头部注释（RBJ Cookbook / DSPFilters(MIT) /
  *    kissfft(BSD-3) / stk FreeVerb(MIT) / ITU-R BS.1770 / ISO 226 等）；
  *  - 智能均衡 IEQ（Post）为本文件内置实现，思路参考技术文档 §1.4（自研）；
@@ -21,7 +21,7 @@
  *  - LUFS 采样点严格位于 Limiter 之前（API_SPEC 要求），测的是压限前的节目响度；
  *  - getAnalysis 的内部 2048 点 FFT 取样于 LoudnessComp 之后（即 IEQ 输入处，
  *    等价地也位于 Limiter 之前），每累计 2048 样本更新一次；
- *  - Stretch（变速/变调）不内联进主链，仅经 getStretch() 供 gapless/过渡场景调用；
+ *  - HseStretch（变速/变调）不内联进主链，仅经 getStretch() 供 gapless/过渡场景调用；
  *  - process() 内零分配：工作缓冲按需惰性扩容，稳态无分配；分析路径复用预分配缓冲；
  *  - 确定性：同输入同参数必同输出（无随机、无 Date、无 console）。
  */
@@ -55,9 +55,9 @@ import { DynamicEq } from '../dsp/DynamicEq'
 import { LufsMeter } from '../dsp/LufsMeter'
 import { LoudnessComp } from '../dsp/LoudnessComp'
 import { Biquad } from '../dsp/biquad'
-import { Stretch } from '../dsp/Stretch'
+import { HseStretch } from '../dsp/HseStretch'
 import { ModulationMatrix } from '../dsp/modulation'
-import { AudioBus } from '../dsp/AudioBus'
+import { HseAudioBus } from '../dsp/HseAudioBus'
 import { DelayEffect, ChorusEffect, FlangerEffect, PhaserEffect, TremoloEffect } from '../dsp/ModEffects'
 import { fft, hannWindow, frequencyBins } from '../dsp/fft'
 import {
@@ -145,7 +145,7 @@ export class HyperSoundEngine implements AudioEngine {
   private _useFdn = false
   private readonly _lufs: LufsMeter
   private readonly _loudnessComp: LoudnessComp
-  private readonly _stretch: Stretch
+  private readonly _stretch: HseStretch
   private readonly _modMatrix: ModulationMatrix
   private _modMasterGain = 1
   private _modStereoWidth = 1
@@ -240,7 +240,7 @@ export class HyperSoundEngine implements AudioEngine {
     this._fdnReverb = new FdnReverb(sampleRate)
     this._lufs = new LufsMeter(sampleRate)
     this._loudnessComp = new LoudnessComp(sampleRate)
-    this._stretch = new Stretch(sampleRate, 2)
+    this._stretch = new HseStretch(sampleRate, 2)
     this._modMatrix = new ModulationMatrix(sampleRate)
     this._delay = new DelayEffect(sampleRate)
     this._chorus = new ChorusEffect(sampleRate)
@@ -453,7 +453,7 @@ export class HyperSoundEngine implements AudioEngine {
   }
 
   /**
-   * 多通道 AudioBus 处理入口。
+   * 多通道 HseAudioBus 处理入口。
    *
    * 引擎 DSP 核心为立体声，支持两种多通道路由（`options.mode`）：
    * - `'downmix'`（默认）：输入 >2 声道下混为立体声处理；输出写入时不足 2 声道写第一声道、
@@ -465,7 +465,7 @@ export class HyperSoundEngine implements AudioEngine {
    *
    * 注意：本方法为便利入口，会分配临时缓冲；实时路径请使用 `process()`。
    */
-  processBus(input: AudioBus, output: AudioBus, sidechain?: AudioBus, options?: { mode?: 'downmix' | 'perChannelPair' }): void {
+  processBus(input: HseAudioBus, output: HseAudioBus, sidechain?: HseAudioBus, options?: { mode?: 'downmix' | 'perChannelPair' }): void {
     if (options?.mode === 'perChannelPair' && input.channelCount > 2) {
       this.processBusPerChannelPair(input, output, sidechain)
       return
@@ -486,7 +486,7 @@ export class HyperSoundEngine implements AudioEngine {
   }
 
   /** 按立体声对逐对处理（perChannelPair）。每对独立子引擎，输出就地写入 output 对应通道。 */
-  private processBusPerChannelPair(input: AudioBus, output: AudioBus, sidechain?: AudioBus): void {
+  private processBusPerChannelPair(input: HseAudioBus, output: HseAudioBus, sidechain?: HseAudioBus): void {
     const n = Math.min(input.frameCount, output.frameCount)
     const cc = input.channelCount
     const pairCount = Math.floor(cc / 2)
@@ -578,7 +578,7 @@ export class HyperSoundEngine implements AudioEngine {
   }
 
   /** 变速/变调处理器（不内联进主链，供 gapless/过渡场景调用）。 */
-  getStretch(): Stretch {
+  getStretch(): HseStretch {
     return this._stretch
   }
 
@@ -885,7 +885,7 @@ export class HyperSoundEngine implements AudioEngine {
       return
     }
     if (path.startsWith('limiter.')) { this._limiter.setParams(p.limiter); return }
-    if (path.startsWith('pitch.')) return // M/S 每块读快照；Stretch 离线用
+    if (path.startsWith('pitch.')) return // M/S 每块读快照；HseStretch 离线用
     // stereoWidth builtin path（AUTOMATABLE 含 stereoWidth 顶层路径）：M/S 每块读快照
   }
 

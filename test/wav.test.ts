@@ -5,12 +5,12 @@
  * - encode→decode 往返（16-bit PCM / 32-bit Float）
  * - 多通道（5.1 = 6 通道）
  * - 畸形输入（坏魔数 / 坏 chunk / 块不对齐 / 0 声道 / 不支持位深）全部抛错
- * - decode 结果可直接构造 AudioBus 并 processBus 无异常
+ * - decode 结果可直接构造 HseAudioBus 并 processBus 无异常
  */
 
 import { describe, it, expect } from 'vitest'
 import { encodeWav, decodeWav } from '../src/io/wav'
-import { AudioBus } from '../src/dsp/AudioBus'
+import { HseAudioBus } from '../src/dsp/HseAudioBus'
 import { HyperSoundEngine, createDefaultParams } from '../src/index'
 
 describe('WAV 编解码', () => {
@@ -102,7 +102,7 @@ describe('WAV 编解码', () => {
     expect(() => decodeWav(bad)).toThrow(/channel count must be >= 1/)
   })
 
-  it('decode 结果可直接构造 AudioBus 并 processBus 无异常', () => {
+  it('decode 结果可直接构造 HseAudioBus 并 processBus 无异常', () => {
     const fs = 48000
     const engine = new HyperSoundEngine(fs, 2)
     const params = createDefaultParams(fs)
@@ -112,8 +112,8 @@ describe('WAV 编解码', () => {
     const src = [new Float32Array(n).fill(0.2), new Float32Array(n).fill(0.2)]
     const buf = encodeWav(src, fs, { bitDepth: 32 })
     const res = decodeWav(buf)
-    const input = new AudioBus(res.channels)
-    const output = AudioBus.create(2, n)
+    const input = new HseAudioBus(res.channels)
+    const output = HseAudioBus.create(2, n)
     engine.processBus(input, output)
     expect(output.getChannel(0)[0]).toBeCloseTo(0.2, 5)
   })

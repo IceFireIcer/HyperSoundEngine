@@ -9,7 +9,7 @@
  *  - 竞态：attach 的异步注册期间被 dispose → 完成后放弃接线（防旧节点插进新图）。
  *
  * 接入模式：
- *  - 'worklet'：AudioWorklet 处理器（`worklet/AudioEffectsProcessor.ts`，需先打包单文件）——
+ *  - 'worklet'：AudioWorklet 处理器（`worklet/HseAudioEffectsProcessor.ts`，需先打包单文件）——
  *    参数经 `port.postMessage({type:'params'})` 下发，`stats` 周期回传；
  *  - 'script'：ScriptProcessorNode 兜底（已废弃但 Electron/Chromium 可用），
  *    onaudioprocess 内直接调 HyperSoundEngine.process（同一纯 TS 内核，无需打包）；

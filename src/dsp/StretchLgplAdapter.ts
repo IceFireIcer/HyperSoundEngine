@@ -5,7 +5,7 @@
  *  - 本文件不含任何 LGPL 代码副本；soundtouchjs 为独立 npm 依赖（optionalDependencies），
  *    运行时通过动态 import() 加载其原包并调用公开 API（SoundTouch 类），未修改其源码；
  *  - 分发时随附其 LICENSE（LGPL-2.1）与源码获取方式（npm 包即源码，可重新链接/替换）；
- *  - 未安装该依赖时本适配器返回 null，调用方回退到自研相位声码器（Stretch.ts）。
+ *  - 未安装该依赖时本适配器返回 null，调用方回退到自研相位声码器（HseStretch.ts）。
  *
  * 参数语义（SoundTouch 经典约定）：
  *  - tempo = 播放速度倍数（SoundTouch 语义：tempo=2 表示"快一倍"，输出时长 = 输入/tempo）。

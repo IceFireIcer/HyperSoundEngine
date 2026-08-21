@@ -61,7 +61,7 @@
 - **位置**：`HyperSoundEngine.ts` `process()` 第 3 级：`this._midSide.setParams(this._params.stereoWidth, this._params.pitch.voiceBalance)` 无条件执行；`pitch` 的 `semitones/rate` 仅通过 `getStretch()` 暴露（不内联进主链）。
 - **现象**：`pitch.enabled=false` + `voiceBalance=0.8` → 输出与输入 maxDiff≈0.4（人声/伴奏比例仍作用）；反之 `pitch.enabled=true` + `semitones=+12` 在主链输出完全不变。
 - **复现测试**：⑦「缺陷快照#4」；另见 `audit-chain.test.ts` ②（voiceBalance 被排除在旁路清单外，因它不由 pitch.enabled 控制）。
-- **根因推测**：参数分组把 `voiceBalance` 放在 `PitchSettings` 下，但引擎把它并入 M/S 级且不检查 `pitch.enabled`；而 Stretch 按设计（API_SPEC/HyperSoundEngine 头注释）不内联主链。结果是 pitch 组参数语义自相矛盾：唯一的"生效参数"不受开关控制，受开关控制的参数不生效。
+- **根因推测**：参数分组把 `voiceBalance` 放在 `PitchSettings` 下，但引擎把它并入 M/S 级且不检查 `pitch.enabled`；而 HseStretch 按设计（API_SPEC/HyperSoundEngine 头注释）不内联主链。结果是 pitch 组参数语义自相矛盾：唯一的"生效参数"不受开关控制，受开关控制的参数不生效。
 - **影响**：UI 层 `pitch.enabled` 开关对 `voiceBalance` 无效（用户关闭 pitch 仍被人声比例改变音色）。
 
 ### 异常 5 【低】`voiceBalance=-1` 语义与"仅伴奏"字面不符（中信号保留，仅增强侧信号）
@@ -136,7 +136,7 @@
    - 回归：`audit-chain.test.ts` ⑦#1a/#1b 反转断言（改为全程无 NaN）。
 2. **【中】混响三路路由显式化**（修复异常 2）：`configureReverb` 增加 `mode==='off'` 分支（`_useConvolver=false` 且标记 `_reverbActive=false`），`process()` 以"enabled && mode!=='off'"为处理条件；`getLatencySamples()` 与 `_reverbActive` 一致。回归：⑦#2 反转断言（off 时输出=0）。
 3. **【中】Pre-EQ 激活条件细化**（修复异常 3）：`_preEqActive = eq.enabled || (profileId 有效且档案 bands 非空)`；`buildPreEqBands` 中用户 bands 仅在 `eq.enabled` 时加入；无效 `profileId`（`getProfileById` 返回 null）不激活链。回归：⑦#3 反转断言。
-4. **【中】pitch 参数语义理顺**（修复异常 4）：`voiceBalance` 的应用以 `pitch.enabled` 为条件（或把 voiceBalance 移出 PitchSettings 归入 M/S 级参数）；明确 `semitones/rate` 主链不生效的 UI 语义（或按产品需求内联 Stretch）。回归：⑦#4 反转断言。
+4. **【中】pitch 参数语义理顺**（修复异常 4）：`voiceBalance` 的应用以 `pitch.enabled` 为条件（或把 voiceBalance 移出 PitchSettings 归入 M/S 级参数）；明确 `semitones/rate` 主链不生效的 UI 语义（或按产品需求内联 HseStretch）。回归：⑦#4 反转断言。
 5. **【低】响度归一化首测回退**（修复异常 6）：无测量（NaN）时 `targetLin=1`（保持 0dB），首个 400ms 块后才启用增益；或把 -70 回退改为 0dB 回退。回归：⑦#5 反转断言。
 6. **【低】契约同步**（修复异常 7/8）：把 3D 环绕级补写进 API_SPEC 模块 A；`configureReverb` 把 `convolution.dePeriodize` 传入 `ConvolverOptions`。
 7. **【低】Limiter 复位平滑**（修复异常 9）：lookahead 变化时不清空 `gain`（保留当前平滑增益）或对复位做短渐变，避免增益台阶。

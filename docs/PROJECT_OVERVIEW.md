@@ -56,7 +56,7 @@ HyperSoundEngine 是一个**纯 TypeScript 实现的实时音频效果引擎**,�
 
 ### 四、多通道处理
 
-- **AudioBus**:非交错 N 通道缓冲抽象 + 通道级工具(create/fromInterleaved/toInterleaved/copyTo/fill/applyGain/mixFrom/extract/downmixToMono/downmixToStereo)
+- **HseAudioBus**:非交错 N 通道缓冲抽象 + 通道级工具(create/fromInterleaved/toInterleaved/copyTo/fill/applyGain/mixFrom/extract/downmixToMono/downmixToStereo)
 - **processBus 两种模式**:
   - `downmix`(默认):N 通道下混立体声处理(环绕监听语义)
   - `perChannelPair`:按立体声对 (0,1)(2,3)… 逐对独立处理(独立子引擎池,参数同步),支持 5.1/7.1 各通道独立 DSP
@@ -65,7 +65,7 @@ HyperSoundEngine 是一个**纯 TypeScript 实现的实时音频效果引擎**,�
 
 - **encodeWav / decodeWav**:16-bit PCM 与 32-bit Float,多通道,标准 RIFF/WAVE
 - 严格校验(坏魔数/缺 chunk/块不对齐/0 声道一律抛错,防注入)
-- 解码结果为非交错 Float32Array[],可直接构造 AudioBus 进入处理链
+- 解码结果为非交错 Float32Array[],可直接构造 HseAudioBus 进入处理链
 
 ### 六、Sidechain
 

@@ -9,7 +9,7 @@
  *  4. 长跑稳定性：每模块 10s 处理无 NaN / 发散 / 能量异常膨胀
  *  5. 参数突变：单块内 setParams 后立即处理，逐样本差值有界（无爆音）
  *  6. 模块专项：Convolver 分区边界（IR 1/512/10s、分区 32/8192）、
- *     Resampler 极端比率（0.1x/8x）、Stretch 极端 rate
+ *     Resampler 极端比率（0.1x/8x）、HseStretch 极端 rate
  *
  * 约定：
  *  - 全部信号确定性生成（正弦/冲激/斜坡/xorshift 伪随机），不用 Math.random。
@@ -30,7 +30,7 @@ import { ReverbSimple } from '../src/dsp/ReverbSimple'
 import { LufsMeter } from '../src/dsp/LufsMeter'
 import { LoudnessComp } from '../src/dsp/LoudnessComp'
 import { Resampler } from '../src/dsp/Resampler'
-import { Stretch } from '../src/dsp/Stretch'
+import { HseStretch } from '../src/dsp/HseStretch'
 import { computeFeatures, computeRms, computeZcr } from '../src/dsp/features'
 
 // ---------------------------------------------------------------------------
@@ -1193,11 +1193,11 @@ describe('audit Resampler（多相 sinc）', () => {
 })
 
 // ---------------------------------------------------------------------------
-// 模块 14：Stretch
+// 模块 14：HseStretch
 // ---------------------------------------------------------------------------
-describe('audit Stretch（相位声码器变速变调）', () => {
+describe('audit HseStretch（相位声码器变速变调）', () => {
   it('rate=2 输出长度 ≈ 2× 输入（±3%）；rate=1,semitones=0 长度≈输入', () => {
-    const st = new Stretch(FS)
+    const st = new HseStretch(FS)
     st.setParams({ semitones: 0, rate: 2 })
     const x = sine(48000, 440, 0.5, FS)
     const out = st.processStereo(x, x.slice())
@@ -1209,7 +1209,7 @@ describe('audit Stretch（相位声码器变速变调）', () => {
   })
 
   it('rate=1, semitones=+12：440Hz → ≈880Hz（±1%）', () => {
-    const st = new Stretch(FS)
+    const st = new HseStretch(FS)
     st.setParams({ semitones: 12, rate: 1 })
     const x = sine(96000, 440, 0.7, FS)
     const out = st.processStereo(x, x.slice())
@@ -1220,7 +1220,7 @@ describe('audit Stretch（相位声码器变速变调）', () => {
   })
 
   it('信号功率量级保持（RMS 差 <3dB）', () => {
-    const st = new Stretch(FS)
+    const st = new HseStretch(FS)
     st.setParams({ semitones: 0, rate: 1 })
     const x = sine(96000, 440, 0.5, FS)
     const out = st.processStereo(x, x.slice())
@@ -1229,7 +1229,7 @@ describe('audit Stretch（相位声码器变速变调）', () => {
   })
 
   it('极端 rate=8（5s 输入）：无 NaN、长度 ≈8×（±3%）', () => {
-    const st = new Stretch(FS)
+    const st = new HseStretch(FS)
     st.setParams({ semitones: 0, rate: 8 })
     const x = sine(48000 * 5, 440, 0.3, FS)
     const out = st.processStereo(x, x.slice())
@@ -1240,7 +1240,7 @@ describe('audit Stretch（相位声码器变速变调）', () => {
   })
 
   it('极端 rate=0.1（10s 输入）：无 NaN、长度 ≈0.1×（±15%，固定 N 尾在小 rate 下占比增大）', () => {
-    const st = new Stretch(FS)
+    const st = new HseStretch(FS)
     st.setParams({ semitones: 0, rate: 0.1 })
     const x = sine(48000 * 10, 440, 0.3, FS)
     const out = st.processStereo(x, x.slice())
@@ -1253,7 +1253,7 @@ describe('audit Stretch（相位声码器变速变调）', () => {
   })
 
   it('10s 长跑（rate=1）无 NaN/发散', () => {
-    const st = new Stretch(FS)
+    const st = new HseStretch(FS)
     st.setParams({ semitones: 0, rate: 1 })
     const x = sine(480000, 220, 0.4, FS)
     const out = st.processStereo(x, x.slice())
@@ -1262,7 +1262,7 @@ describe('audit Stretch（相位声码器变速变调）', () => {
   })
 
   it('参数突变（rate 1→2、semitones 0→12）后立即处理无 NaN', () => {
-    const st = new Stretch(FS)
+    const st = new HseStretch(FS)
     st.setParams({ semitones: 0, rate: 1 })
     const x = sine(48000, 440, 0.5, FS)
     const out1 = st.processStereo(x, x.slice())
