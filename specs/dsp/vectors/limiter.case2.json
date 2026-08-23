@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "module": "limiter",
+  "case": "case2",
+  "sampleRate": 48000,
+  "blockSize": 333,
+  "channels": 2,
+  "frames": 5000,
+  "params": {
+    "enabled": true,
+    "thresholdDb": -12,
+    "lookaheadMs": 0,
+    "attackMs": 1,
+    "releaseMs": 50,
+    "truePeak": false
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "边界参数：lookahead=0（无前瞻）、阈值 -12dBFS、数字峰值检测；左声道前 1250 帧静音后 ±1 方波，右声道反相。blockSize=333 且帧数非整除（末块仅 5 帧），重点覆盖极短末块。"
+}

@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "module": "limiter",
+  "case": "case1",
+  "sampleRate": 48000,
+  "blockSize": 128,
+  "channels": 2,
+  "frames": 9600,
+  "params": {
+    "enabled": true,
+    "thresholdDb": -1,
+    "lookaheadMs": 5,
+    "attackMs": 0.5,
+    "releaseMs": 150,
+    "truePeak": true
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "典型 brickwall 场景：左右同相满幅 3kHz 正弦，阈值 -1dBFS、真峰值检测开启；前瞻 240 样本的预压增益应使输出峰值不超阈值。"
+}

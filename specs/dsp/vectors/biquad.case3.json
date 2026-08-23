@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "module": "biquad",
+  "case": "case3",
+  "sampleRate": 48000,
+  "blockSize": 480,
+  "channels": 2,
+  "frames": 2600,
+  "params": {
+    "type": "notch",
+    "f0": 60,
+    "q": 8,
+    "gainDb": 0
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "极端参数：notch 60Hz Q8（市电嗡声抑制场景）；左=LCG 噪声叠加 60Hz 正弦，右=纯 LCG 噪声对照。blockSize=480 非二次幂，末块 200 帧。"
+}

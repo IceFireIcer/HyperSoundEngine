@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "module": "reverb-simple",
+  "case": "case3",
+  "sampleRate": 48000,
+  "blockSize": 512,
+  "channels": 2,
+  "frames": 6000,
+  "params": {
+    "roomSize": 1,
+    "damping": 0,
+    "wet": 0.5,
+    "dry": 0.5,
+    "preDelayMs": 50,
+    "width": 2,
+    "type": "stage"
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "极端参数：roomSize=1/damping=0 上限附近、width=2 超宽立体声（负交叉混合）、stage 类型 delayScale=1.2、preDelay 50ms；输入为左右去相关的双频正弦叠加。"
+}

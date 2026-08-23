@@ -10,6 +10,10 @@
 - 命名去版本化：`v3HearingPlay`→`hseHearingPlay`、存储键 `hypersound:v3-*`/`waveforge:v3-params`→`hse-*`、worklet URL `v3-worklet*`→`hse-worklet*`、CSS 动画 `v3-*`→`hse-*`、WAV 导出文件名前缀 `waveforge-v3-`→`waveforge-hse-`。
 
 ### Added
+- **双支线规格基建（规划书 Phase 0）**：新增共享规格目录 `specs/` —— 总纲与向量格式契约 `specs/README.md`、用例元数据 Schema `specs/schema/vector-case.schema.json`（draft-07）、试点模块规格 `specs/dsp/biquad.md` / `limiter.md` / `reverb-simple.md`（GWT 条款 + 参数 clamp 表 + 边界条件）。
+- **10 组冻结对拍向量**（`specs/dsp/vectors/`：biquad×3 / limiter×4 / reverb-simple×3，JSON 元数据 + 小端四段 f32 夹具）与导出工具 `scripts/export-vectors.mjs`（优先 Node 原生 type-stripping 加载 TS 模块，esbuild 打包兜底；重跑逐字节比对，不一致拒写——机制性冻结守卫）。
+- TS 侧对拍门禁测试 `test/spec-vectors.test.ts`（21 用例：向量目录缺失/为空显式失败，元数据契约逐一校验）及配套最小 Node 内置类型声明 `test/node-builtin-types.d.ts`。
+- **Rust 支线骨架 `HyperSoundEngineRust/`**：Cargo workspace（edition 2021，license CC-BY-NC-ND-4.0）+ `crates/hse-core`（`Stage` trait 与 `StageChain`，语义对齐 `ProcessingStage`/`StereoProcessor` 与实时安全铁律）+ `crates/hse-parity` 对拍 harness（自动定位 `specs/dsp/vectors`，分块重放 + 统一容差比对；直通假实现期数值 FAIL 属预期，待 Phase 1 真实模块按规格落地后转绿）+ `hse-wasapi` / `hse-napi` / `hse-service` 占位说明。
 - 版本策略文档 `docs/VERSIONING.md`（生成代号 ↔ semver 映射、bump 规则、向量纪律、命名规范）。
 - `npm run benchmark:scenes`：接入场景化基准脚本（卷积/FDN 混响、DynamicEq；原 `scripts/benchmark-optimized.mjs` 无人引用，本次纳入 npm scripts）。
 

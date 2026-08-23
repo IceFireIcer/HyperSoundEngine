@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "module": "biquad",
+  "case": "case1",
+  "sampleRate": 48000,
+  "blockSize": 256,
+  "channels": 2,
+  "frames": 4096,
+  "params": {
+    "type": "peaking",
+    "f0": 1000,
+    "q": 1.2,
+    "gainDb": 4
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "典型参数：peaking +4dB@1kHz Q1.2；左=三频正弦叠加(100/1000/7500Hz)，右=固定种子LCG噪声。单声道模块：左右各一个独立 TDF2 实例，系数相同、状态独立跨块保持。"
+}

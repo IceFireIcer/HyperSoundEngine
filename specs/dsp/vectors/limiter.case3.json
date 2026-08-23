@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "module": "limiter",
+  "case": "case3",
+  "sampleRate": 48000,
+  "blockSize": 512,
+  "channels": 2,
+  "frames": 2048,
+  "params": {
+    "enabled": true,
+    "thresholdDb": -6,
+    "lookaheadMs": 10,
+    "attackMs": 0.5,
+    "releaseMs": 150,
+    "truePeak": true
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "输入形态：全静音双声道。限幅器开启但输入为零，期望输出全零（增益保持 1、真峰值插值历史无残留），用于捕获任何 NaN/状态泄漏回归。"
+}

@@ -26,6 +26,8 @@
 - **规格 (Spec)**：两支线共同的行为基准——给定/当/则描述 + 测试向量，存放于工作区 `specs/`。功能完成的定义 = 规格落定且两支线双双通过。
 - **测试向量 (Test Vector)**：规格附带的数据夹具（输入 PCM + 参数 → 期望输出 PCM），由规格所有，任何支线不得单方面修改。
 - **对拍 (Parity Run)**：用同一测试向量在两支线分别执行并比对，相对容差 1e-6。跨实现不要求逐位一致。
+- **冻结基线 (Frozen Baseline)**：已入库向量的期望值永不修改；行为变更 = 新增向量（MINOR）或整体替换（MAJOR）。基线自 TS 支线现行为 Bootstrap 导出，唯一生成入口为仓库根 `scripts/export-vectors.mjs`。
+- **双绿门禁 (Dual-Green Gate)**：功能"完成"的判定口径——同一组向量在 TS 门禁测试（vitest `test/spec-vectors.test.ts`）与 Rust 对拍 harness（`hse-parity`）上双双通过。
 - **兼容契约 (Compatibility Contract)**：接入方可在两支线间无损切换的三层保证——`AudioEngine` 接口语义、参数模型/场景预设/分享串格式、引擎服务进程控制协议。
 
 ## 性能与实时

@@ -1,0 +1,83 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:hse:dsp:vector-case.schema",
+  "title": "HSE DSP 测试向量用例描述（vector-case）",
+  "description": "HyperSoundEngine 双支线共享测试向量的 JSON 元数据 Schema。与同名 .f32 数据文件成对出现；字段语义与分块处理语义见 specs/README.md §三。tolerance.value 以 enum 固定为当前唯一合法值 1e-6。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "module",
+    "case",
+    "sampleRate",
+    "blockSize",
+    "channels",
+    "frames",
+    "params",
+    "tolerance"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1,
+      "description": "向量格式版本号，当前恒为 1（number）。"
+    },
+    "module": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$",
+      "description": "kebab-case 模块 id（如 biquad、limiter、reverb-simple），必须与文件名中的 <module> 段一致（一致性由加载器自查）。"
+    },
+    "case": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+      "description": "用例名（推荐 case<N> 形态，如 case1），必须与文件名中的 <case> 段一致（一致性由加载器自查）；不得含点号，避免破坏 <module>.<case>.json 命名切分。"
+    },
+    "sampleRate": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "构造模块实例所用采样率 fs（Hz），默认 48000。"
+    },
+    "blockSize": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "分块大小：每块每声道样本数；末块允许短于该值。"
+    },
+    "channels": {
+      "const": 2,
+      "description": "声道数，固定为 2（立体声）。"
+    },
+    "frames": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "每声道帧数；.f32 文件总长必须恰为 16 × frames 字节（由加载器校验）。"
+    },
+    "params": {
+      "type": "object",
+      "description": "模块 setParams 接受的参数快照；具体字段集与 clamp 行为以各模块规格（specs/dsp/<id>.md）对照 TS 源码给出的参数表为准。"
+    },
+    "tolerance": {
+      "type": "object",
+      "description": "容差判定参数：|got-want| <= value * max(|want|, floor)，两支线统一。",
+      "additionalProperties": false,
+      "required": ["kind", "value", "floor"],
+      "properties": {
+        "kind": {
+          "const": "relative",
+          "description": "容差类型，当前固定为 relative（相对容差制）。"
+        },
+        "value": {
+          "enum": [1e-6],
+          "description": "相对容差值，enum 固定，当前唯一合法值为 1e-6。"
+        },
+        "floor": {
+          "type": "number",
+          "minimum": 0,
+          "description": "绝对下限，防止期望值接近 0 时判据失效；契约标准取值 1e-9。"
+        }
+      }
+    },
+    "notes": {
+      "type": "string",
+      "description": "可选的人类可读备注。"
+    }
+  }
+}

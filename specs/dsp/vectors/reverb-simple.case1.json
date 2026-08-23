@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "module": "reverb-simple",
+  "case": "case1",
+  "sampleRate": 48000,
+  "blockSize": 128,
+  "channels": 2,
+  "frames": 8192,
+  "params": {
+    "roomSize": 0.5,
+    "damping": 0.5,
+    "wet": 0.3,
+    "dry": 0.7,
+    "preDelayMs": 0,
+    "width": 1,
+    "type": "hall"
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "冲激响应快照：仅左声道首帧冲激、右声道全零（不对称激励验证立体声网络去相关）。hall 典型参数 wet0.3/dry0.7。"
+}

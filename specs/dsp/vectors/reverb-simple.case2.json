@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "module": "reverb-simple",
+  "case": "case2",
+  "sampleRate": 44100,
+  "blockSize": 99,
+  "channels": 2,
+  "frames": 4000,
+  "params": {
+    "roomSize": 0,
+    "damping": 1,
+    "wet": 1,
+    "dry": 0,
+    "preDelayMs": 20,
+    "width": 0,
+    "type": "room"
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "边界参数组合：roomSize=0/damping=1 参数下限、width=0 湿路单声道化（左右湿声一致）、preDelay 20ms；采样率 44100 使延迟长度缩放比为 1。输入前半段 LCG 噪声、后半段静音，覆盖衰减尾与非整除末块（40 帧）。"
+}

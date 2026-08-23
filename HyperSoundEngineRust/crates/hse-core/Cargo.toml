@@ -1,0 +1,11 @@
+[package]
+name = "hse-core"
+description = "HyperSoundEngine Rust 支线 DSP 内核与引擎链（纯库：稳态零分配、确定性、平台无关）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]

@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "module": "limiter",
+  "case": "case4",
+  "sampleRate": 48000,
+  "blockSize": 256,
+  "channels": 2,
+  "frames": 4800,
+  "params": {
+    "enabled": false,
+    "thresholdDb": -1,
+    "lookaheadMs": 5,
+    "attackMs": 0.5,
+    "releaseMs": 150,
+    "truePeak": true
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "直通契约锚点：enabled=false 时输出必须与输入逐位一致（就地透传、衰减归零）。左=LCG 噪声，右=双频正弦叠加。"
+}

@@ -1,0 +1,24 @@
+# HyperSoundEngine Rust 支线 —— Cargo workspace 根清单
+#
+# 工程结构与分工依据《原生化双支线与Windows音频接入规划书》§2.1 与
+# docs/adr/0003-dual-track-native-rewrite.md。
+# 当前只注册已落地的成员 crate；hse-wasapi / hse-napi / hse-service 目录
+# 目前仅含占位说明文档，各自按规划启动后再加入 members。
+#
+# 兼容约束：nightly 工作流（.github/workflows/nightly.yml）检测到本目录后
+# 直接执行 `cargo build --release`，并从 target/release 收集名为 hse-* 的
+# 可执行文件作为产物，因此对拍 harness 的二进制名固定为 hse-parity。
+
+[workspace]
+resolver = "2"
+members = ["crates/hse-core", "crates/hse-parity"]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2021"
+license = "CC-BY-NC-ND-4.0"
+authors = ["HyperSoundEngine Contributors"]
+repository = "https://github.com/IceFireIcer/HyperSoundEngine"
+
+[workspace.dependencies]
+serde_json = "1"

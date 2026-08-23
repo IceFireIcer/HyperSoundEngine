@@ -12,8 +12,8 @@
 - `CONTEXT.md` — 领域术语表（ubiquitous language），改模型前先读
 - `原生化双支线与Windows音频接入规划书.md` — 当前主线执行规划
 - `空间音频实现规划书.md` — 空间音频规格输入（§3.2 契约、§八性能目标有效）
-- `specs/` — 双支线共享规格 + 测试向量（建设中，见规划书 Phase 0）
-- `HyperSoundEngineRust/` — **Rust 支线**（规划中）：全量原生重写，承接 Windows 引擎服务进程与性能目标
+- `specs/` — 双支线共享规格 + 冻结测试向量（Phase 0 已落地：总纲 `specs/README.md`、向量 JSON Schema `specs/schema/vector-case.schema.json`、试点模块规格 biquad / limiter / reverb-simple、10 组冻结向量）；**改动前先读 `specs/README.md`**；基线唯一生成入口是 `scripts/export-vectors.mjs`（重跑逐字节比对，不一致拒写）
+- `HyperSoundEngineRust/` — **Rust 支线**（Phase 0 骨架已建：Cargo workspace，`hse-core` Stage 抽象 + `hse-parity` 对拍 harness；真实 DSP 模块自 Phase 1 起按 `specs/` 规格逐个落地）：全量原生重写，承接 Windows 引擎服务进程与性能目标
 
 > 规则：README/AGENTS 等仓库文档只描述已跟踪文件，**不得引用 .gitignore 排除的路径**（本地参考资料、草稿目录等不入文档）。
 
@@ -33,6 +33,9 @@ npm run typecheck:ui            # ui/ 的独立类型检查（tsconfig.ui.json�
 npm run build                   # types + core(esbuild) + worklet 单文件包 → dist/
 npm run benchmark               # 先 build 再跑 scripts/benchmark.mjs（48kHz/128 帧，默认链）
 npm run benchmark:scenes        # 场景化基准（卷积/FDN 混响、DynamicEq）
+node scripts/export-vectors.mjs # 导出/校验冻结对拍向量（幂等；不一致拒写，防单方面改基线）
+cd HyperSoundEngineRust && cargo test            # Rust 支线单元测试
+cd HyperSoundEngineRust && cargo run -p hse-parity  # 对拍 harness 吃 specs/ 向量（直通假实现期 FAIL=exit1 属预期，Phase 1 转绿）
 ```
 
 依赖未安装时先 `npm install`。平台为 Windows + Git Bash。

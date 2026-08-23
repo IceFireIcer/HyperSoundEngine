@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "module": "biquad",
+  "case": "case2",
+  "sampleRate": 48000,
+  "blockSize": 128,
+  "channels": 2,
+  "frames": 3000,
+  "params": {
+    "type": "lowpass",
+    "f0": 10,
+    "q": 0.707,
+    "gainDb": 0
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "边界参数：f0=10Hz 触发 designBiquad 频率下限钳制（低频 BLT 病态防护）；左右分别为满幅 1kHz/5kHz 正弦。帧数对 blockSize 非整除（末块 56 帧），验证短块语义。"
+}
