@@ -11,10 +11,10 @@
 
 [workspace]
 resolver = "2"
-members = ["crates/hse-core", "crates/hse-parity"]
+members = ["crates/hse-core", "crates/hse-parity", "benches"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 license = "CC-BY-NC-ND-4.0"
 authors = ["HyperSoundEngine Contributors"]

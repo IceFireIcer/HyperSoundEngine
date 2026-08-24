@@ -39,6 +39,8 @@ pub struct VectorCase {
     pub channels: usize,
     pub frames: usize,
     pub tolerance: ToleranceSpec,
+    /// 模块参数快照原始对象；字段名以 TS 源码为准，由各模块实现解释。
+    pub params: Value,
 }
 
 impl VectorCase {
@@ -79,8 +81,8 @@ pub fn parse_case(text: &str) -> Result<VectorCase, String> {
     let channels = usize_field(obj, "channels")?;
     let frames = usize_field(obj, "frames")?;
 
-    // params 整体跳过：字段名以 TS 源码为准，解释权归各模块实现。
-    let _ = obj.get("params");
+    // params 保留原始对象：字段名以 TS 源码为准，解释权归各模块实现（见 stages.rs）。
+    let params = obj.get("params").cloned().unwrap_or(Value::Object(Map::new()));
 
     let tolerance_node = obj
         .get("tolerance")
@@ -118,6 +120,7 @@ pub fn parse_case(text: &str) -> Result<VectorCase, String> {
         channels,
         frames,
         tolerance: ToleranceSpec { kind, value, floor },
+        params,
     })
 }
 

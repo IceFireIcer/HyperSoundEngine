@@ -16,6 +16,10 @@
 //! - **就地处理**：[`Stage::process`] 直接改写传入的左右声道切片，
 //!   不额外产出新缓冲（对齐 TS 支线 `processStereo` 的就地语义）。
 
+pub mod biquad;
+pub mod limiter;
+pub mod reverb_simple;
+
 /// 处理链中的单个阶段：立体声、就地、按块处理。
 ///
 /// 语义对齐 TS 支线 `src/interfaces.ts` 的两个契约：

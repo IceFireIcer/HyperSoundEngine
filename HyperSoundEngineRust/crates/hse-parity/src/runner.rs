@@ -174,6 +174,7 @@ mod tests {
                 value: 1.0e-6,
                 floor: 1.0e-9,
             },
+            params: serde_json::Value::Null,
         }
     }
 

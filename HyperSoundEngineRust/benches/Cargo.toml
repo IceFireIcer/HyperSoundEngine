@@ -1,0 +1,36 @@
+# hse-benches —— Rust 支线 criterion 基准雏形（《原生化双支线与Windows音频接入规划书》
+# §五 Phase 1 第 3 条："benches/ 基准雏形（criterion，对齐 TS benchmark 场景）"）。
+#
+# 场景口径对齐仓库根 scripts/benchmark.mjs / benchmark-optimized.mjs：
+# 48kHz / 立体声 / 主块长 128 帧；输入为确定性合成信号（无随机、无时钟）。
+#
+# 本 crate 只依赖 hse-core 的公开 Stage 抽象与三个试点模块的构造器，
+# 因此无论模块处于直通占位还是真实实现都能编译并出数——占位期的数字
+# 仅为"直通基线"，不代表真实算法成本。
+
+[package]
+name = "hse-benches"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+hse-core = { path = "../crates/hse-core" }
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "parity_biquad"
+harness = false
+
+[[bench]]
+name = "parity_limiter"
+harness = false
+
+[[bench]]
+name = "parity_reverb_simple"
+harness = false

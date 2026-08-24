@@ -188,6 +188,19 @@ const CASES = [
     },
     inputR: (n) => lcgNoise(n, 778, 0.6),
   },
+  {
+    module: 'biquad',
+    caseId: 'case4',
+    sampleRate: 44100,
+    blockSize: 441,
+    params: { type: 'highshelf', f0: 8000, q: 0.707, gainDb: 3 },
+    notes: '多采样率覆盖：采样率 44100，补齐既有三例全为 48000 的缺口；典型音乐性参数：highshelf +3dB@8kHz Q0.707（同时补齐 shelf 类型覆盖）。左=双频正弦叠加(200/6000Hz)，右=固定种子LCG噪声(种子 441001)。blockSize=441 恰为该采样率下 10ms，帧数非整除（末块 31 帧）。',
+    inputL: (n, fs) => sineSum(n, fs, [
+      { freqHz: 200, amp: 0.5, phaseRad: 0 },
+      { freqHz: 6000, amp: 0.3, phaseRad: Math.PI / 6 },
+    ]),
+    inputR: (n) => lcgNoise(n, 441001, 0.5),
+  },
 
   // ---------- limiter ----------
   {
@@ -441,6 +454,7 @@ const FRAME_COUNTS = {
   'biquad.case1': 4096,
   'biquad.case2': 3000,
   'biquad.case3': 2600,
+  'biquad.case4': 4000,
   'limiter.case1': 9600,
   'limiter.case2': 5000,
   'limiter.case3': 2048,

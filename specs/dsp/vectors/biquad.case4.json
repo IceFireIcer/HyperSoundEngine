@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "module": "biquad",
+  "case": "case4",
+  "sampleRate": 44100,
+  "blockSize": 441,
+  "channels": 2,
+  "frames": 4000,
+  "params": {
+    "type": "highshelf",
+    "f0": 8000,
+    "q": 0.707,
+    "gainDb": 3
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "多采样率覆盖：采样率 44100，补齐既有三例全为 48000 的缺口；典型音乐性参数：highshelf +3dB@8kHz Q0.707（同时补齐 shelf 类型覆盖）。左=双频正弦叠加(200/6000Hz)，右=固定种子LCG噪声(种子 441001)。blockSize=441 恰为该采样率下 10ms，帧数非整除（末块 31 帧）。"
+}

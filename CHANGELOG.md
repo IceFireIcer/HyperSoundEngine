@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08
+
 ### Changed
 - **命名规范审计与整改**（规则见 `docs/VERSIONING.md` 公开标识符命名分层）：泛词类加 `Hse` 前缀并同步文件名——`AudioBus`→`HseAudioBus`、`Stretch`/`StretchParams`→`HseStretch`/`HseStretchParams`、`HearingTest`→`HseHearingTest`、`SeparationQueue`→`HseSeparationQueue`、`AudioEffectsProcessor`→`HseAudioEffectsProcessor`；DSP 行业域名类（Biquad/Compressor/Convolver 等）与工具函数（createEngine/encodeWav 等）按规则保留原名。
 - **版本谱系重置**：废止旧 WaveForge v1/v2/v3 引擎谱系描述，现引擎定名 **HyperSoundEngine v1**（版本策略见 `docs/VERSIONING.md`）。
@@ -10,6 +12,10 @@
 - 命名去版本化：`v3HearingPlay`→`hseHearingPlay`、存储键 `hypersound:v3-*`/`waveforge:v3-params`→`hse-*`、worklet URL `v3-worklet*`→`hse-worklet*`、CSS 动画 `v3-*`→`hse-*`、WAV 导出文件名前缀 `waveforge-v3-`→`waveforge-hse-`。
 
 ### Added
+- **Rust 支线试点三模块双绿（规划书 Phase 1）**：`hse-core` 逐行移植 `biquad` / `Limiter` / `ReverbSimple` 并全部通过冻结向量对拍——`cargo run -p hse-parity` **11/11 用例 PASS，全程 maxAbsDiff=0.000e0**（与 TS 基线逐位一致，远优于 1e-6 容差）。关键移植纪律：TS Number(f64) 中间量全 f64 复刻、Float32Array 落点精确区分 f32（含 limiter 队列峰值/真峰值插值系数、reverb combStore 状态）、JS `Math.round` 半值向上与 `min/max` NaN 语义显式复刻。
+- **biquad.case4 多采样率向量**（MINOR 追加）：44100Hz / blockSize=441 / highshelf +3dB@8kHz Q0.707，补齐 shelf 类型与多采样率覆盖；冻结向量现共 **11 组**。
+- **criterion 基准雏形 `benches/`（成员 crate hse-benches）**：parity_biquad（含 128/256/512 块长矩阵）/ parity_limiter（真峰值开关对照）/ parity_reverb_simple，口径对齐 TS benchmark（48kHz / 立体声 / 128 帧），确定性合成激励。
+- CI 新增 `rust` job：`cargo test --workspace` + 对拍门禁 `cargo run -p hse-parity`（specs/ 冻结向量全部 PASS 才算过，双绿门禁 Rust 半边正式接入）。
 - **双支线规格基建（规划书 Phase 0）**：新增共享规格目录 `specs/` —— 总纲与向量格式契约 `specs/README.md`、用例元数据 Schema `specs/schema/vector-case.schema.json`（draft-07）、试点模块规格 `specs/dsp/biquad.md` / `limiter.md` / `reverb-simple.md`（GWT 条款 + 参数 clamp 表 + 边界条件）。
 - **10 组冻结对拍向量**（`specs/dsp/vectors/`：biquad×3 / limiter×4 / reverb-simple×3，JSON 元数据 + 小端四段 f32 夹具）与导出工具 `scripts/export-vectors.mjs`（优先 Node 原生 type-stripping 加载 TS 模块，esbuild 打包兜底；重跑逐字节比对，不一致拒写——机制性冻结守卫）。
 - TS 侧对拍门禁测试 `test/spec-vectors.test.ts`（21 用例：向量目录缺失/为空显式失败，元数据契约逐一校验）及配套最小 Node 内置类型声明 `test/node-builtin-types.d.ts`。

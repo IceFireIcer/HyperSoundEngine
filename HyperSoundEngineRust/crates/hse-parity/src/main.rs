@@ -21,6 +21,7 @@
 
 mod runner;
 mod segments;
+mod stages;
 mod tolerance;
 mod vector;
 
@@ -28,7 +29,7 @@ use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-use runner::{CaseOutcome, PassthroughStage};
+use runner::CaseOutcome;
 use vector::VectorCase;
 
 /// 正常结束（含"无向量可跑"的空跑场景）。
@@ -229,7 +230,7 @@ fn evaluate_case(json_path: &Path) -> Result<EvaluatedCase, String> {
         ));
     }
     let planar_data = segments::decode_file(&f32_path)?;
-    let mut stage = PassthroughStage;
-    let outcome = runner::run_case(&case, &planar_data, &mut stage)?;
+    let mut stage = stages::make_stage(&case)?;
+    let outcome = runner::run_case(&case, &planar_data, &mut *stage)?;
     Ok((case, outcome))
 }

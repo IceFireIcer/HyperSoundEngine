@@ -19,3 +19,18 @@ jobs:
       - run: npm run typecheck:ui
       - run: npm test
       - run: npm run build
+
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: HyperSoundEngineRust
+      - name: Rust 支线单元测试（hse-core / hse-parity / hse-benches）
+        run: cargo test --workspace
+        working-directory: HyperSoundEngineRust
+      - name: 对拍门禁（specs/ 冻结向量全部 PASS 才算过，双绿门禁 Rust 半边）
+        run: cargo run -q -p hse-parity
+        working-directory: HyperSoundEngineRust

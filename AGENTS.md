@@ -12,15 +12,15 @@
 - `CONTEXT.md` — 领域术语表（ubiquitous language），改模型前先读
 - `原生化双支线与Windows音频接入规划书.md` — 当前主线执行规划
 - `空间音频实现规划书.md` — 空间音频规格输入（§3.2 契约、§八性能目标有效）
-- `specs/` — 双支线共享规格 + 冻结测试向量（Phase 0 已落地：总纲 `specs/README.md`、向量 JSON Schema `specs/schema/vector-case.schema.json`、试点模块规格 biquad / limiter / reverb-simple、10 组冻结向量）；**改动前先读 `specs/README.md`**；基线唯一生成入口是 `scripts/export-vectors.mjs`（重跑逐字节比对，不一致拒写）
-- `HyperSoundEngineRust/` — **Rust 支线**（Phase 0 骨架已建：Cargo workspace，`hse-core` Stage 抽象 + `hse-parity` 对拍 harness；真实 DSP 模块自 Phase 1 起按 `specs/` 规格逐个落地）：全量原生重写，承接 Windows 引擎服务进程与性能目标
+- `specs/` — 双支线共享规格 + 冻结测试向量（Phase 0 已落地：总纲 `specs/README.md`、向量 JSON Schema `specs/schema/vector-case.schema.json`、试点模块规格 biquad / limiter / reverb-simple、11 组冻结向量）；**改动前先读 `specs/README.md`**；基线唯一生成入口是 `scripts/export-vectors.mjs`（重跑逐字节比对，不一致拒写）
+- `HyperSoundEngineRust/` — **Rust 支线**（Phase 1 试点达成：`hse-core` 已实现 biquad / limiter / reverb-simple，与 TS 冻结向量对拍 **11/11 PASS 且逐位一致**；另有 `hse-parity` 对拍 harness 与 `benches/` criterion 基准）：全量原生重写，承接 Windows 引擎服务进程与性能目标，后续模块按 `specs/` 规格逐个落地
 
 > 规则：README/AGENTS 等仓库文档只描述已跟踪文件，**不得引用 .gitignore 排除的路径**（本地参考资料、草稿目录等不入文档）。
 
 ## 远程与 CI
 
 - 远程仓库：`https://github.com/IceFireIcer/HyperSoundEngine`（origin），工作分支 `main`
-- push 到 `main` 触发 `.github/workflows/ci.yml`：`typecheck` → `typecheck:ui` → `test` → `build`，全绿才算过
+- push 到 `main` 触发 `.github/workflows/ci.yml`：TS 侧 `typecheck` → `typecheck:ui` → `test` → `build`；另有 `rust` job 跑 `cargo test --workspace` 与对拍门禁（specs/ 冻结向量全部 PASS），全绿才算过
 - 每日北京时间 17:00（cron 为 UTC 09:00）触发 `.github/workflows/nightly.yml`：质量门禁 → TS/Rust 构建 → 发 pre-release。tag 命名 `nightly-YYYYMMDD.当日构建次数`（重跑自动 +1）；**包版本号不随 nightly 递增**（版本规则见 docs/VERSIONING.md）；Rust 支线目录不存在时自动跳过
 
 ## 常用命令（工作目录 = 本目录）
@@ -34,8 +34,9 @@ npm run build                   # types + core(esbuild) + worklet 单文件包 �
 npm run benchmark               # 先 build 再跑 scripts/benchmark.mjs（48kHz/128 帧，默认链）
 npm run benchmark:scenes        # 场景化基准（卷积/FDN 混响、DynamicEq）
 node scripts/export-vectors.mjs # 导出/校验冻结对拍向量（幂等；不一致拒写，防单方面改基线）
-cd HyperSoundEngineRust && cargo test            # Rust 支线单元测试
-cd HyperSoundEngineRust && cargo run -p hse-parity  # 对拍 harness 吃 specs/ 向量（直通假实现期 FAIL=exit1 属预期，Phase 1 转绿）
+cd HyperSoundEngineRust && cargo test            # Rust 支线单元测试（workspace 全成员）
+cd HyperSoundEngineRust && cargo run -q -p hse-parity  # 对拍门禁：specs/ 冻结向量 11 组全 PASS=exit0（双绿门禁 Rust 半边）
+cd HyperSoundEngineRust && cargo bench           # criterion 基准（biquad/limiter/reverb + 块长矩阵）
 ```
 
 依赖未安装时先 `npm install`。平台为 Windows + Git Bash。
