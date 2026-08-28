@@ -379,7 +379,8 @@ export class HyperSoundEngine {
   reset(): void
 }
 ```
-链顺序（设计文档 §2）：输入 → 响度归一化增益 → M/S(voiceBalance+width) → **Pre-EQ**(EqChain) → Deesser → Compressor → NightMode → 混响(convolution|algorithmic|off) → BassEnhancer → LoudnessComp → IEQ(Post) → Limiter → 输出；LUFS 计在 Limiter 之前取样。
+链顺序（设计文档 §2）：输入 → 响度归一化增益 → M/S(voiceBalance+width) → **Pre-EQ**(EqChain) → Deesser → Compressor → NightMode → 混响(convolution|algorithmic|off) → BassEnhancer → LoudnessComp → IEQ(Post) → Limiter → 空间音频(内联级) → 输出；LUFS 计在 Limiter 之前取样。
+空间音频级：`src/spatial/`（TsConvolverBackend + 解析 HRTF + 房间模拟），参数 `HyperSoundEngineParams.spatial`（默认 mode:'off'=逐位旁路）；4 模式 instant/headLocked/world/stage，512 样本分区延迟经 getLatencySamples() 上报。
 实现要点：所有系数在 setParams 中预计算；process 内零分配；NightMode=压缩增强(ratio×1.5,threshold-6dB)+6kHz 高频 shelf 衰减(amount×1.5dB)。
 
 ### B. src/engine/ScenePresets.ts —— 12 个组合场景（F1 负责）

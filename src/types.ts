@@ -8,6 +8,19 @@
  * 约定：所有参数为不可变快照语义；HyperSoundEngine.setParams 每次接收完整 HyperSoundEngineParams。
  */
 
+import type {
+  SpatialMode,
+  ConvolutionMode,
+  HrtfInterpMode,
+  DistanceModel,
+  InstantSpatialSettings,
+  HeadLockedSettings,
+  WorldSettings,
+  StageSettings,
+  AmbienceSettings,
+} from './spatial/types'
+import { createDefaultSpatialParams } from './spatial/types'
+
 /** 混响路由：卷积混响 / 算法混响(Freeverb) / FDN 算法混响 / 关闭 */
 export type ReverbMode = 'convolution' | 'algorithmic' | 'fdn' | 'off'
 /** 均衡模式：简约 5 段 / 专业多段 */
@@ -368,6 +381,63 @@ export interface ScenePreset {
   params: HyperSoundEngineParams
 }
 
+/**
+ * 空间音频引擎侧设置（内联级渲染用子集）。
+ * 子结构（instant/headLocked/world/stage/ambience）复用 spatial/types 的同名接口，
+ * 保证与纯函数布局/场景/控制器助手（headLockedSpeakers/stageSpeakers/computeRelativeDirection 等）
+ * 形状兼容。角度=度，距离=米。相对全量 SpatialParams（Rust 服务/WASM 后端契约用）
+ * 裁掉 output/perfMode/sinkId/keymap/multichannelChannels，perfMode 由直接的 hrtfInterp 表达。
+ */
+export interface SpatialSettings {
+  /** 空间模式：off=关闭（旁路）/ instant=一键空间化 / headLocked=头锁定环绕 / world=世界漫游 / stage=舞台影院 */
+  mode: SpatialMode
+  /** 双耳输出主增益 0.5..1（防削波预留） */
+  masterGain: number
+  /** 模式 A：一键空间化（立体声 → ±spreadDeg/2 两只虚拟扬声器） */
+  instant: InstantSpatialSettings
+  /** 模式 B：头锁定环绕（布局预设 + 自定义编辑器；声场固定于头部朝向） */
+  headLocked: HeadLockedSettings
+  /** 模式 C：世界漫游（听者 + 声源对象；移动/旋转由 controller 纯函数驱动） */
+  world: WorldSettings
+  /** 模式 D：舞台/影院（场景预设 + 座位/房间调节） */
+  stage: StageSettings
+  /** 环境声 Ambisonics 上混（FOA 动态混合是处理器层能力；内联级保留字段，暂不影响渲染） */
+  ambience: AmbienceSettings
+  /** 卷积模式：partitioned=FFT 分区（默认）/ time=时域直接卷积 */
+  convolution: ConvolutionMode
+  /** HRTF 插值：nearest=最近邻网格查表（默认）/ spherical=球谐插值（方位过渡更平滑） */
+  hrtfInterp: HrtfInterpMode
+  /** 距离衰减模型（全部模式的全局渲染参数） */
+  distanceModel: DistanceModel
+  /** 距离衰减参考距离（米，默认 1；ref 内不衰减） */
+  refDistance: number
+  /** 距离衰减最大距离（米，默认 50；linear 模型在此衰减到 0） */
+  maxDistance: number
+}
+
+/**
+ * 生成默认空间音频设置（mode='off'——引擎旁路，逐位回归）。
+ * 复用 spatial/types 的 createDefaultSpatialParams 单事实源，投影出 SpatialSettings
+ * （perfMode → hrtfInterp：quality→spherical，balanced/lowLatency→nearest）。
+ */
+export function createDefaultSpatialSettings(): SpatialSettings {
+  const p = createDefaultSpatialParams()
+  return {
+    mode: p.mode,
+    masterGain: p.masterGain,
+    instant: p.instant,
+    headLocked: p.headLocked,
+    world: p.world,
+    stage: p.stage,
+    ambience: p.ambience,
+    convolution: p.convolution,
+    hrtfInterp: p.perfMode === 'quality' ? 'spherical' : 'nearest',
+    distanceModel: 'inverse',
+    refDistance: 1,
+    maxDistance: 50,
+  }
+}
+
 /** 引擎总参数（一次性快照） */
 export interface HyperSoundEngineParams {
   sampleRate: number
@@ -387,6 +457,8 @@ export interface HyperSoundEngineParams {
   modulation: ModulationSettings
   modEffects: ModEffectsSettings
   hearing: HearingSettings
+  /** 空间音频（内联级，Limiter 之后；缺省/ mode:'off' 时逐位旁路） */
+  spatial?: SpatialSettings
   /** M/S 立体声宽度 0..2（1=原始） */
   stereoWidth: number
   /** 当前场景 id；null=自定义 */
@@ -447,6 +519,7 @@ export function createDefaultParams(sampleRate: number): HyperSoundEngineParams 
       tremolo: { enabled: false, rateHz: 5, depth: 0.5, mix: 1 },
     },
     hearing: { enabled: false },
+    spatial: createDefaultSpatialSettings(),
     stereoWidth: 1,
     sceneId: null,
     customized: false,
