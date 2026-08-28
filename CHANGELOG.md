@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08
+
+### Added
+- **空间音频（内联级，`src/spatial/`）**（MINOR）：引擎主链第 22 级（Limiter 之后），纯 TS 参考实现——解析 HRTF（球头模型 Woodworth ITD/ILD，72×14 网格 256 抽头，球谐 L=3 插值）→ 每虚拟扬声器双耳分区卷积（512 样本分区，time/partitioned 双卷积模式）→ 房间模拟（镜像源 0-3 阶 + 8 线 Hadamard FDN，7 预设）→ 距离衰减 3 模型/空气吸收/多普勒/声源大小/遮挡（全部可选特性中性值逐位直通）。4 模式：instant 一键空间化 / headLocked 头锁定环绕（布局预设 stereo/5.1/5.1.4/7.1.4/自定义）/ world 世界漫游（听者+声源轨迹）/ stage 舞台影院（4 场景预设）。参数经 `HyperSoundEngineParams.spatial`（默认 mode:'off'=逐位旁路）与 ShareCodec 分享串编解码（整体 JSON 块 + 深度清洗防原型污染，旧分享串解码得默认 off 向后兼容）；配置签名门控防无关参数触发后端状态清零，off→on 先复位后端防旧音频回放；延迟 512 样本经 getLatencySamples() 上报。随附 8 个测试文件 104 用例（位精确旁路/分块不变性/闭式期望输出/物理断言）。此实现作为 Rust hrtf-core（规划书 §3.2 契约）的对拍 ground truth。
+- **BassEnhancer 低音下潜 `lowBoostDb`**（MINOR）：低通提取的低频带按 `(10^(lowBoostDb/20)−1)` 真实混回输出，补足谐波路径只提供心理声学感知、无真实低频能量的短板（low-shelf 语义）。参数可选、默认 0=关闭（输出与既有行为逐位一致），越界钳制 -6..12，旧参数快照缺字段按 0 防御（NaN 防护）；ShareCodec 编解码白名单同步（旧分享串解码缺省 0，向后兼容）；API_SPEC 模块 8 与测试同步更新。
+- **算法参考文档 `docs/ALGORITHMS.md`**：18 节算法原理速查（RBJ biquad/分区卷积/lookahead 限幅/BS.1770/虚拟低频/相位声码器/YIN 等）+ 三附录（实时性能预算、测试策略、许可合规清单），各节标注对应 `src/dsp/` 实现；README 文档索引同步。
+- `test/stretch-signalsmith.test.ts`：signalsmith 可选路径测试——注入缝端到端驱动适配器胶水（分块记账/交织无损/防御回退）+ `skipIf` 门控的同步类接口 DSP 端到端组。实测结论：官方 npm 包（default 导出的 AudioWorklet 工厂）与 `isSignalsmithAvailable` 的同步类接口探测不匹配，适配路径当前不可达、恒走自研相位声码器，该事实由测试固化。
+
+### Changed
+- **响度归一化双时间常数平滑**：`externalGainDb` 手动增益分支平滑时间常数 3s→80ms（拖动音量即时跟随、无 zipper），实时 AGC 分支保持 3s 防抽吸语义不变。
+- **宿主 setParams 去重**：`HyperSoundEngineHost.setParams` 与上次参数逐字段一致时跳过整链系数重配与 worklet `postMessage`（React 重复渲染/拖拽静止帧零开销）；IR（Float32Array）以引用身份参与指纹，不做逐样本序列化；`dispose` 后指纹复位。
+- 移除 optionalDependencies 中从未被引擎代码引用的 `meyda`（特征提取均为自研实现）。
+- vitest 配置显式排除本地不入库目录（.gitignore 中的归档/草稿），其中的测试文件不再被主套件扫描。
+
+### Fixed
+- **旁通→重新启用爆音修复**：级从 disabled→enabled 时清空对应模块流状态（延迟线/全通链/卷积缓冲/包络），避免旁通窗口积压的旧音频被回放（pop/串音）；覆盖 Pre-EQ/Deesser/Compressor/NightMode/Delay/Chorus/Flanger/Phaser/Tremolo/混响三路/BassEnhancer/LoudnessComp/IEQ/DynamicEq/Limiter。
+- **consumeMidiQueue 稳态零分配**：MIDI 平滑 alpha 缓存 Map 提为实例字段复用（clear 复用不分配），收敛循环去除逐绑定闭包分配，兑现引擎文件头"process() 内零分配"承诺。
+
 ## [0.3.0] - 2026-08
 
 ### Changed

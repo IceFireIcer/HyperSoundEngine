@@ -4,7 +4,7 @@
 
 ## 目录总览
 
-- `src/` — **TS 支线**引擎核心（纯 TS DSP + 引擎链 + 浏览器宿主），npm 包 `hypersoundengine`，兼作 golden 对拍参考
+- `src/` — **TS 支线**引擎核心（纯 TS DSP + 引擎链 + 浏览器宿主），npm 包 `hypersoundengine`，兼作 golden 对拍参考；`src/spatial/` 为空间音频参考实现（解析 HRTF + 分区卷积后端 + 房间模拟，引擎内联级，Rust hrtf-core 的对拍 ground truth）
 - `ui/` — 可选 React 调音室（不参与核心构建）
 - `adapters/waveforge/` — WaveForge 专属接线（不入包）
 - `test/` — vitest 测试
@@ -12,8 +12,8 @@
 - `CONTEXT.md` — 领域术语表（ubiquitous language），改模型前先读
 - `原生化双支线与Windows音频接入规划书.md` — 当前主线执行规划
 - `空间音频实现规划书.md` — 空间音频规格输入（§3.2 契约、§八性能目标有效）
-- `specs/` — 双支线共享规格 + 冻结测试向量（Phase 0 已落地：总纲 `specs/README.md`、向量 JSON Schema `specs/schema/vector-case.schema.json`、试点模块规格 biquad / limiter / reverb-simple、11 组冻结向量）；**改动前先读 `specs/README.md`**；基线唯一生成入口是 `scripts/export-vectors.mjs`（重跑逐字节比对，不一致拒写）
-- `HyperSoundEngineRust/` — **Rust 支线**（Phase 1 试点达成：`hse-core` 已实现 biquad / limiter / reverb-simple，与 TS 冻结向量对拍 **11/11 PASS 且逐位一致**；另有 `hse-parity` 对拍 harness 与 `benches/` criterion 基准）：全量原生重写，承接 Windows 引擎服务进程与性能目标，后续模块按 `specs/` 规格逐个落地
+- `specs/` — 双支线共享规格 + 冻结测试向量（Phase 0 已落地：总纲 `specs/README.md`、向量 JSON Schema `specs/schema/vector-case.schema.json`、试点模块规格 biquad / limiter / reverb-simple、11 组冻结向量；服务层规格 `specs/service/`：control-plane 控制面契约、push-stream 推流协议）；**改动前先读 `specs/README.md`**；基线唯一生成入口是 `scripts/export-vectors.mjs`（重跑逐字节比对，不一致拒写）
+- `HyperSoundEngineRust/` — **Rust 支线**（Phase 1 试点达成：`hse-core` 已实现 biquad / limiter / reverb-simple，与 TS 冻结向量对拍 **11/11 PASS 且逐位一致**；另有 `hse-parity` 对拍 harness 与 `benches/` criterion 基准）：全量原生重写，承接 Windows 引擎服务进程与性能目标，后续模块按 `specs/` 规格逐个落地。服务层：`hse-wasapi` — WASAPI 共享模式渲染 + loopback 捕获（`wasapi` crate 精确锁版 `=0.24.0`）；`hse-service` — 引擎服务进程：捕获→DSP→渲染三线程 + rtrb 双环，控制面 localhost WebSocket JSON-RPC（默认 `ws://127.0.0.1:4780/`），二进制 `hse-service` 与调参客户端 `hse-cli`（详见 `crates/hse-service/README.md`）；`hse-napi` 仍为占位，未入 workspace members
 
 > 规则：README/AGENTS 等仓库文档只描述已跟踪文件，**不得引用 .gitignore 排除的路径**（本地参考资料、草稿目录等不入文档）。
 
@@ -37,6 +37,8 @@ node scripts/export-vectors.mjs # 导出/校验冻结对拍向量（幂等；不
 cd HyperSoundEngineRust && cargo test            # Rust 支线单元测试（workspace 全成员）
 cd HyperSoundEngineRust && cargo run -q -p hse-parity  # 对拍门禁：specs/ 冻结向量 11 组全 PASS=exit0（双绿门禁 Rust 半边）
 cd HyperSoundEngineRust && cargo bench           # criterion 基准（biquad/limiter/reverb + 块长矩阵）
+cd HyperSoundEngineRust && cargo test -p hse-service  # 引擎服务单测+集成（fake 后端，无需真实音频设备）
+cd HyperSoundEngineRust && cargo run -p hse-service   # 引擎服务（ws://127.0.0.1:4780）；hse-cli 调参见 crates/hse-service/README.md
 ```
 
 依赖未安装时先 `npm install`。平台为 Windows + Git Bash。
@@ -59,7 +61,7 @@ cd HyperSoundEngineRust && cargo bench           # criterion 基准（biquad/lim
 分层（自上而下，依赖只能向下）：
 
 1. **宿主层** `src/browser.ts`、`src/integration/HyperSoundEngineHost.ts`、`src/worklet/`
-2. **引擎核心** `src/engine/`（HyperSoundEngine 21 级处理链、ScenePresets、ShareCodec、工厂）
+2. **引擎核心** `src/engine/`（HyperSoundEngine 22 级处理链、ScenePresets、ShareCodec、工厂）
 3. **DSP 内核** `src/dsp/`（fft/biquad/EqChain/Compressor/Convolver/Reverb 等）
 
 - **核心零 DOM / AudioContext / React 依赖**，须能在 Node、浏览器、Electron、AudioWorklet 运行；`ui/` 与 `adapters/waveforge/` 不参与核心构建
