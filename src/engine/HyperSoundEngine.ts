@@ -217,6 +217,8 @@ export class HyperSoundEngine implements AudioEngine {
 
   // —— 处理链（20 级，顺序即数组顺序） ——
   private readonly _stages: ProcessingStage[] = []
+  /** MIDI 平滑 alpha 缓存（按 smoothMs 键，实例级复用——process 稳态零分配） */
+  private readonly _midiAlphaCache = new Map<number, number>()
 
   // —— 运行时状态 ——
   private _preEqActive = false
@@ -806,7 +808,9 @@ export class HyperSoundEngine implements AudioEngine {
 
   /** 消费队列全部事件（process 块头调用）。块速率应用。 */
   private consumeMidiQueue(blockSize: number): void {
-    const alphaCache = new Map<number, number>()
+    // alpha 缓存实例级复用（clear 不分配）：process 稳态零分配
+    const alphaCache = this._midiAlphaCache
+    alphaCache.clear()
     while (this._midiCount > 0) {
       const i = this._midiHead
       const t = this._midiType[i]
@@ -851,14 +855,15 @@ export class HyperSoundEngine implements AudioEngine {
     }
     // 无事件但存在平滑中绑定：继续向 target 收敛（保持轨迹单调）
     for (const st of this._midiBindings.values()) {
-      if (st.binding.smoothMs > 0 && Math.abs(st.current - st.target) > 1e-9) {
-        const alpha = alphaCache.get(st.binding.smoothMs) ?? (() => {
-          const a = 1 - Math.exp(-blockSize / this._fs / (st.binding.smoothMs / 1000))
-          alphaCache.set(st.binding.smoothMs, a)
-          return a
-        })()
+      const b = st.binding
+      if (b.smoothMs > 0 && Math.abs(st.current - st.target) > 1e-9) {
+        let alpha = alphaCache.get(b.smoothMs)
+        if (alpha === undefined) {
+          alpha = 1 - Math.exp(-blockSize / this._fs / (b.smoothMs / 1000))
+          alphaCache.set(b.smoothMs, alpha)
+        }
         st.current += (st.target - st.current) * alpha
-        this.applyAutomationValue(st.binding.target, st.current)
+        this.applyAutomationValue(b.target, st.current)
       }
     }
   }
