@@ -81,6 +81,9 @@ const IEQ_FREQS = [31.5, 63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
 const DYNAMIC_EQ_CROSSOVERS = [200, 800, 2500, 8000]
 /** 响度归一化实时增益平滑时间常数（秒），防抽吸（技术文档 §7.2 慢速 AGC） */
 const NORM_SMOOTH_SEC = 3.0
+/** 响度归一化手动增益平滑时间常数（秒）：externalGainDb（外部分析换算/用户拖动）
+ *  语义下需及时跟随且无 zipper；实时 AGC 分支仍用 NORM_SMOOTH_SEC 防抽吸。 */
+const MANUAL_GAIN_SMOOTH_SEC = 0.08
 
 /** 深拷贝参数快照：数组逐元素复制，避免外部可变对象影响引擎；引擎本身不修改传入参数。 */
 function cloneParams(p: HyperSoundEngineParams): HyperSoundEngineParams {
@@ -972,9 +975,10 @@ export class HyperSoundEngine implements AudioEngine {
             const alpha = 1 - Math.exp(-(n / this._fs) / NORM_SMOOTH_SEC)
             this._normGain += alpha * (targetLin - this._normGain)
           } else {
-            // 外部给定增益：平滑过渡（整曲测量换算语义；审计修复：不再瞬时阶跃）
+            // 外部给定增益：平滑过渡（整曲测量换算语义；审计修复：不再瞬时阶跃）。
+            // 手动分支用短时间常数——拖动音量曲线需及时到位（zipper 由平滑消除）
             const targetLin = Math.pow(10, Math.min(ln.maxGainDb, Math.max(ln.minGainDb, ln.externalGainDb)) / 20)
-            const alpha = 1 - Math.exp(-(n / this._fs) / NORM_SMOOTH_SEC)
+            const alpha = 1 - Math.exp(-(n / this._fs) / MANUAL_GAIN_SMOOTH_SEC)
             this._normGain += alpha * (targetLin - this._normGain)
           }
           const g = this._normGain
