@@ -551,6 +551,14 @@ mod tests {
 
     #[test]
     fn loopback_smoke_captures_own_render_output() {
+        // 真机出声冒烟：默认跳过（cargo test 全量跑不得出声——CI/日常开发均静音）；
+        // 仅在显式设置 HSE_ALLOW_REAL_AUDIO=1 时运行。
+        if std::env::var("HSE_ALLOW_REAL_AUDIO").as_deref() != Ok("1") {
+            eprintln!(
+                "skip loopback_smoke_captures_own_render_output：真机出声测试需显式 HSE_ALLOW_REAL_AUDIO=1"
+            );
+            return;
+        }
         let sample_rate = 48000u32;
         let block = 480u32; // 10ms @ 48kHz
 
