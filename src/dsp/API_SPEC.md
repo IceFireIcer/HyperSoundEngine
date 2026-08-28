@@ -180,9 +180,11 @@ export class BassEnhancer {
 ```
 
 实现：LPF(cutoffHz,q) 提取低频 → 非线性（odd: x³ / even: 全波整流 / atan: atan(√|x|)·sign / soft: tanh(g·x)）→
-HPF(≥150Hz 或 cutoffHz*1.5，取较大) 整形 → harmonicGain×mix 混回。
+HPF(≥150Hz 或 cutoffHz*1.5，取较大) 整形 → harmonicGain×mix 混回；
+lowBoostDb（-6..12，默认 0=关闭）：低频带再按 (10^(lowBoostDb/20)−1) 混回真实低频能量（低音下潜）；
+旧快照字段缺省按 0 处理（Number.isFinite 防御）。
 测试要点：60Hz 正弦 + 小音箱场景 → 输出含 120/180Hz 谐波分量（FFT 验证峰值存在）；
-无输入无输出；enabled=false 恒等。
+lowBoostDb=+6 → 低频带稳态电平真实提升（≈×1.65）；无输入无输出；enabled=false 恒等。
 
 ---
 

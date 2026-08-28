@@ -105,6 +105,9 @@ export interface BassEnhancerSettings {
   mix: number
   /** 整体电平 dB -6..6 */
   levelDb: number
+  /** 低音下潜 dB -6..12：低通提取的低频带按 (10^(lowBoostDb/20)−1) 真实混回（默认 0=关闭）。
+   *  可选字段：旧参数快照缺省时按 0 处理（dsp 侧 Number.isFinite 防御）。 */
+  lowBoostDb?: number
 }
 
 /** 延迟效果 */
@@ -408,7 +411,7 @@ export function createDefaultParams(sampleRate: number): HyperSoundEngineParams 
     deesser: { enabled: false, centerHz: 6000, q: 0.7, thresholdDb: -30, ratio: 8, attackMs: 1, releaseMs: 80, splitBand: true, mix: 1, sidechainEnabled: false },
     compressor: { enabled: false, thresholdDb: -20, ratio: 4, kneeDb: 6, attackMs: 10, releaseMs: 150, makeupDb: 0, outputGain: 1, sidechainEnabled: false },
     nightMode: { enabled: false, amount: 0 },
-    bassEnhancer: { enabled: false, cutoffHz: 90, q: 0.7, harmonicType: 'odd', harmonicGain: 0.6, mix: 0.5, levelDb: 0 },
+    bassEnhancer: { enabled: false, cutoffHz: 90, q: 0.7, harmonicType: 'odd', harmonicGain: 0.6, mix: 0.5, levelDb: 0, lowBoostDb: 0 },
     reverb: {
       enabled: false,
       mode: 'algorithmic',

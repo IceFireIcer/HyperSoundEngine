@@ -15,7 +15,11 @@
  *        soft : tanh(2·x)（软削波，奇次谐波，幅度衰减快）
  *   3. 高通整形：HPF(max(150, cutoffHz·1.5) Hz) 只保留基频整数倍谐波，去除 DC 与互调；
  *   4. 混合：out = x + 10^(levelDb/20)·mix·harmonicGain·shaped
- *      （levelDb 作用于谐波路径电平；dry 信号保持不变）。
+ *      （levelDb 作用于谐波路径电平；dry 信号保持不变）；
+ *   5. 低音下潜：out += (10^(lowBoostDb/20) − 1)·x_bass —— 低通提取的低频带按增益
+ *      混回，等价于以 cutoffHz 为中心的 low-shelf 真实低频提升（lowBoostDb 默认
+ *      0=关闭，此时输出与不含该路径时逐位一致；谐波路径只提供心理声学感知，
+ *      真实低频能量靠这条路径）。
  */
 
 import type { BassEnhancerSettings, HarmonicType } from '../types'
@@ -34,6 +38,8 @@ export class BassEnhancer {
   private harmonicGain = 0.6
   private mix = 0.5
   private levelLin = 1
+  private lowBoostDb = 0
+  private lowLin = 0 // 10^(lowBoostDb/20) − 1，低频带混回增益（真实能量提升）
   private readonly lpL = new Biquad()
   private readonly lpR = new Biquad()
   private readonly hpL = new Biquad()
@@ -58,6 +64,10 @@ export class BassEnhancer {
     this.harmonicGain = clamp(p.harmonicGain, 0, 1)
     this.mix = clamp(p.mix, 0, 1)
     this.levelLin = Math.pow(10, clamp(p.levelDb, -6, 6) / 20)
+    // 防御旧参数快照缺字段（undefined/非有限值直接 clamp 会得 NaN 污染输出）
+    const lb = p.lowBoostDb
+    this.lowBoostDb = clamp(typeof lb === 'number' && Number.isFinite(lb) ? lb : 0, -6, 12)
+    this.lowLin = Math.pow(10, this.lowBoostDb / 20) - 1
     // 谐波整形高通：≥150Hz 或 cutoffHz·1.5（取较大），上限 fs·0.45
     const hpCut = clamp(Math.max(150, this.cutoffHz * 1.5), 20, this.fs * 0.45)
     this.lpL.setParams('lowpass', this.cutoffHz, this.q, 0)
@@ -89,6 +99,7 @@ export class BassEnhancer {
     if (!this.enabled) return // 恒等直通
     const n = l.length
     const k = this.mix * this.harmonicGain * this.levelLin
+    const low = this.lowLin
     for (let i = 0; i < n; i++) {
       const xl = l[i]
       const xr = r[i]
@@ -99,8 +110,9 @@ export class BassEnhancer {
       const hl = this.hpL.process(this.nonlinearity(bl))
       const hr = this.hpR.process(this.nonlinearity(br))
       // 4) 混回（dry 不变，谐波路径按 mix×harmonicGain×level）
-      l[i] = xl + k * hl
-      r[i] = xr + k * hr
+      // 5) 低音下潜：低频带按 lowBoostDb 混回（真实低频能量提升；low=0 时逐位等于原路径）
+      l[i] = xl + k * hl + low * bl
+      r[i] = xr + k * hr + low * br
     }
   }
 

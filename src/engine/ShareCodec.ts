@@ -269,6 +269,7 @@ function sanitizeParams(raw: unknown): HyperSoundEngineParams {
       harmonicGain: num(bassRaw.harmonicGain, 0, 1, 0.6),
       mix: num(bassRaw.mix, 0, 1, 0.5),
       levelDb: num(bassRaw.levelDb, -6, 6, 0),
+      lowBoostDb: num(bassRaw.lowBoostDb, -6, 12, 0),
     },
     reverb: {
       enabled: bool(revRaw.enabled, false),
@@ -458,6 +459,7 @@ function toShareObject(p: HyperSoundEngineParams): unknown {
       harmonicGain: p.bassEnhancer.harmonicGain,
       mix: p.bassEnhancer.mix,
       levelDb: p.bassEnhancer.levelDb,
+      lowBoostDb: p.bassEnhancer.lowBoostDb ?? 0,
     },
     reverb: {
       enabled: p.reverb.enabled,
