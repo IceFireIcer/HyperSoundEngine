@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08
+
+### Added
+- **Phase 3 批次一：模块对拍推进三模块双绿（规划书 §五）**：Compressor（13 GWT，sidechain 单声道和派生驱动语义 §4.5）/ BassEnhancer（15 GWT，lowBoostDb 与内部滤波器 48k 设计率事实标准 §4.3）/ MidSide（11 GWT）——规格 + 12 组冻结向量（TS 导出，既有 22 夹具逐字节不变）+ hse-core 移植（f32/f64 量化落点逐位对齐；Math.sign 保号零、Biquad 级联 f64 不落 f32 等 5 项 TS 浮点事实显式复刻）；对拍门禁 11→**23 case 全 PASS、maxAbsDiff=0.000e0**。
+- **服务链扩展为六模块引擎子链**：midSide → biquad → compressor → reverbSimple → bassEnhancer → limiter（对齐全链相对顺序 3/4/6/13/14/21）；控制面 setParams 可识别键同步扩展 midSide/compressor/bassEnhancer（向后兼容变更）；`specs/service/control-plane.md` §一/§5.6/§八 同步修订。
+- **推流协议落地（规划书 Phase 3 第 3 项，契约 `specs/service/push-stream.md`）**：openSession/closeSession + 同端口二进制 PCM 帧（12 字节帧头 + 交错 f32 立体声载荷）+ 会话表（u32 id 单调不复用、耗尽 -32000）+ 混后处理（回环先、会话按 id 升序累加）+ 背压（drop-oldest、逐旧块 xrunsIn 计数、100ms 限频 event.xrun）+ 断线自动清理会话；新增 20 项测试（会话生命周期/背压/混合次序/文本-二进制分流正交/真实 WS 端到端），全程假后端零出声。
+- 真机出声冒烟测试默认跳过（`HSE_ALLOW_REAL_AUDIO=1` 显式启用）——`cargo test` 全量跑不再出声。
+
 ## [0.4.0] - 2026-08
 
 ### Added
