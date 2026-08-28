@@ -141,3 +141,39 @@ fn 相位机守门_运行中禁止重复start与configure() {
     wait_until(|| engine.frames_processed() > 0, Duration::from_secs(10), "重启后继续出帧");
     engine.stop().unwrap();
 }
+#[test]
+fn configure_未知渲染设备引用拒绝且不留痕() {
+    let (engine, _f) = setup(Duration::ZERO, Duration::ZERO);
+    // 先成功配置一次：验证失败路径不清掉既有 config（GWT-CP-08 第二分句）
+    configure_default(&engine);
+    let err = engine
+        .configure(
+            json!({"mode": "loopback",
+                   "renderDeviceId": "{0.0.0.00000000}.{deadbeef-0000-0000-0000-000000000000}",
+                   "sampleRate": 48_000u64, "blockSizeFrames": 64u64})
+                .as_object()
+                .unwrap(),
+        )
+        .unwrap_err();
+    assert_eq!(err.code, -32000, "未知渲染端点引用应报后端失败");
+    let st = engine.get_state();
+    assert_eq!(st["config"]["renderDeviceId"], json!(null), "既有 config 应保持不变");
+}
+
+#[test]
+fn configure_非idle拒绝优先于结构校验() {
+    let (engine, _f) = setup(Duration::ZERO, Duration::ZERO);
+    configure_default(&engine);
+    engine.start().unwrap();
+    // GWT-CP-06：非 idle 时无论内容是否合法一律 -32001（此例内容同时结构非法）
+    let err = engine
+        .configure(
+            json!({"mode": "capture", "renderDeviceId": null,
+                   "sampleRate": 0u64, "blockSizeFrames": 0u64})
+                .as_object()
+                .unwrap(),
+        )
+        .unwrap_err();
+    assert_eq!(err.code, -32001);
+    engine.stop().unwrap();
+}

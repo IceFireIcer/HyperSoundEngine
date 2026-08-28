@@ -154,7 +154,17 @@ impl EngineHandle {
     }
 
     /// configure：仅 phase=idle 可调；成功后保存配置快照并回显 applied。
+    /// 校验顺序对齐 control-plane 规格 GWT-CP-06/07/08：相位(-32001) → 结构(-32602) → 后端枚举(-32000)。
     pub fn configure(&self, params_obj: &Map<String, Value>) -> Result<Value, RpcFault> {
+        // 相位守卫最先：非 idle 时无论内容是否合法一律 -32001，且状态（含既有 config）不变
+        {
+            let g = self.inner.lock().unwrap();
+            if g.phase != Phase::Idle {
+                return Err(RpcFault::state_forbidden(format!(
+                    "phase={} 时禁止 configure（仅 idle 可配）", g.phase.as_str()
+                )));
+            }
+        }
         let mode = match params_obj.get("mode").and_then(|v| v.as_str()) {
             Some(m) => m.to_string(),
             None => return Err(RpcFault::invalid_params("configure 缺少 mode 字符串")),
@@ -166,7 +176,19 @@ impl EngineHandle {
         }
         let render_device_id = match params_obj.get("renderDeviceId") {
             None | Some(Value::Null) => None,
-            Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
+            Some(Value::String(s)) if !s.is_empty() => {
+                // GWT-CP-08：非 null 引用必须命中当前渲染端点枚举（后端参与校验，失败 -32000 且 config 不变）
+                let devs = self
+                    .factory
+                    .list_devices()
+                    .map_err(|e| RpcFault::backend_failed(e.to_string()))?;
+                if !devs.iter().any(|d| d.kind == DeviceKind::Render && d.id == *s) {
+                    return Err(RpcFault::backend_failed(format!(
+                        "renderDeviceId 不在当前渲染端点枚举中：{}", s
+                    )));
+                }
+                Some(s.clone())
+            }
             Some(Value::String(_)) => {
                 return Err(RpcFault::invalid_params("renderDeviceId 不能为空字符串（用 null 表示默认设备）"));
             }
@@ -181,12 +203,8 @@ impl EngineHandle {
             _ => return Err(RpcFault::invalid_params(format!("blockSizeFrames 必须为 {}..={} 的整数", MIN_BLOCK_FRAMES, MAX_BLOCK_FRAMES))),
         };
 
+        // 相位已在开头守卫；控制面串行处理（规格 §九），期间相位不可能变化
         let mut g = self.inner.lock().unwrap();
-        if g.phase != Phase::Idle {
-            return Err(RpcFault::state_forbidden(format!(
-                "phase={} 时禁止 configure（仅 idle 可配）", g.phase.as_str()
-            )));
-        }
         let cfg = ServiceConfig { mode, render_device_id, sample_rate, block_size_frames };
         let applied = cfg.to_json();
         g.config = Some(cfg);
