@@ -188,10 +188,14 @@ fn 背压_运行中超速灌帧_丢旧计入xruns_in并上报事件() {
     let via_state = s.engine.get_state()["stats"]["xrunsIn"].as_u64().unwrap();
     assert_eq!(via_state, s.engine.sessions().xruns_in_total());
     assert!(via_state >= 100);
-    // 首次丢弃即发 event.xrun {dir:"in"}（count ≥ 1）
+    // 首次丢弃即发 event.xrun {dir:"in"}（count ≥ 1）。
+    // 注意：静默回环 + 慢供块拓扑下渲染欠供的 Xrun{dir:"out"} 是合法事件，逐条跳过。
     let mut saw_event = false;
     while let Ok(ev) = s.events.try_recv() {
         if let ServiceEvent::Xrun { dir, count } = ev {
+            if dir == "out" {
+                continue;
+            }
             assert_eq!(dir, "in");
             assert!(count >= 1);
             saw_event = true;
@@ -357,16 +361,19 @@ fn ws端到端_文本控制_二进制推流_断线自动清理_分流正交() {
     let sid_b = resp["result"]["sessionId"].as_u64().unwrap();
     assert_eq!(sid_b, 2);
 
-    // 数据面：二进制帧入对应会话环（GWT-PS-07 帧头路由）
+    // 数据面：二进制帧入对应会话环（GWT-PS-07 帧头路由）。
+    // B 帧在 A 帧之后发出且同连接串行处理：等待条件必须覆盖最后一帧（B），
+    // 否则快机器上 A 先达标而 B 帧仍在连接线程排队 → 假阴性竞态。
     for seq in 0..3u64 {
         ws.send(Message::Binary(frame(sid_a as u32, seq, &[0.25, 0.75]))).unwrap();
     }
     ws.send(Message::Binary(frame(sid_b as u32, 0, &[1.0, -1.0]))).unwrap();
     wait_until(
-        || engine.sessions().queued_frames(sid_a as u32) == Some(3),
+        || engine.sessions().queued_frames(sid_b as u32) == Some(1),
         Duration::from_secs(5),
-        "A 会话收到 3 帧载荷",
+        "B 会话收到自己的帧（同连接串行 ⇒ A 的 3 帧必已入环）",
     );
+    assert_eq!(engine.sessions().queued_frames(sid_a as u32), Some(3), "A 会话收到 3 帧载荷");
     assert_eq!(engine.sessions().queued_frames(sid_b as u32), Some(1), "B 会话只收自己的帧");
 
     // 违规帧静默：未知会话 / sessionId=0 / 载荷非 8 倍数 / 不足帧头
