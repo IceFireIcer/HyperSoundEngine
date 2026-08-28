@@ -7,7 +7,11 @@
 //! - DSP 线程稳态零分配、零锁、零系统调用：只做环读写、planar 过链、原子
 //!   计数与自旋提示；参数热更换经命令环在块边界整链换入；
 //! - 捕获/渲染线程是 I/O 线程：允许阻塞与系统调用；xrun 走原子累加，事件
-//!   经有界通道 try_send 转发（满则丢事件不丢计数）。
+//!   经有界通道 try_send 转发（满则丢事件不丢计数）；
+//! - **混后处理**（specs/service/push-stream.md §八，ADR-0002）：捕获线程同时
+//!   承担推流会话的混合前级——回环块（若有）先入基线，随后按 sessionId 升序
+//!   把各会话出队块逐样本求和，再一次性写入入环；无活跃会话时行为与纯回环
+//!   完全一致（快路径直推，不多一次拷贝）。
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, SyncSender};
@@ -21,12 +25,13 @@ use rtrb::{Consumer, Producer, RingBuffer};
 use crate::backend::{CaptureOpener, RenderOpener};
 use crate::dsp_chain;
 use crate::dsp_chain::PilotSubchain;
+use crate::sessions::SessionTable;
 use crate::state::{ServiceEvent, StatsAtomic};
 
 /// 环容量 = blockSize × 该倍数（约 128ms @48kHz/256 帧）。
 const RING_BLOCKS: usize = 24;
 /// 同方向 xrun 事件的最小发送间隔（限频防风暴；计数器本身不受影响）。
-const XRUN_EVENT_INTERVAL_MS: u64 = 100;
+pub(crate) const XRUN_EVENT_INTERVAL_MS: u64 = 100;
 /// 捕获空轮询退避：后端 pull 为非阻塞尽力语义（返回实际帧数，0=暂无），
 /// 无数据时按此间隔休眠再询，避免忙转（I/O 线程允许系统调用）。
 const CAPTURE_IDLE_POLL_MS: u64 = 10;
@@ -67,6 +72,7 @@ pub fn build_command_ring() -> (Producer<PilotSubchain>, Consumer<PilotSubchain>
 }
 
 /// 拉起三个数据面线程。开流发生在各线程内；协商格式经握手通道回报。
+/// 捕获线程额外持有会话表引用，承担推流会话的混后处理前级。
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_workers(
     capture_opener: Box<dyn CaptureOpener>,
@@ -78,6 +84,7 @@ pub fn spawn_workers(
     chain_rx: Consumer<PilotSubchain>,
     block_frames: usize,
     deps: WorkerDeps,
+    sessions: Arc<SessionTable>,
 ) -> ThreadHandles {
     let run = Arc::clone(&deps.run_flag);
     let err = Arc::clone(&deps.err_flag);
@@ -96,7 +103,18 @@ pub fn spawn_workers(
     let h_cap = std::thread::Builder::new()
         .name("hse-capture".into())
         .spawn(move || {
-            capture_loop(capture_opener, in_prod, block_frames, cap_tx, &run_cap, &err_cap, &gate_cap, &stats_cap, &ev_cap);
+            capture_loop(
+                capture_opener,
+                in_prod,
+                block_frames,
+                cap_tx,
+                &run_cap,
+                &err_cap,
+                &gate_cap,
+                &stats_cap,
+                &ev_cap,
+                &sessions,
+            );
         })
         .expect("捕获线程创建失败");
 
@@ -152,7 +170,11 @@ fn aggregate_backend_xruns(
     }
 }
 
-/// 捕获线程：开流 → 握手 → 就绪门开启后 loopback.pull → 入环。溢出丢弃并计 xrunsIn。
+/// 捕获线程：开流 → 握手 → 就绪门开启后 loopback.pull → 与推流会话混后处理 → 入环。
+///
+/// 回环溢出丢弃并计 xrunsIn；会话侧背压（drop-oldest）在 sessions::push_entry 内
+/// 处理。无活跃会话时走快路径，行为与纯回环拦截完全一致。
+#[allow(clippy::too_many_arguments)]
 fn capture_loop(
     opener: Box<dyn CaptureOpener>,
     mut prod: Producer<f32>,
@@ -163,6 +185,7 @@ fn capture_loop(
     gate: &AtomicBool,
     stats: &StatsAtomic,
     events: &SyncSender<ServiceEvent>,
+    sessions: &SessionTable,
 ) {
     let mut src = match opener.open() {
         Ok(s) => s,
@@ -181,6 +204,8 @@ fn capture_loop(
     let _ = ready.send(Ok(format));
 
     let mut buf = vec![0.0_f32; block_frames * 2];
+    // 混合缓冲：仅在存在活跃会话时使用（快路径不碰，保持纯回环行为逐字节不变）。
+    let mut mix = vec![0.0_f32; block_frames * 2];
     let mut backend_xruns = src.xruns();
     let mut last_emit = Instant::now();
     loop {
@@ -194,28 +219,38 @@ fn capture_loop(
         match src.pull(&mut buf) {
             Ok(nf) => {
                 let nf = nf.min(block_frames);
-                if nf == 0 {
-                    // 非阻塞尽力语义：暂无数据，退避后再询（不忙转）。
-                    aggregate_backend_xruns("in", &mut backend_xruns, src.xruns(), stats, events, &mut last_emit);
-                    std::thread::sleep(Duration::from_millis(CAPTURE_IDLE_POLL_MS));
-                    continue;
-                }
-                let nsamp = nf * 2;
-                let mut sent = 0usize;
-                while sent < nsamp {
-                    if prod.push(buf[sent]).is_ok() {
-                        sent += 1;
-                    } else {
-                        break; // 环满：丢弃本块剩余样本
+                // 混后处理：回环块（若有）先入基线，随后按 sessionId 升序累加各会话
+                // 出队块（sessions::drain_and_mix）；无会话时回环样本原样直推。
+                let use_mix = !sessions.is_empty();
+                let total = if use_mix {
+                    mix[..nf * 2].copy_from_slice(&buf[..nf * 2]);
+                    sessions.drain_and_mix(&mut mix, nf, block_frames)
+                } else {
+                    nf
+                };
+                if total > 0 {
+                    let out: &[f32] = if use_mix { &mix[..total * 2] } else { &buf[..total * 2] };
+                    let mut sent = 0usize;
+                    while sent < out.len() {
+                        if prod.push(out[sent]).is_ok() {
+                            sent += 1;
+                        } else {
+                            break; // 环满：丢弃本块剩余样本
+                        }
                     }
-                }
-                if sent < nsamp {
-                    let lost = ((nsamp - sent) / 2) as u64;
-                    stats.xruns_in.fetch_add(lost, Ordering::Relaxed);
-                    maybe_emit_xrun(events, &mut last_emit, "in", lost);
+                    if sent < out.len() {
+                        let lost = ((out.len() - sent) / 2) as u64;
+                        stats.xruns_in.fetch_add(lost, Ordering::Relaxed);
+                        maybe_emit_xrun(events, &mut last_emit, "in", lost);
+                    }
                 }
                 // 后端内部 xrun 计数聚合
                 aggregate_backend_xruns("in", &mut backend_xruns, src.xruns(), stats, events, &mut last_emit);
+                if nf == 0 && total == 0 {
+                    // 非阻塞尽力语义：回环暂无数据且本轮会话也未取出任何块，
+                    // 退避后再询（不忙转）；会话有数据时保持全速消费。
+                    std::thread::sleep(Duration::from_millis(CAPTURE_IDLE_POLL_MS));
+                }
             }
             Err(e) => {
                 eprintln!("[hse-capture] 拉取失败，请求停机：{}", e);

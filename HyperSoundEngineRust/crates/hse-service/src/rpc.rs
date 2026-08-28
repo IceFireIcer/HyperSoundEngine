@@ -1,7 +1,8 @@
 //! JSON-RPC 2.0 解析与方法分发表（over WebSocket 文本帧）。
 //!
-//! 错误码：-32700 解析错误｜-32600 无效请求｜-32601 方法不存在｜
-//! -32602 参数无效｜-32000 后端失败｜-32001 状态不允许。
+//! 错误码：-32700 解析错误｜-32600 无效请求｜-32601 方法不存在｜-32602 参数无效｜-32000 后端失败｜-32001 状态不允许。
+//! 方法表：Phase 2 六方法（listDevices/getState/configure/start/stop/setParams）
+//! + Phase 3 推流会话两方法（openSession/closeSession，specs/service/push-stream.md）。
 //! 无 id 的请求按通知处理：照常执行副作用，但不回包。
 
 use serde_json::{json, Value};
@@ -9,7 +10,9 @@ use serde_json::{json, Value};
 use crate::engine::{EngineHandle, RpcFault};
 
 /// 处理一行请求文本；返回 Some(响应文本) 或 None（通知/不回包）。
-pub fn handle_line(engine: &EngineHandle, line: &str) -> Option<String> {
+///
+/// `owner` 为发起连接的标识，仅供 openSession 记录会话归属（断线自动清理）。
+pub fn handle_line(engine: &EngineHandle, owner: u64, line: &str) -> Option<String> {
     let parsed: Result<Value, _> = serde_json::from_str(line);
     let value = match parsed {
         Ok(v) => v,
@@ -33,7 +36,7 @@ pub fn handle_line(engine: &EngineHandle, line: &str) -> Option<String> {
         None => return reply(is_notification, error_response(id, -32600, "Invalid Request：缺少 method 字符串".into())),
     };
     let params = obj.get("params").cloned().unwrap_or(Value::Null);
-    let response = match dispatch(engine, &method, &params) {
+    let response = match dispatch(engine, owner, &method, &params) {
         Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
         Err(fault) => error_response(id, fault.code, fault.message),
     };
@@ -52,12 +55,7 @@ fn error_response(id: Value, code: i64, message: String) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}})
 }
 
-/// 生成一条以 null 为 id 的错误响应文本（非请求路径，如二进制帧）。
-pub fn error_text(code: i64, message: impl Into<String>) -> String {
-    error_response(Value::Null, code, message.into()).to_string()
-}
-
-fn dispatch(engine: &EngineHandle, method: &str, params: &Value) -> Result<Value, RpcFault> {
+fn dispatch(engine: &EngineHandle, owner: u64, method: &str, params: &Value) -> Result<Value, RpcFault> {
     match method {
         "listDevices" => engine.list_devices(),
         "getState" => Ok(engine.get_state()),
@@ -78,6 +76,19 @@ fn dispatch(engine: &EngineHandle, method: &str, params: &Value) -> Result<Value
                 .ok_or_else(|| RpcFault::invalid_params("setParams 缺少 params.params"))?;
             engine.set_params(inner)
         }
+        // Phase 3（specs/service/push-stream.md）：推流会话生命周期方法。
+        "openSession" => {
+            let obj = params
+                .as_object()
+                .ok_or_else(|| RpcFault::invalid_params("openSession 需要 params 对象"))?;
+            engine.open_session(obj, owner)
+        }
+        "closeSession" => {
+            let obj = params
+                .as_object()
+                .ok_or_else(|| RpcFault::invalid_params("closeSession 需要 params 对象"))?;
+            engine.close_session(obj)
+        }
         other => Err(RpcFault::new(-32601, format!("Method not found：未知方法 {}", other))),
     }
 }
@@ -95,7 +106,7 @@ mod tests {
     }
 
     fn call(engine: &EngineHandle, line: &str) -> Option<Value> {
-        handle_line(engine, line).map(|t| serde_json::from_str(&t).unwrap())
+        handle_line(engine, 0, line).map(|t| serde_json::from_str(&t).unwrap())
     }
 
     #[test]
@@ -141,7 +152,7 @@ mod tests {
     #[test]
     fn 通知执行副作用但不回包() {
         let eng = engine();
-        let out = handle_line(&eng, r#"{"jsonrpc":"2.0","method":"configure","params":{"mode":"loopback","renderDeviceId":null,"sampleRate":48000,"blockSizeFrames":128}}"#);
+        let out = handle_line(&eng, 0, r#"{"jsonrpc":"2.0","method":"configure","params":{"mode":"loopback","renderDeviceId":null,"sampleRate":48000,"blockSizeFrames":128}}"#);
         assert!(out.is_none(), "通知不得回包");
         assert_eq!(eng.get_state()["config"]["blockSizeFrames"], 128, "副作用已生效");
     }
@@ -186,5 +197,98 @@ mod tests {
         // 运行中重复 stop / configure 都应被拒
         assert_eq!(call(&eng, r#"{"jsonrpc":"2.0","id":5,"method":"stop"}"#).unwrap()["error"]["code"], -32001);
         assert_eq!(call(&eng, cfg_line).is_some(), true); // idle 下又可配置了
+    }
+
+    fn configure_48k(engine: &EngineHandle) {
+        call(engine, r#"{"jsonrpc":"2.0","id":1,"method":"configure","params":{"mode":"loopback","renderDeviceId":null,"sampleRate":48000,"blockSizeFrames":64}}"#).unwrap();
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn openSession_未配置报32001_配置后成功回显granted() {
+        let eng = engine();
+        // 图未配置采样率 → -32001（specs/service/push-stream.md §3.1）
+        let r = call(&eng, r#"{"jsonrpc":"2.0","id":10,"method":"openSession","params":{"sampleRate":48000,"channels":2,"format":"f32le"}}"#).unwrap();
+        assert_eq!(r["error"]["code"], -32001);
+
+        configure_48k(&eng);
+        let r = call(&eng, r#"{"jsonrpc":"2.0","id":10,"method":"openSession","params":{"sampleRate":48000,"channels":2,"format":"f32le"}}"#).unwrap();
+        let res = &r["result"];
+        assert!(res["sessionId"].is_u64() && res["sessionId"].as_u64().unwrap() >= 1);
+        assert_eq!(res["granted"], serde_json::json!({"sampleRate": 48000, "channels": 2, "format": "f32le"}));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn openSession_协商违规报32602且不消耗id() {
+        let eng = engine();
+        configure_48k(&eng);
+        // GWT-PS-02：三种违规逐一拒绝
+        for params in [
+            r#"{"sampleRate":48000,"channels":1,"format":"f32le"}"#,
+            r#"{"sampleRate":48000,"channels":2,"format":"s16le"}"#,
+            r#"{"sampleRate":44100,"channels":2,"format":"f32le"}"#,
+        ] {
+            let line = format!(r#"{{"jsonrpc":"2.0","id":11,"method":"openSession","params":{}}}"#, params);
+            assert_eq!(call(&eng, &line).unwrap()["error"]["code"], -32602);
+        }
+        // 参数缺失 / 类型错误同属 -32602
+        assert_eq!(call(&eng, r#"{"jsonrpc":"2.0","id":11,"method":"openSession","params":{"channels":2,"format":"f32le"}}"#).unwrap()["error"]["code"], -32602);
+        assert_eq!(call(&eng, r#"{"jsonrpc":"2.0","id":11,"method":"openSession","params":{"sampleRate":48000,"channels":"2","format":"f32le"}}"#).unwrap()["error"]["code"], -32602);
+        assert_eq!(call(&eng, r#"{"jsonrpc":"2.0","id":11,"method":"openSession","params":{"sampleRate":48.5,"channels":2,"format":"f32le"}}"#).unwrap()["error"]["code"], -32602);
+        // 被拒请求未消耗 id：合法 open 得到的 id 严格递增且无空洞
+        let r = call(&eng, r#"{"jsonrpc":"2.0","id":12,"method":"openSession","params":{"sampleRate":48000,"channels":2,"format":"f32le"}}"#).unwrap();
+        assert_eq!(r["result"]["sessionId"], 1);
+        let r = call(&eng, r#"{"jsonrpc":"2.0","id":13,"method":"openSession","params":{"sampleRate":48000,"channels":2,"format":"f32le"}}"#).unwrap();
+        assert_eq!(r["result"]["sessionId"], 2);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn closeSession_成功回closed_未知与重复报32602() {
+        let eng = engine();
+        configure_48k(&eng);
+        // GWT-PS-04：未知 id 拒绝
+        assert_eq!(call(&eng, r#"{"jsonrpc":"2.0","id":14,"method":"closeSession","params":{"sessionId":7}}"#).unwrap()["error"]["code"], -32602);
+        let r = call(&eng, r#"{"jsonrpc":"2.0","id":15,"method":"openSession","params":{"sampleRate":48000,"channels":2,"format":"f32le"}}"#).unwrap();
+        let sid = r["result"]["sessionId"].as_u64().unwrap();
+        // 成功关闭
+        assert_eq!(call(&eng, &format!(r#"{{"jsonrpc":"2.0","id":16,"method":"closeSession","params":{{"sessionId":{sid}}}}}"#)).unwrap()["result"]["closed"], true);
+        // 重复 close 不幂等
+        assert_eq!(call(&eng, &format!(r#"{{"jsonrpc":"2.0","id":17,"method":"closeSession","params":{{"sessionId":{sid}}}}}"#)).unwrap()["error"]["code"], -32602);
+        // sessionId 类型错 / 缺失 → -32602
+        assert_eq!(call(&eng, r#"{"jsonrpc":"2.0","id":18,"method":"closeSession","params":{"sessionId":"7"}}"#).unwrap()["error"]["code"], -32602);
+        assert_eq!(call(&eng, r#"{"jsonrpc":"2.0","id":19,"method":"closeSession","params":{}}"#).unwrap()["error"]["code"], -32602);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn openSession_运行相位可开_会话跨启停存活() {
+        let eng = engine();
+        configure_48k(&eng);
+        let r = call(&eng, r#"{"jsonrpc":"2.0","id":20,"method":"openSession","params":{"sampleRate":48000,"channels":2,"format":"f32le"}}"#).unwrap();
+        let sid = r["result"]["sessionId"].as_u64().unwrap();
+        call(&eng, r#"{"jsonrpc":"2.0","id":21,"method":"start"}"#).unwrap();
+        assert_eq!(eng.get_state()["phase"], "running");
+        // 运行中再次打开与关闭均合法（会话与相位解耦）
+        let r2 = call(&eng, r#"{"jsonrpc":"2.0","id":22,"method":"openSession","params":{"sampleRate":48000,"channels":2,"format":"f32le"}}"#).unwrap();
+        assert!(r2["result"]["sessionId"].as_u64().unwrap() > sid);
+        assert_eq!(eng.sessions().active_ids().len(), 2);
+        call(&eng, r#"{"jsonrpc":"2.0","id":23,"method":"stop"}"#).unwrap();
+        assert_eq!(eng.get_state()["phase"], "idle");
+        assert_eq!(eng.sessions().active_ids().len(), 2, "stop 不影响会话生命周期");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn openSession_id空间耗尽报32000() {
+        let eng = engine();
+        configure_48k(&eng);
+        // 测试钩子把 id 计数推到 u32 上限：最后一个 id 仍可分配，其后耗尽 → -32000
+        eng.sessions().force_next_session_id(u32::MAX);
+        let open_line = r#"{"jsonrpc":"2.0","id":24,"method":"openSession","params":{"sampleRate":48000,"channels":2,"format":"f32le"}}"#;
+        let r = call(&eng, open_line).unwrap();
+        assert_eq!(r["result"]["sessionId"].as_u64().unwrap(), u32::MAX as u64);
+        assert_eq!(call(&eng, open_line).unwrap()["error"]["code"], -32000);
     }
 }

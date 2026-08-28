@@ -3,9 +3,17 @@
 //! 每个客户端连接一个线程；事件中枢线程消费数据面经有界通道转发来的事件，
 //! 序列化成通知后 try_send 给每个在线客户端（满/断开即剔除）。中枢同时
 //! 周期调用 poll_supervision 兜底数据面异常停机。
+//!
+//! **分流规则**（specs/service/push-stream.md §二，Phase 3 起二进制帧有语义）：
+//! 同端口复用同一条 WS 连接，按 opcode 分流——文本帧 → JSON-RPC 分发器；
+//! 二进制帧 → 音频入口解析器（sessions::ingest_frame，违规/未知会话一律
+//! 静默丢弃，不回错误不发事件）；Ping/Pong/Close 为传输层语义。
+//! 二进制帧入队发生在本连接线程（控制面线程允许阻塞/分配，§九），
+//! 不触碰 DSP/渲染线程的实时纪律。
 
 use std::collections::VecDeque;
 use std::net::{TcpListener, TcpStream};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -21,6 +29,8 @@ use crate::state::ServiceEvent;
 pub type ClientTable = Arc<Mutex<Vec<SyncSender<String>>>>;
 
 const HUB_TICK_MS: u64 = 50;
+/// 连接标识分配器：openSession 记录归属，断线时据此自动清理会话。
+static NEXT_CONN_ID: AtomicU64 = AtomicU64::new(1);
 
 /// 事件中枢主循环。
 pub fn run_hub(engine: Arc<EngineHandle>, rx: Receiver<ServiceEvent>, clients: ClientTable) {
@@ -75,8 +85,9 @@ fn render_event(engine: &EngineHandle, ev: ServiceEvent) -> String {
 /// 单连接处理：注册广播表 → 非阻塞轮询（读请求分派 + 转发事件通知）。
 ///
 /// tungstenite 同步栈无法跨线程拆分读写，故在单线程内以短轮询同时服务
-/// 入站请求与事件出站（控制面线程不受实时纪律约束）。
-fn handle_connection(stream: TcpStream, engine: &Arc<EngineHandle>, clients: &ClientTable) {
+/// 入站请求/推流帧与事件出站（控制面线程不受实时纪律约束）。
+/// 连接断开时自动清理本连接打开的全部推流会话（GWT-PS-06 防泄漏）。
+fn handle_connection(stream: TcpStream, engine: &Arc<EngineHandle>, clients: &ClientTable, owner: u64) {
     let _ = stream.set_nodelay(true);
     let mut ws = match tungstenite::accept(stream) {
         Ok(ws) => ws,
@@ -96,19 +107,21 @@ fn handle_connection(stream: TcpStream, engine: &Arc<EngineHandle>, clients: &Cl
         // —— 入站：逐帧读取（WouldBlock 视为暂无数据）——
         match ws.read() {
             Ok(Message::Text(text)) => {
-                if let Some(response) = rpc::handle_line(engine, &text) {
+                if let Some(response) = rpc::handle_line(engine, owner, &text) {
                     if ws.send(Message::text(response)).is_err() {
                         break;
                     }
                 }
             }
+            // 音频入口：二进制帧按帧头路由进会话环；违规/未知会话静默丢弃
+            // （GWT-PS-08/09/13：不回错误、不发事件、不影响文本通道）。
+            Ok(Message::Binary(bytes)) => {
+                engine.sessions().ingest_frame(&bytes);
+            }
             Ok(Message::Ping(payload)) => {
                 let _ = ws.send(Message::Pong(payload));
             }
             Ok(Message::Close(_)) => break,
-            Ok(Message::Binary(_)) => {
-                let _ = ws.send(Message::text(rpc::error_text(-32600, "不支持二进制帧，请发送 JSON 文本")));
-            }
             Ok(_) => {}
             Err(tungstenite::Error::ConnectionClosed) | Err(tungstenite::Error::AlreadyClosed) => break,
             Err(tungstenite::Error::Io(ref e)) if e.kind() == std::io::ErrorKind::WouldBlock => {}
@@ -130,6 +143,8 @@ fn handle_connection(stream: TcpStream, engine: &Arc<EngineHandle>, clients: &Cl
             std::thread::sleep(Duration::from_millis(2));
         }
     }
+    // 断线自动清理：本连接上打开的全部会话立即关闭，环内未消费块一并丢弃。
+    engine.sessions().close_owner(owner);
 }
 
 /// 接受循环：阻塞监听并逐连接开线程。
@@ -139,9 +154,10 @@ pub fn serve(listener: TcpListener, engine: Arc<EngineHandle>, clients: ClientTa
             Ok(stream) => {
                 let engine = Arc::clone(&engine);
                 let clients = Arc::clone(&clients);
+                let owner = NEXT_CONN_ID.fetch_add(1, Ordering::Relaxed);
                 let spawned = std::thread::Builder::new()
                     .name("hse-ctrl-conn".into())
-                    .spawn(move || handle_connection(stream, &engine, &clients));
+                    .spawn(move || handle_connection(stream, &engine, &clients, owner));
                 if let Err(e) = spawned {
                     eprintln!("[hse-service] 控制连接线程创建失败：{}", e);
                 }

@@ -22,6 +22,7 @@ use crate::backend::BackendFactory;
 use crate::dsp_chain::PilotSubchain;
 use crate::params::{parse_pilot_params, PilotParams};
 use crate::pipeline;
+use crate::sessions::{SessionIdExhausted, SessionTable};
 use crate::state::{Phase, ServiceConfig, ServiceEvent, StatsAtomic};
 
 /// 控制面错误（JSON-RPC 错误码 + 中文消息）。
@@ -80,20 +81,25 @@ struct EngineInner {
 pub struct EngineHandle {
     factory: Arc<dyn BackendFactory>,
     events: SyncSender<ServiceEvent>,
+    /// 推流会话表（specs/service/push-stream.md）：与相位解耦，随句柄存活。
+    sessions: Arc<SessionTable>,
     inner: Mutex<EngineInner>,
 }
 
 impl EngineHandle {
     pub fn new(factory: Arc<dyn BackendFactory>, events: SyncSender<ServiceEvent>) -> Self {
+        let stats = Arc::new(StatsAtomic::default());
+        let sessions = Arc::new(SessionTable::new(Arc::clone(&stats), events.clone()));
         Self {
             factory,
             events,
+            sessions,
             inner: Mutex::new(EngineInner {
                 phase: Phase::Idle,
                 config: None,
                 last_params_value: None,
                 pilot_params: PilotParams::default(),
-                stats: Arc::new(StatsAtomic::default()),
+                stats,
                 started_at: None,
                 run_flag: Arc::new(AtomicBool::new(false)),
                 err_flag: Arc::new(AtomicBool::new(false)),
@@ -146,6 +152,74 @@ impl EngineHandle {
             g.stats.xruns_in.load(Ordering::Relaxed),
             g.stats.xruns_out.load(Ordering::Relaxed),
         )
+    }
+
+    /// 推流会话表（server 层二进制帧入口与测试使用）。
+    pub fn sessions(&self) -> Arc<SessionTable> {
+        Arc::clone(&self.sessions)
+    }
+
+    /// openSession：打开推流会话（specs/service/push-stream.md §3.1）。
+    ///
+    /// 校验次序对齐 configure 的先例——状态类先行、结构类随后：
+    /// 未 configure（图未配置采样率）→ -32001；参数缺失/类型错/静态域非法
+    /// （channels≠2、format≠"f32le"）与 sampleRate≠图采样率 → -32602；
+    /// 全部通过才分配 id（被拒请求不消耗 id 空间）；u32 id 空间耗尽 → -32000。
+    /// 会话可在任意 phase 打开，与引擎相位解耦。
+    pub fn open_session(&self, params_obj: &Map<String, Value>, owner: u64) -> Result<Value, RpcFault> {
+        let graph_rate = {
+            let g = self.inner.lock().unwrap();
+            g.config
+                .as_ref()
+                .map(|c| c.sample_rate)
+                .ok_or_else(|| RpcFault::state_forbidden("图未配置采样率（尚未成功 configure），禁止 openSession"))?
+        };
+        let sample_rate = match params_obj.get("sampleRate").and_then(|v| v.as_u64()) {
+            Some(n) if n <= u32::MAX as u64 => n as u32,
+            _ => return Err(RpcFault::invalid_params("sampleRate 必须为 u32 整数")),
+        };
+        if sample_rate != graph_rate {
+            return Err(RpcFault::invalid_params(format!(
+                "sampleRate 必须等于引擎图采样率 {}", graph_rate
+            )));
+        }
+        let channels = match params_obj.get("channels").and_then(|v| v.as_u64()) {
+            Some(n) if n <= u16::MAX as u64 => n as u16,
+            _ => return Err(RpcFault::invalid_params("channels 必须为 u16 整数")),
+        };
+        if channels != 2 {
+            return Err(RpcFault::invalid_params("channels must be 2"));
+        }
+        let format = match params_obj.get("format").and_then(|v| v.as_str()) {
+            Some(f) => f,
+            None => return Err(RpcFault::invalid_params("format 必须为字符串")),
+        };
+        if format != "f32le" {
+            return Err(RpcFault::invalid_params("format 必须为 \"f32le\""));
+        }
+        let session_id = self
+            .sessions
+            .open(owner)
+            .map_err(|SessionIdExhausted| RpcFault::backend_failed("会话 id 空间耗尽"))?;
+        Ok(json!({
+            "sessionId": session_id,
+            "granted": {"sampleRate": sample_rate, "channels": channels, "format": format},
+        }))
+    }
+
+    /// closeSession：关闭推流会话（specs/service/push-stream.md §3.2）。
+    ///
+    /// 生效即时：环内未消费块直接丢弃；未知/已关闭 id → -32602（重复 close 不幂等）。
+    pub fn close_session(&self, params_obj: &Map<String, Value>) -> Result<Value, RpcFault> {
+        let session_id = match params_obj.get("sessionId").and_then(|v| v.as_u64()) {
+            Some(n) if n <= u32::MAX as u64 => n as u32,
+            _ => return Err(RpcFault::invalid_params("sessionId 必须为 u32 整数")),
+        };
+        if self.sessions.close(session_id) {
+            Ok(json!({"closed": true}))
+        } else {
+            Err(RpcFault::invalid_params(format!("sessionId {} 不存在或已关闭", session_id)))
+        }
     }
 
     /// framesProcessed 总量（测试/诊断用）。
@@ -302,6 +376,7 @@ impl EngineHandle {
             chain_rx,
             block_frames,
             deps,
+            Arc::clone(&self.sessions),
         );
 
         // 握手：等待两条流的开流结果（带超时）。失败则交还句柄给调用方收尾。

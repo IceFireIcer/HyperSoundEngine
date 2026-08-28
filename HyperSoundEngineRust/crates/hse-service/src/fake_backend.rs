@@ -14,17 +14,25 @@ fn test_sample(idx: u64) -> f32 {
     ((idx % 997) as f32 / 997.0) * 2.0 - 1.0
 }
 
-/// 假捕获源：每次 pull 产出确定斜坡帧；可选节拍（模拟实时到达）与计划性失败。
+/// 假捕获源：每次 pull 产出确定斜坡帧；可选节拍（模拟实时到达）、静音模式
+/// （恒返回 0 帧，模拟系统静默/无回环数据，供推流混合测试隔离回环源）与
+/// 计划性失败。
 pub struct FakeCapture {
     cursor: u64,
     period: Duration,
     format: StreamFormat,
     pulls: u64,
+    silent: bool,
 }
 
 impl FakeCapture {
     pub fn new(period: Duration, format: StreamFormat) -> Self {
-        Self { cursor: 0, period, format, pulls: 0 }
+        Self { cursor: 0, period, format, pulls: 0, silent: false }
+    }
+
+    /// 静音捕获源：pull 恒返回 0 帧（节拍仍生效，用于限制轮询节奏）。
+    pub fn silent(period: Duration, format: StreamFormat) -> Self {
+        Self { cursor: 0, period, format, pulls: 0, silent: true }
     }
 }
 
@@ -35,6 +43,12 @@ impl CaptureSource for FakeCapture {
 
     fn pull(&mut self, out: &mut [f32]) -> Result<usize, BackendError> {
         self.pulls += 1;
+        if self.silent {
+            if !self.period.is_zero() {
+                std::thread::sleep(self.period);
+            }
+            return Ok(0);
+        }
         let frames = out.len() / 2;
         for f in 0..frames {
             out[f * 2] = test_sample(self.cursor + f as u64);
@@ -87,7 +101,7 @@ impl RenderSink for FakeRender {
     }
 }
 
-struct FakeLoopbackOpener { opts: OpenOptions, period: Duration }
+struct FakeLoopbackOpener { opts: OpenOptions, period: Duration, silent: bool }
 impl CaptureOpener for FakeLoopbackOpener {
     fn open(self: Box<Self>) -> Result<Box<dyn CaptureSource>, BackendError> {
         if let Some(m) = &self.opts.device_id {
@@ -95,10 +109,13 @@ impl CaptureOpener for FakeLoopbackOpener {
                 return Err(BackendError::DeviceNotFound(m.clone()));
             }
         }
-        Ok(Box::new(FakeCapture::new(
-            self.period,
-            StreamFormat { sample_rate: self.opts.sample_rate, channels: 2 },
-        )))
+        let format = StreamFormat { sample_rate: self.opts.sample_rate, channels: 2 };
+        let src = if self.silent {
+            FakeCapture::silent(self.period, format)
+        } else {
+            FakeCapture::new(self.period, format)
+        };
+        Ok(Box::new(src))
     }
 }
 
@@ -117,7 +134,7 @@ impl RenderOpener for FakeRenderOpener {
     }
 }
 
-/// 假工厂：固定设备表 + 可配置节拍/开流失败。
+/// 假工厂：固定设备表 + 可配置节拍/静音捕获/开流失败。
 pub struct FakeFactory {
     pub devices: Vec<DeviceInfo>,
     pub render_received: Arc<Mutex<Vec<f32>>>,
@@ -125,6 +142,7 @@ pub struct FakeFactory {
     pub open_error: Option<String>,
     pub capture_period: Duration,
     pub render_period: Duration,
+    pub capture_silent: bool,
 }
 
 impl FakeFactory {
@@ -142,7 +160,16 @@ impl FakeFactory {
             open_error: None,
             capture_period,
             render_period,
+            capture_silent: false,
         })
+    }
+
+    /// 与 working 相同，但回环捕获恒静音（pull 恒返回 0 帧）：
+    /// 供推流混合测试隔离回环源，使渲染输出只含会话混音。
+    pub fn silent_loopback(capture_period: Duration, render_period: Duration) -> Arc<Self> {
+        let mut f = Self::working(capture_period, render_period);
+        Arc::get_mut(&mut f).expect("引用计数为 1").capture_silent = true;
+        f
     }
 
     /// 开流必失败的工厂（模拟无声卡/系统拒绝）。
@@ -154,6 +181,7 @@ impl FakeFactory {
             open_error: Some(message.into()),
             capture_period: Duration::ZERO,
             render_period: Duration::ZERO,
+            capture_silent: false,
         })
     }
 }
@@ -164,7 +192,7 @@ impl BackendFactory for FakeFactory {
     }
 
     fn loopback_opener(&self, opts: &OpenOptions) -> Box<dyn CaptureOpener> {
-        Box::new(FakeLoopbackOpener { opts: opts.clone(), period: self.capture_period })
+        Box::new(FakeLoopbackOpener { opts: opts.clone(), period: self.capture_period, silent: self.capture_silent })
     }
 
     fn render_opener(&self, opts: &OpenOptions) -> Box<dyn RenderOpener> {
