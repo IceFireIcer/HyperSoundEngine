@@ -17,13 +17,16 @@ import { describe, expect, it } from 'vitest'
 import { Biquad, type BiquadType } from '../src/dsp/biquad'
 import { Limiter } from '../src/dsp/Limiter'
 import { ReverbSimple, type ReverbSimpleParams } from '../src/dsp/ReverbSimple'
-import type { LimiterSettings } from '../src/types'
+import { Compressor } from '../src/dsp/Compressor'
+import { BassEnhancer } from '../src/dsp/BassEnhancer'
+import { MidSide } from '../src/dsp/MidSide'
+import type { LimiterSettings, CompressorSettings, BassEnhancerSettings } from '../src/types'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const VECTOR_DIR = resolve(fileURLToPath(import.meta.url), '..', '..', 'specs', 'dsp', 'vectors')
-const SUPPORTED_MODULES = ['biquad', 'limiter', 'reverb-simple'] as const
+const SUPPORTED_MODULES = ['biquad', 'limiter', 'reverb-simple', 'compressor', 'bass-enhancer', 'mid-side'] as const
 
 /** 向量 JSON 元数据（与 specs/dsp/vectors 契约一致） */
 interface VectorMeta {
@@ -152,6 +155,46 @@ function instantiate(
         const outL = l.slice()
         const outR = r.slice()
         reverb.processStereo(outL, outR)
+        return [outL, outR]
+      }
+    }
+    case 'compressor': {
+      const comp = new Compressor(sampleRate)
+      comp.setParams(params as unknown as CompressorSettings)
+      const useSidechain = params.sidechainEnabled === true
+      return (l, r) => {
+        const outL = l.slice()
+        const outR = r.slice()
+        if (useSidechain) {
+          // sidechain 向量语义（specs/dsp/compressor.md §4.5）：本块原始输入的
+          // 单声道和派生，双精度加法、就地处理前快照；sideL 与 sideR 内容相同。
+          const side = new Float32Array(l.length)
+          for (let i = 0; i < side.length; i++) side[i] = l[i] + r[i]
+          comp.processStereo(outL, outR, side, side)
+        } else {
+          comp.processStereo(outL, outR)
+        }
+        return [outL, outR]
+      }
+    }
+    case 'bass-enhancer': {
+      const bass = new BassEnhancer(sampleRate)
+      bass.setParams(params as unknown as BassEnhancerSettings)
+      return (l, r) => {
+        const outL = l.slice()
+        const outR = r.slice()
+        bass.processStereo(outL, outR)
+        return [outL, outR]
+      }
+    }
+    case 'mid-side': {
+      // MidSide 无采样率概念（构造无参）；setParams 为位置参数接口
+      const ms = new MidSide()
+      ms.setParams(params.width as number, params.voiceBalance as number)
+      return (l, r) => {
+        const outL = l.slice()
+        const outR = r.slice()
+        ms.processStereo(outL, outR)
         return [outL, outR]
       }
     }

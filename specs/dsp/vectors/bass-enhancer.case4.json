@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "module": "bass-enhancer",
+  "case": "case4",
+  "sampleRate": 48000,
+  "blockSize": 256,
+  "channels": 2,
+  "frames": 4800,
+  "params": {
+    "enabled": true,
+    "cutoffHz": 90,
+    "q": 0.7,
+    "harmonicType": "atan",
+    "harmonicGain": 1,
+    "mix": 1,
+    "levelDb": 6,
+    "lowBoostDb": -20
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "极值钳制组合：lowBoostDb=-20 越下界按 -6 生效（lowLin≈-0.499，低频带被衰减）、levelDb=+6 上界、harmonicGain/mix=1 上界（k=mix×harmonicGain×10^0.3≈1.995）；harmonicType=atan ATSR 器件曲线覆盖。左右为 55/60Hz 低音 + 2kHz 高频对照。帧数非整除（末块 192 帧）。"
+}

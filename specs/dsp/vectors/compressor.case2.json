@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "module": "compressor",
+  "case": "case2",
+  "sampleRate": 48000,
+  "blockSize": 384,
+  "channels": 2,
+  "frames": 9600,
+  "params": {
+    "enabled": true,
+    "thresholdDb": -20,
+    "ratio": 20,
+    "kneeDb": 0,
+    "attackMs": 5,
+    "releaseMs": 100,
+    "makeupDb": 6,
+    "outputGain": 1,
+    "sidechainEnabled": false
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "重压缩稳态：硬拐点 knee=0、ratio 20、makeup +6dB；左右同频满幅正弦（0.9/1.0）联合包络驱动，稳态输出收敛于阈值+makeup 附近，覆盖 attack 进入段与 release 维持段。帧数恰整除（25 块）。"
+}

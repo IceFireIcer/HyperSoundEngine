@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "module": "compressor",
+  "case": "case4",
+  "sampleRate": 48000,
+  "blockSize": 256,
+  "channels": 2,
+  "frames": 6000,
+  "params": {
+    "enabled": true,
+    "thresholdDb": -12,
+    "ratio": 8,
+    "kneeDb": 6,
+    "attackMs": 5,
+    "releaseMs": 120,
+    "makeupDb": 0,
+    "outputGain": 1,
+    "sidechainEnabled": true
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "sidechain 外部驱动：sidechainEnabled=true，sidechain 取本块原始输入的单声道和（sideL=sideR=inL+inR，双精度派生，见 specs/dsp/compressor.md §4.5）。左右去相关双正弦（800/500Hz）使单声道和包络与内部联合峰值包络显著可区分——驱动器若误用内部包络或错误派生将显著超差。帧数非整除（末块 112 帧）。"
+}

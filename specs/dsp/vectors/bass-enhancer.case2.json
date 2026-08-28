@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "module": "bass-enhancer",
+  "case": "case2",
+  "sampleRate": 48000,
+  "blockSize": 384,
+  "channels": 2,
+  "frames": 6000,
+  "params": {
+    "enabled": true,
+    "cutoffHz": 90,
+    "q": 0.7,
+    "harmonicType": "odd",
+    "harmonicGain": 0.8,
+    "mix": 0.6,
+    "levelDb": 0,
+    "lowBoostDb": 0
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "奇次谐波生成（与 case1 同输入成对对照）：x³ 生成 3 次谐波为主（60Hz→180Hz），谐波高通同 case1。lowBoostDb=0 默认关闭。帧数非整除（末块 240 帧）。"
+}

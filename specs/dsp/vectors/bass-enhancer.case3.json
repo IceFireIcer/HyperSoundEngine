@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "module": "bass-enhancer",
+  "case": "case3",
+  "sampleRate": 48000,
+  "blockSize": 500,
+  "channels": 2,
+  "frames": 6000,
+  "params": {
+    "enabled": true,
+    "cutoffHz": 90,
+    "q": 0.7,
+    "harmonicType": "odd",
+    "harmonicGain": 0.2,
+    "mix": 0.3,
+    "levelDb": 0,
+    "lowBoostDb": 6
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "低音下潜真实能量路径：lowBoostDb=+6 → lowLin=10^0.3-1≈0.995，低通提取的低频带近似翻倍混回；谐波路径低注入（harmonicGain 0.2 / mix 0.3）突出下潜路径。左右共享 55Hz 低音、去相关中频（440/660Hz）。blockSize=500 恰整除（12 块）。"
+}

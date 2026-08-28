@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "module": "mid-side",
+  "case": "case3",
+  "sampleRate": 48000,
+  "blockSize": 256,
+  "channels": 2,
+  "frames": 5000,
+  "params": {
+    "width": 1,
+    "voiceBalance": 0.75
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "人声路径（voiceBalance>0 侧衰减）：midGain=1、sideGain=1×(1-0.75)=0.25；输入共享 220Hz 中成分（人声语义）+ 去相关高频侧成分（880/1320Hz），中成分保持、侧成分衰减至 1/4。帧数非整除（末块 136 帧）。"
+}

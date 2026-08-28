@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "module": "mid-side",
+  "case": "case2",
+  "sampleRate": 48000,
+  "blockSize": 333,
+  "channels": 2,
+  "frames": 4096,
+  "params": {
+    "width": 0,
+    "voiceBalance": 0
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "单声道塌缩：width=0 → sideGain=0，侧信号完全去除，左右输出均为中信号 M（左右逐位相等）。输入与 case1 相同（成对对照）。blockSize=333 非整除（末块 100 帧）。"
+}

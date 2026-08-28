@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "module": "mid-side",
+  "case": "case4",
+  "sampleRate": 48000,
+  "blockSize": 480,
+  "channels": 2,
+  "frames": 5000,
+  "params": {
+    "width": 1,
+    "voiceBalance": 0
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "恒等锚点：width=1 且 voiceBalance=0，M/S 正逆变换在双精度中间量下精确还原 f32 输入，期望输出与输入逐位一致（跨实现对拍的最强精度锚点，捕获任何 f32 中间量精度纪律偏差）。输入与 case3 相同。帧数非整除（末块 200 帧）。"
+}

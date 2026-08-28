@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "module": "compressor",
+  "case": "case3",
+  "sampleRate": 44100,
+  "blockSize": 441,
+  "channels": 2,
+  "frames": 4800,
+  "params": {
+    "enabled": true,
+    "thresholdDb": -30,
+    "ratio": 4,
+    "kneeDb": 45,
+    "attackMs": 2,
+    "releaseMs": 80,
+    "makeupDb": 0,
+    "outputGain": 1,
+    "sidechainEnabled": false
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "软拐点膝区 + kneeDb 越上界钳制（45 按 40 生效）：输入包络稳态落于膝区内部，压缩量按二次曲线软化。多采样率覆盖：44100 下 attack/release 系数随 fs 变化（压缩器无内部采样率耦合，可安全多率）。blockSize=441 恰为该采样率 10ms，帧数非整除（末块 390 帧）。"
+}

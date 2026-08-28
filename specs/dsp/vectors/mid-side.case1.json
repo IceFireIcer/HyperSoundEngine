@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "module": "mid-side",
+  "case": "case1",
+  "sampleRate": 48000,
+  "blockSize": 256,
+  "channels": 2,
+  "frames": 4096,
+  "params": {
+    "width": 2.5,
+    "voiceBalance": 0
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "宽度展宽 + width 越上界钳制（2.5 按 2 生效）：midGain=1、sideGain=2，侧信号放大、中信号不变；左右去相关双正弦（330/550Hz）提供丰富侧成分。本模块无采样率概念，sampleRate 为契约字段（不传入模块）。帧数恰整除（16 块）。"
+}

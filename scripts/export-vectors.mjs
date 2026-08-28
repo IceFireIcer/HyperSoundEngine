@@ -5,7 +5,8 @@
  * 用法：node scripts/export-vectors.mjs
  *
  * 职责：
- *  - 以 TS 支线（src/）为行为事实标准，为 biquad / limiter / reverb-simple 三个模块
+ *  - 以 TS 支线（src/）为行为事实标准，为 biquad / limiter / reverb-simple /
+ *    compressor / bass-enhancer / mid-side 六个模块
  *    导出确定性对拍向量到 specs/dsp/vectors/<module>.<case>.json 与同名 .f32；
  *  - 向量格式契约（两支线共享，见 specs/ 目录规划文档）：
  *      JSON：schemaVersion=1 / module / case / sampleRate / blockSize / channels=2 /
@@ -16,9 +17,10 @@
  *            期望输出 = 逐块输出按序拼接；
  *      容差：|got-want| <= value * max(|want|, floor)。
  *
- * 模块加载方案：优先 Node 原生 type-stripping 直接 import src/*.ts（三个模块仅含
- * 可擦除语法且运行时零相对导入，Node >=23.6 默认支持）；若失败则回退用 devDependencies
- * 中已有的 esbuild 把所需模块打包成临时 mjs 再动态导入。不新增任何依赖。
+ * 模块加载方案：优先 Node 原生 type-stripping 直接 import src/*.ts（Node >=23.6 默认
+ * 支持）；bass-enhancer 含运行时相对导入（'./biquad'，无扩展名），原生加载会失败，
+ * 此时整体回退用 devDependencies 中已有的 esbuild 把所需模块打包成临时 mjs 再动态
+ * 导入。不新增任何依赖。两种策略对同一 TS 源的浮点语义逐位等价，不影响向量字节一致性。
  *
  * 冻结纪律：向量一旦生成即为冻结基线。本脚本重复运行时逐字节比对既有文件——
  * 内容一致则跳过写入；不一致则直接报错拒绝覆盖（防止任何一方单方面修改基线）。
@@ -49,6 +51,9 @@ const MODULE_SOURCES = [
   { id: 'biquad', file: 'biquad.ts' },
   { id: 'limiter', file: 'Limiter.ts' },
   { id: 'reverb-simple', file: 'ReverbSimple.ts' },
+  { id: 'compressor', file: 'Compressor.ts' },
+  { id: 'bass-enhancer', file: 'BassEnhancer.ts' },
+  { id: 'mid-side', file: 'MidSide.ts' },
 ]
 
 /**
@@ -288,6 +293,159 @@ const CASES = [
       { freqHz: 5200, amp: 0.25, phaseRad: (3 * Math.PI) / 4 },
     ]),
   },
+
+  // ---------- compressor ----------
+  {
+    module: 'compressor',
+    caseId: 'case1',
+    sampleRate: 48000,
+    blockSize: 256,
+    params: { enabled: true, thresholdDb: -6, ratio: 4, kneeDb: 6, attackMs: 10, releaseMs: 150, makeupDb: 0, outputGain: 1, sidechainEnabled: false },
+    notes: '阈下直通锚点：输入峰值约 -34dBFS，包络稳态低于下膝点（-6-6/2=-9dBFS），压缩量恒 0、增益恰为 1，期望输出与输入逐位一致。左=低幅 LCG 噪声，右=低幅 440Hz 正弦。帧数非整除（末块 192 帧）。',
+    inputL: (n) => lcgNoise(n, 31337, 0.02),
+    inputR: (n, fs) => sine(n, fs, 440, 0.015),
+  },
+  {
+    module: 'compressor',
+    caseId: 'case2',
+    sampleRate: 48000,
+    blockSize: 384,
+    params: { enabled: true, thresholdDb: -20, ratio: 20, kneeDb: 0, attackMs: 5, releaseMs: 100, makeupDb: 6, outputGain: 1, sidechainEnabled: false },
+    notes: '重压缩稳态：硬拐点 knee=0、ratio 20、makeup +6dB；左右同频满幅正弦（0.9/1.0）联合包络驱动，稳态输出收敛于阈值+makeup 附近，覆盖 attack 进入段与 release 维持段。帧数恰整除（25 块）。',
+    inputL: (n, fs) => sine(n, fs, 1000, 1.0),
+    inputR: (n, fs) => sine(n, fs, 1000, 0.9),
+  },
+  {
+    module: 'compressor',
+    caseId: 'case3',
+    sampleRate: 44100,
+    blockSize: 441,
+    params: { enabled: true, thresholdDb: -30, ratio: 4, kneeDb: 45, attackMs: 2, releaseMs: 80, makeupDb: 0, outputGain: 1, sidechainEnabled: false },
+    notes: '软拐点膝区 + kneeDb 越上界钳制（45 按 40 生效）：输入包络稳态落于膝区内部，压缩量按二次曲线软化。多采样率覆盖：44100 下 attack/release 系数随 fs 变化（压缩器无内部采样率耦合，可安全多率）。blockSize=441 恰为该采样率 10ms，帧数非整除（末块 390 帧）。',
+    inputL: (n, fs) => sine(n, fs, 220, 0.12),
+    inputR: (n, fs) => sineSum(n, fs, [
+      { freqHz: 220, amp: 0.08, phaseRad: 0 },
+      { freqHz: 1760, amp: 0.05, phaseRad: Math.PI / 6 },
+    ]),
+  },
+  {
+    module: 'compressor',
+    caseId: 'case4',
+    sampleRate: 48000,
+    blockSize: 256,
+    params: { enabled: true, thresholdDb: -12, ratio: 8, kneeDb: 6, attackMs: 5, releaseMs: 120, makeupDb: 0, outputGain: 1, sidechainEnabled: true },
+    notes: 'sidechain 外部驱动：sidechainEnabled=true，sidechain 取本块原始输入的单声道和（sideL=sideR=inL+inR，双精度派生，见 specs/dsp/compressor.md §4.5）。左右去相关双正弦（800/500Hz）使单声道和包络与内部联合峰值包络显著可区分——驱动器若误用内部包络或错误派生将显著超差。帧数非整除（末块 112 帧）。',
+    inputL: (n, fs) => sine(n, fs, 800, 0.9),
+    inputR: (n, fs) => sine(n, fs, 500, 0.9),
+  },
+
+  // ---------- bass-enhancer ----------
+  {
+    module: 'bass-enhancer',
+    caseId: 'case1',
+    sampleRate: 48000,
+    blockSize: 256,
+    params: { enabled: true, cutoffHz: 90, q: 0.7, harmonicType: 'even', harmonicGain: 0.8, mix: 0.6, levelDb: 0, lowBoostDb: 0 },
+    notes: '偶次谐波生成：60Hz 正弦（低于截止 90Hz）经 |x| 全波整流生成偶次谐波，DC 由谐波高通 max(150, 90×1.5)=150Hz 去除。lowBoostDb=0（默认关闭）：下潜项逐位消失，输出与不含低音下潜路径的实现逐位一致。左右同相 60Hz。帧数非整除（末块 112 帧）。',
+    inputL: (n, fs) => sine(n, fs, 60, 0.8),
+    inputR: (n, fs) => sine(n, fs, 60, 0.8),
+  },
+  {
+    module: 'bass-enhancer',
+    caseId: 'case2',
+    sampleRate: 48000,
+    blockSize: 384,
+    params: { enabled: true, cutoffHz: 90, q: 0.7, harmonicType: 'odd', harmonicGain: 0.8, mix: 0.6, levelDb: 0, lowBoostDb: 0 },
+    notes: '奇次谐波生成（与 case1 同输入成对对照）：x³ 生成 3 次谐波为主（60Hz→180Hz），谐波高通同 case1。lowBoostDb=0 默认关闭。帧数非整除（末块 240 帧）。',
+    inputL: (n, fs) => sine(n, fs, 60, 0.8),
+    inputR: (n, fs) => sine(n, fs, 60, 0.8),
+  },
+  {
+    module: 'bass-enhancer',
+    caseId: 'case3',
+    sampleRate: 48000,
+    blockSize: 500,
+    params: { enabled: true, cutoffHz: 90, q: 0.7, harmonicType: 'odd', harmonicGain: 0.2, mix: 0.3, levelDb: 0, lowBoostDb: 6 },
+    notes: '低音下潜真实能量路径：lowBoostDb=+6 → lowLin=10^0.3-1≈0.995，低通提取的低频带近似翻倍混回；谐波路径低注入（harmonicGain 0.2 / mix 0.3）突出下潜路径。左右共享 55Hz 低音、去相关中频（440/660Hz）。blockSize=500 恰整除（12 块）。',
+    inputL: (n, fs) => sineSum(n, fs, [
+      { freqHz: 55, amp: 0.6, phaseRad: 0 },
+      { freqHz: 440, amp: 0.25, phaseRad: Math.PI / 5 },
+    ]),
+    inputR: (n, fs) => sineSum(n, fs, [
+      { freqHz: 55, amp: 0.6, phaseRad: 0 },
+      { freqHz: 660, amp: 0.2, phaseRad: Math.PI / 3 },
+    ]),
+  },
+  {
+    module: 'bass-enhancer',
+    caseId: 'case4',
+    sampleRate: 48000,
+    blockSize: 256,
+    params: { enabled: true, cutoffHz: 90, q: 0.7, harmonicType: 'atan', harmonicGain: 1, mix: 1, levelDb: 6, lowBoostDb: -20 },
+    notes: '极值钳制组合：lowBoostDb=-20 越下界按 -6 生效（lowLin≈-0.499，低频带被衰减）、levelDb=+6 上界、harmonicGain/mix=1 上界（k=mix×harmonicGain×10^0.3≈1.995）；harmonicType=atan ATSR 器件曲线覆盖。左右为 55/60Hz 低音 + 2kHz 高频对照。帧数非整除（末块 192 帧）。',
+    inputL: (n, fs) => sineSum(n, fs, [
+      { freqHz: 60, amp: 0.7, phaseRad: 0 },
+      { freqHz: 2000, amp: 0.15, phaseRad: Math.PI / 4 },
+    ]),
+    inputR: (n, fs) => sineSum(n, fs, [
+      { freqHz: 55, amp: 0.7, phaseRad: 0 },
+      { freqHz: 2000, amp: 0.15, phaseRad: Math.PI / 4 },
+    ]),
+  },
+
+  // ---------- mid-side ----------
+  {
+    module: 'mid-side',
+    caseId: 'case1',
+    sampleRate: 48000,
+    blockSize: 256,
+    params: { width: 2.5, voiceBalance: 0 },
+    notes: '宽度展宽 + width 越上界钳制（2.5 按 2 生效）：midGain=1、sideGain=2，侧信号放大、中信号不变；左右去相关双正弦（330/550Hz）提供丰富侧成分。本模块无采样率概念，sampleRate 为契约字段（不传入模块）。帧数恰整除（16 块）。',
+    inputL: (n, fs) => sine(n, fs, 330, 0.5),
+    inputR: (n, fs) => sine(n, fs, 550, 0.5),
+  },
+  {
+    module: 'mid-side',
+    caseId: 'case2',
+    sampleRate: 48000,
+    blockSize: 333,
+    params: { width: 0, voiceBalance: 0 },
+    notes: '单声道塌缩：width=0 → sideGain=0，侧信号完全去除，左右输出均为中信号 M（左右逐位相等）。输入与 case1 相同（成对对照）。blockSize=333 非整除（末块 100 帧）。',
+    inputL: (n, fs) => sine(n, fs, 330, 0.5),
+    inputR: (n, fs) => sine(n, fs, 550, 0.5),
+  },
+  {
+    module: 'mid-side',
+    caseId: 'case3',
+    sampleRate: 48000,
+    blockSize: 256,
+    params: { width: 1, voiceBalance: 0.75 },
+    notes: '人声路径（voiceBalance>0 侧衰减）：midGain=1、sideGain=1×(1-0.75)=0.25；输入共享 220Hz 中成分（人声语义）+ 去相关高频侧成分（880/1320Hz），中成分保持、侧成分衰减至 1/4。帧数非整除（末块 136 帧）。',
+    inputL: (n, fs) => sineSum(n, fs, [
+      { freqHz: 220, amp: 0.4, phaseRad: 0 },
+      { freqHz: 880, amp: 0.2, phaseRad: Math.PI / 6 },
+    ]),
+    inputR: (n, fs) => sineSum(n, fs, [
+      { freqHz: 220, amp: 0.4, phaseRad: 0 },
+      { freqHz: 1320, amp: 0.2, phaseRad: Math.PI / 3 },
+    ]),
+  },
+  {
+    module: 'mid-side',
+    caseId: 'case4',
+    sampleRate: 48000,
+    blockSize: 480,
+    params: { width: 1, voiceBalance: 0 },
+    notes: '恒等锚点：width=1 且 voiceBalance=0，M/S 正逆变换在双精度中间量下精确还原 f32 输入，期望输出与输入逐位一致（跨实现对拍的最强精度锚点，捕获任何 f32 中间量精度纪律偏差）。输入与 case3 相同。帧数非整除（末块 200 帧）。',
+    inputL: (n, fs) => sineSum(n, fs, [
+      { freqHz: 220, amp: 0.4, phaseRad: 0 },
+      { freqHz: 880, amp: 0.2, phaseRad: Math.PI / 6 },
+    ]),
+    inputR: (n, fs) => sineSum(n, fs, [
+      { freqHz: 220, amp: 0.4, phaseRad: 0 },
+      { freqHz: 1320, amp: 0.2, phaseRad: Math.PI / 3 },
+    ]),
+  },
 ]
 
 // ==================== 模块实例化与分块处理 ====================
@@ -332,6 +490,49 @@ function instantiateProcessor(modules, moduleId, sampleRate, params) {
         const outL = l.slice()
         const outR = r.slice()
         reverb.processStereo(outL, outR)
+        return [outL, outR]
+      }
+    }
+    case 'compressor': {
+      if (!modules.compressor || !modules.compressor.Compressor) throw new Error('compressor 模块加载失败')
+      const comp = new modules.compressor.Compressor(sampleRate)
+      comp.setParams(params)
+      const useSidechain = params.sidechainEnabled === true
+      return (l, r) => {
+        const outL = l.slice()
+        const outR = r.slice()
+        if (useSidechain) {
+          // sidechain 向量语义（见 specs/dsp/compressor.md §4.5）：本块原始输入的
+          // 单声道和派生，双精度加法、就地处理前快照；sideL 与 sideR 内容相同。
+          const side = new Float32Array(l.length)
+          for (let i = 0; i < side.length; i++) side[i] = l[i] + r[i]
+          comp.processStereo(outL, outR, side, side)
+        } else {
+          comp.processStereo(outL, outR)
+        }
+        return [outL, outR]
+      }
+    }
+    case 'bass-enhancer': {
+      if (!modules['bass-enhancer'] || !modules['bass-enhancer'].BassEnhancer) throw new Error('bass-enhancer 模块加载失败')
+      const bass = new modules['bass-enhancer'].BassEnhancer(sampleRate)
+      bass.setParams(params)
+      return (l, r) => {
+        const outL = l.slice()
+        const outR = r.slice()
+        bass.processStereo(outL, outR)
+        return [outL, outR]
+      }
+    }
+    case 'mid-side': {
+      if (!modules['mid-side'] || !modules['mid-side'].MidSide) throw new Error('mid-side 模块加载失败')
+      // MidSide 无采样率概念（构造无参）；setParams 为位置参数接口
+      const ms = new modules['mid-side'].MidSide()
+      ms.setParams(params.width, params.voiceBalance)
+      return (l, r) => {
+        const outL = l.slice()
+        const outR = r.slice()
+        ms.processStereo(outL, outR)
         return [outL, outR]
       }
     }
@@ -462,6 +663,18 @@ const FRAME_COUNTS = {
   'reverb-simple.case1': 8192,
   'reverb-simple.case2': 4000,
   'reverb-simple.case3': 6000,
+  'compressor.case1': 4800,
+  'compressor.case2': 9600,
+  'compressor.case3': 4800,
+  'compressor.case4': 6000,
+  'bass-enhancer.case1': 6000,
+  'bass-enhancer.case2': 6000,
+  'bass-enhancer.case3': 6000,
+  'bass-enhancer.case4': 4800,
+  'mid-side.case1': 4096,
+  'mid-side.case2': 4096,
+  'mid-side.case3': 5000,
+  'mid-side.case4': 5000,
 }
 
 main().catch((err) => {
