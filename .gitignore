@@ -9,5 +9,8 @@ dist
 # 独立 git 仓库：各模型调研参考文档
 referencesDocs/
 
+# 本地协作代码参考（temp/）
+temp/
+
 # Rust 支线构建产物（HyperSoundEngineRust/）
 target/

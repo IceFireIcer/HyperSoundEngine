@@ -9,4 +9,8 @@ export default defineConfig({
   esbuild: {
     jsx: 'automatic',
   },
+  test: {
+    // 排除本地不入库目录（.gitignore 中的归档/草稿），其中的测试不进主套件
+    exclude: ['**/node_modules/**', '**/dist/**', 'temp/**', '.scratch/**', '.hse-bench/**', 'referencesDocs/**'],
+  },
 })
