@@ -17,6 +17,7 @@
 - vitest 配置显式排除本地不入库目录（.gitignore 中的归档/草稿），其中的测试文件不再被主套件扫描。
 
 ### Fixed
+- **服务控制面 configure 校验对齐规格（GWT-CP-06/08）**：校验顺序改为相位(-32001)→结构(-32602)→后端枚举(-32000)，非 null renderDeviceId 必须命中当前渲染端点枚举；fake 后端补 2 条回归用例。**Phase 2 真机端到端验收 14/14 PASS**（回环拦截→试点子链→渲染全链跑通；记录见 `docs/audit/service-phase2-acceptance.md`，8h 零 xrun 长跑与虚拟缆路径待正式播放器/VB-CABLE 后补测）。
 - **旁通→重新启用爆音修复**：级从 disabled→enabled 时清空对应模块流状态（延迟线/全通链/卷积缓冲/包络），避免旁通窗口积压的旧音频被回放（pop/串音）；覆盖 Pre-EQ/Deesser/Compressor/NightMode/Delay/Chorus/Flanger/Phaser/Tremolo/混响三路/BassEnhancer/LoudnessComp/IEQ/DynamicEq/Limiter。
 - **consumeMidiQueue 稳态零分配**：MIDI 平滑 alpha 缓存 Map 提为实例字段复用（clear 复用不分配），收敛循环去除逐绑定闭包分配，兑现引擎文件头"process() 内零分配"承诺。
 
