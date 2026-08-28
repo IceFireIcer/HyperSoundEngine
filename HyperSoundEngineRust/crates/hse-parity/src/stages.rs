@@ -1,15 +1,19 @@
 //! 模块分发器：按向量用例的 `module` id 构造被测阶段。
 //!
-//! 已落地的试点模块从 hse-core 构造真实实现；尚未落地的模块一律回退
-//! [`PassthroughStage`]（数值 FAIL 属预期，与 Phase 0 行为一致）。
-//! 参数字段名以 TS 源码为准（camelCase），缺失/类型不符即报夹具错误。
+//! 已落地的模块（biquad / limiter / reverb-simple / compressor / bass-enhancer /
+//! mid-side）从 hse-core 构造真实实现；尚未落地的模块一律回退
+//! [`PassthroughStage`]（数值 FAIL 属预期）。参数字段名以 TS 源码为准
+//! （camelCase），缺失/类型不符即报夹具错误。
 
 use serde_json::{Map, Value};
 
 use crate::runner::PassthroughStage;
 use crate::vector::VectorCase;
+use hse_core::bass_enhancer::{BassEnhancerSettings, BassEnhancerStage};
 use hse_core::biquad::BiquadStage;
+use hse_core::compressor::{CompressorSettings, CompressorStage};
 use hse_core::limiter::{LimiterSettings, LimiterStage};
+use hse_core::mid_side::MidSideStage;
 use hse_core::reverb_simple::{ReverbSimpleParams, ReverbSimpleStage};
 use hse_core::Stage;
 
@@ -50,6 +54,44 @@ pub fn make_stage(case: &VectorCase) -> Result<Box<dyn Stage>, String> {
                 reverb_type: string_field(obj, "type")?,
             },
         )?)),
+        "compressor" => Ok(Box::new(CompressorStage::from_settings(
+            case.sample_rate,
+            CompressorSettings {
+                enabled: bool_field(obj, "enabled")?,
+                threshold_db: number_field(obj, "thresholdDb")?,
+                ratio: number_field(obj, "ratio")?,
+                knee_db: number_field(obj, "kneeDb")?,
+                attack_ms: number_field(obj, "attackMs")?,
+                release_ms: number_field(obj, "releaseMs")?,
+                makeup_db: number_field(obj, "makeupDb")?,
+                output_gain: number_field(obj, "outputGain")?,
+                // TS 可选字段；向量固定显式给出，缺省按 false（undefined 语义）。
+                // 置 true 时按 specs/dsp/compressor.md §4.5 由阶段内派生单声道和
+                // sidechain（sideL=sideR=inL+inR，f64 加法、f32 快照、处理前快照）。
+                sidechain_enabled: optional_bool_field(obj, "sidechainEnabled")?,
+            },
+        )?)),
+        "bass-enhancer" => Ok(Box::new(BassEnhancerStage::from_settings(
+            case.sample_rate,
+            BassEnhancerSettings {
+                enabled: bool_field(obj, "enabled")?,
+                cutoff_hz: number_field(obj, "cutoffHz")?,
+                q: number_field(obj, "q")?,
+                harmonic_type: string_field(obj, "harmonicType")?,
+                harmonic_gain: number_field(obj, "harmonicGain")?,
+                mix: number_field(obj, "mix")?,
+                level_db: number_field(obj, "levelDb")?,
+                // TS 可选字段：缺省/null 交由模块内 Number.isFinite 防御按 0 处理。
+                low_boost_db: optional_number_field(obj, "lowBoostDb")?,
+            },
+        )?)),
+        "mid-side" => {
+            // MidSide 无采样率概念（构造无参，规格 mid-side §4.4）；
+            // setParams 为位置参数接口，sampleRate 不得传入模块。
+            let mut stage = MidSideStage::new();
+            stage.set_params(number_field(obj, "width")?, number_field(obj, "voiceBalance")?);
+            Ok(Box::new(stage))
+        }
         // 未落地模块：直通占位（FAIL 属预期，证明比对链路仍在工作）。
         _ => Ok(Box::new(PassthroughStage)),
     }
@@ -78,5 +120,26 @@ fn bool_field(obj: &Map<String, Value>, key: &str) -> Result<bool, String> {
         Some(Value::Bool(b)) => Ok(*b),
         Some(other) => Err(format!("params.{key} 必须是布尔，实际 {other}")),
         None => Err(format!("缺少 params.{key}")),
+    }
+}
+
+/// TS 可选布尔字段：缺省/null 视为 false（undefined 语义）。
+fn optional_bool_field(obj: &Map<String, Value>, key: &str) -> Result<bool, String> {
+    match obj.get(key) {
+        None | Some(Value::Null) => Ok(false),
+        Some(Value::Bool(b)) => Ok(*b),
+        Some(other) => Err(format!("params.{key} 必须是布尔，实际 {other}")),
+    }
+}
+
+/// TS 可选数字字段：缺省/null 映射为 None（由模块内缺省/防御逻辑决定取值）。
+fn optional_number_field(obj: &Map<String, Value>, key: &str) -> Result<Option<f64>, String> {
+    match obj.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(n)) => n
+            .as_f64()
+            .map(Some)
+            .ok_or_else(|| format!("params.{key} 不是可表示为 f64 的数字")),
+        Some(other) => Err(format!("params.{key} 必须是数字，实际 {other}")),
     }
 }

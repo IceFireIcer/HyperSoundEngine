@@ -16,8 +16,11 @@
 //! - **就地处理**：[`Stage::process`] 直接改写传入的左右声道切片，
 //!   不额外产出新缓冲（对齐 TS 支线 `processStereo` 的就地语义）。
 
+pub mod bass_enhancer;
 pub mod biquad;
+pub mod compressor;
 pub mod limiter;
+pub mod mid_side;
 pub mod reverb_simple;
 
 /// 处理链中的单个阶段：立体声、就地、按块处理。
