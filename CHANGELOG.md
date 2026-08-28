@@ -11,6 +11,9 @@
 - `test/stretch-signalsmith.test.ts`：signalsmith 可选路径测试——注入缝端到端驱动适配器胶水（分块记账/交织无损/防御回退）+ `skipIf` 门控的同步类接口 DSP 端到端组。实测结论：官方 npm 包（default 导出的 AudioWorklet 工厂）与 `isSignalsmithAvailable` 的同步类接口探测不匹配，适配路径当前不可达、恒走自研相位声码器，该事实由测试固化。
 
 ### Changed
+- **分享串 v2 紧凑格式（HSE2，`SHARE_CODEC_VERSION`=2）**：载荷只存与默认参数的差异项（sampleRate 强制携带），传输改用 Crockford Base32（去 I/L/O/U 易混字符、大小写不敏感、容忍空白/连字符噪声）并按 5 字符分组；典型分享串从 ~2000 字符量级降至 64–900 字符。**v1 旧串持续可导入**（迁移语义，双向兼容）；新增传输/版本正交解析、Crockford 容错与长度上界回归测试；`docs/VERSIONING.md` 分享串版本说明同步。
+- **调音室分享页重做**：分享串随参数自动刷新、字符数/格式提示、导入错误行内展示、串盒聚焦全选；theme 新增 `errorColor` 令牌。
+- **移除均衡器页局部 JSON 导入导出**：完整参数分享统一走调音器页「分享串」（v2 兼容旧串，旧 EQ JSON 局部导入入口一并下线）。
 - **响度归一化双时间常数平滑**：`externalGainDb` 手动增益分支平滑时间常数 3s→80ms（拖动音量即时跟随、无 zipper），实时 AGC 分支保持 3s 防抽吸语义不变。
 - **宿主 setParams 去重**：`HyperSoundEngineHost.setParams` 与上次参数逐字段一致时跳过整链系数重配与 worklet `postMessage`（React 重复渲染/拖拽静止帧零开销）；IR（Float32Array）以引用身份参与指纹，不做逐样本序列化；`dispose` 后指纹复位。
 - 移除 optionalDependencies 中从未被引擎代码引用的 `meyda`（特征提取均为自研实现）。

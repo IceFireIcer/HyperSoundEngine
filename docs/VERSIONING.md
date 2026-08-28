@@ -33,7 +33,7 @@
 
 ## 分享串（ShareCodec）
 
-- `SHARE_CODEC_VERSION` 当前为 `1`；encode 恒写当前值，decode 仅接受当前值。
+- `SHARE_CODEC_VERSION` 当前为 `2`（v2 载荷 = 仅存与默认参数的差异项 + HSE2/Crockford Base32 分组传输）；v1 全量载荷旧串持续可解码（迁移语义）；encode 恒写当前值，decode 接受 1/2 两代。
 - 升级版本号必须走 MAJOR 并提供旧串迁移逻辑；禁止静默兼容多版本。
 
 ## CHANGELOG 纪律

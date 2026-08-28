@@ -168,3 +168,41 @@ describe('encodeShareCode / decodeShareCode', () => {
     expect(decoded.reverb.convolution.irName!.length).toBeLessThanOrEqual(256)
   })
 });
+describe('v2 紧凑格式（HSE2 / Crockford Base32 / 默认差异载荷）', () => {
+  it('HSE2 前缀 + 显著短于 v1 全量载荷', () => {
+    const p = createDefaultParams(48000)
+    p.customized = true
+    p.sceneId = 'jazz'
+    p.eq.proBands[0] = { frequency: 40, gain: 3.5, q: 0.8 }
+    const v2 = encodeShareCode(p)
+    expect(v2.startsWith('HSE2-')).toBe(true)
+    expect(v2).toMatch(/^HSE2-[0-9A-Z-]+$/) // Crockford 字母表 + 分组连字符
+    // 紧凑性上界：同参数 v1 全量快照实测 >1900 字符（数组/全部 section 必须整体携带）；
+    // v2 只携带差异子树（数组整体比较，proBands 有差异则全数组入载荷）
+    expect(v2.length).toBeLessThan(1000)
+  })
+
+  it('v1 旧串兼容：base64url 全量载荷持续可解码（迁移语义）', () => {
+    const full = JSON.stringify({ sampleRate: 48000, deesser: { enabled: true, thresholdDb: -40 }, limiter: { thresholdDb: -0.5 } })
+    const decoded = decodeShareCode(makeRawShare(full, 1))
+    expect(decoded.sampleRate).toBe(48000)
+    expect(decoded.deesser.enabled).toBe(true)
+    expect(decoded.deesser.thresholdDb).toBe(-40)
+    expect(decoded.limiter.thresholdDb).toBe(-0.5)
+    // 未携带的 section 由默认骨架补齐
+    expect(decoded.eq.enabled).toBe(true)
+  })
+
+  it('Crockford 容错：小写 / 易混字符（O→0、I→1）/ 空白噪声均可解码出同结果', () => {
+    const s = encodeShareCode(createDefaultParams(48000))
+    const noisy = s.replace(/0/g, 'O').replace(/-/g, ' ').toLowerCase()
+    expect(decodeShareCode(noisy)).toEqual(decodeShareCode(s))
+  })
+
+  it('纯默认参数 → 极短分享串（差异载荷语义）', () => {
+    const s = encodeShareCode(createDefaultParams(48000))
+    // 骨架外仅 sampleRate 一项（载荷 envelope ≈ 32 字节 → 64 字符含前缀与分组）
+    expect(s.length).toBeLessThan(80)
+    expect(decodeShareCode(s)).toEqual(createDefaultParams(48000))
+  })
+})

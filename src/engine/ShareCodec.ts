@@ -6,22 +6,32 @@
  *   - base64url：RFC 4648 §5（URL 安全字母表，无填充）。
  *   - 解码端"白名单字段 + 数值 clamp"语义对应既有"分享串防注入"修复。
  *
- * 序列化格式：base64url( "<version>:<checksum>:<json>" )
- *   - version 恒为 SHARE_CODEC_VERSION（当前 1），解析时不匹配即抛错；
- *   - json 为"去 IR 数组"后的参数快照：卷积混响的 IR 数组不参与序列化，仅保留
- *     irName 引用（解码后 ir 恒为 null，由调用方按 irName 重新加载）；
+ * 序列化格式（两代并存，解码端全收）：
+ *   v2（当前编码输出）：HSE2-<Crockford Base32 分组串>
+ *     - 载荷 = "<version>:<checksum>:<deltaJson>"，version=2；deltaJson 只存与默认参数
+ *       的差异项（sampleRate 强制携带，作为还原骨架的采样率）；
+ *     - Crockford Base32：0-9 + 去易混字符的大写字母（无 I/L/O/U），大小写不敏感，
+ *       解码端把 I/L→1、O→0、U→V 归一；每 5 字符一组以 '-' 分隔，仅为可读性，
+ *       解码前剥掉全部分隔符。
+ *   v1（旧串，只解码）：base64url( "<version>:<checksum>:<json>" )，json 为全量参数快照。
+ *   - 两代的 json 为"去 IR 数组"后的参数（卷积混响 IR 数组不参与序列化，仅保留 irName
+ *     引用，解码后 ir 恒为 null，由调用方按 irName 重新加载）；
  *   - checksum 为覆盖 "<version>:<json>" 的 FNV-1a 32 位值（8 位小写十六进制），
- *     固定长度置于版本号之后，保证 json 内含 ':' 也能无歧义解析。
+ *     固定长度置于版本号之后，保证 json 内含 ':' 也能无歧义解析；
+ *   - v2 解码：差异载荷以默认参数为骨架还原（未知键与 v1 白名单语义一致：静默丢弃），
+ *     再走同一套白名单字段 + 数值 clamp 清洗。
  *
  * 确定性：序列化对象按固定字段顺序构造，同参数必得同串；同串解码结果唯一。
  * 纯 TS、零运行时依赖：仅使用平台全局（TextEncoder/TextDecoder/Math.imul）。
  */
 
 import type { HyperSoundEngineParams, EqBand, ModulationRoute, SpatialSettings } from '../types'
-import { createDefaultSpatialSettings } from '../types'
+import { createDefaultParams, createDefaultSpatialSettings } from '../types'
 
-/** 当前分享串格式版本；变更不兼容格式时递增 */
-export const SHARE_CODEC_VERSION = 1
+/** 当前分享串格式版本（编码输出）；载荷 2 = 仅存与默认参数的差异项 */
+export const SHARE_CODEC_VERSION = 2
+/** 旧版全量载荷版本（只解码不编码；旧分享串持续可导入） */
+export const SHARE_CODEC_LEGACY_VERSION = 1
 
 // ---------------------------------------------------------------------------
 // base64url（RFC 4648 §5）
@@ -34,22 +44,6 @@ function utf8Encode(s: string): Uint8Array {
 
 function utf8Decode(bytes: Uint8Array): string {
   return new TextDecoder().decode(bytes)
-}
-
-/** 字节 → base64url（无填充；确定性） */
-function bytesToBase64Url(bytes: Uint8Array): string {
-  let out = ''
-  const n = bytes.length
-  for (let i = 0; i < n; i += 3) {
-    const b0 = bytes[i]
-    const b1 = i + 1 < n ? bytes[i + 1] : 0
-    const b2 = i + 2 < n ? bytes[i + 2] : 0
-    out += B64_ALPHABET[b0 >> 2]
-    out += B64_ALPHABET[((b0 & 0x03) << 4) | (b1 >> 4)]
-    if (i + 1 < n) out += B64_ALPHABET[((b1 & 0x0f) << 2) | (b2 >> 6)]
-    if (i + 2 < n) out += B64_ALPHABET[b2 & 0x3f]
-  }
-  return out
 }
 
 /** base64url → 字节；非法字符/非法长度抛 Error（防注入入口） */
@@ -71,6 +65,104 @@ function base64UrlToBytes(s: string): Uint8Array {
     if (t[i + 3] !== '=') out.push(((c2 & 0x03) << 6) | c3)
   }
   return Uint8Array.from(out)
+}
+
+// ---------------------------------------------------------------------------
+// Crockford Base32（0-9 + 去易混字符的大写字母；比 base64url 长约 20%，
+// 但大小写不敏感、无 I/L/O/U 易混字符、可分组——为"人手抄/口述/黏贴"场景服务）
+// ---------------------------------------------------------------------------
+const B32_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
+/** HSE2 前缀（v2 传输哨兵；纯 ASCII，跨输入法/剪贴板稳定） */
+const SHARE_CODE_PREFIX = 'HSE2'
+
+/** 字节 → Crockford Base32（大写；末尾不足 5 位补零） */
+function bytesToBase32Crockford(bytes: Uint8Array): string {
+  let acc = 0
+  let bits = 0
+  let out = ''
+  for (let i = 0; i < bytes.length; i++) {
+    acc = (acc << 8) | bytes[i]
+    bits += 8
+    while (bits >= 5) {
+      out += B32_ALPHABET[(acc >>> (bits - 5)) & 0x1f]
+      bits -= 5
+    }
+  }
+  if (bits > 0) out += B32_ALPHABET[(acc << (5 - bits)) & 0x1f]
+  return out
+}
+
+/** Crockford Base32 → 字节；剥离分隔符、大小写归一（I/L→1、O→0、U→V），非法字符抛 Error */
+function base32CrockfordToBytes(s: string): Uint8Array {
+  let acc = 0
+  let bits = 0
+  const out: number[] = []
+  for (const ch0 of s.toUpperCase()) {
+    const ch = ch0 === 'I' || ch0 === 'L' ? '1' : ch0 === 'O' ? '0' : ch0 === 'U' ? 'V' : ch0
+    const v = B32_ALPHABET.indexOf(ch)
+    if (v < 0) throw new Error('invalid share code: bad base32 character ' + ch0)
+    acc = (acc << 5) | v
+    bits += 5
+    if (bits >= 8) {
+      out.push((acc >>> (bits - 8)) & 0xff)
+      bits -= 8
+    }
+  }
+  return Uint8Array.from(out)
+}
+
+/** 每 5 字符一组以 '-' 分隔（纯可读性；解码前剥离） */
+function groupCode(s: string): string {
+  return (s.match(/.{1,5}/g) ?? []).join('-')
+}
+
+/**
+ * 深比较：full 相对 base 的差异子树（plain JSON 语义；数组与叶子整体比较）。
+ * 返回 undefined 表示该子树与 base 完全一致（不参与序列化）。
+ */
+function shareDelta(base: unknown, full: unknown): unknown {
+  if (
+    base === null || full === null || Array.isArray(base) || Array.isArray(full) ||
+    typeof base !== 'object' || typeof full !== 'object'
+  ) {
+    return JSON.stringify(base) === JSON.stringify(full) ? undefined : full
+  }
+  const b = base as Record<string, unknown>
+  const f = full as Record<string, unknown>
+  const out: Record<string, unknown> = {}
+  let changed = false
+  for (const k of Object.keys(f)) {
+    if (!(k in b)) {
+      out[k] = f[k]
+      changed = true
+      continue
+    }
+    const sub = shareDelta(b[k], f[k])
+    if (sub !== undefined) {
+      out[k] = sub
+      changed = true
+    }
+  }
+  return changed ? out : undefined
+}
+
+/** 差异载荷还原：以 base（默认参数骨架）为底、delta 覆盖；数组与叶子整体替换；
+ *  未知键与 v1 白名单语义一致——静默丢弃（篡改另有校验和兜底）。 */
+function shareRehydrate(base: unknown, delta: unknown): unknown {
+  if (
+    delta === null || Array.isArray(delta) || typeof delta !== 'object' ||
+    base === null || Array.isArray(base) || typeof base !== 'object'
+  ) {
+    return delta
+  }
+  const b = base as Record<string, unknown>
+  const d = delta as Record<string, unknown>
+  const out: Record<string, unknown> = { ...b }
+  for (const k of Object.keys(d)) {
+    if (!(k in b)) continue
+    out[k] = shareRehydrate(b[k], d[k])
+  }
+  return out
 }
 
 // ---------------------------------------------------------------------------
@@ -676,23 +768,35 @@ function toShareObject(p: HyperSoundEngineParams): unknown {
 // 公开 API
 // ---------------------------------------------------------------------------
 
-/** 序列化：版本 + JSON(去 IR 数组→irName) + FNV-1a 校验 → base64url */
+/** 序列化（v2）：默认参数差异 JSON + FNV-1a 校验 → Crockford Base32 分组串（HSE2- 前缀）。
+ *  sampleRate 强制携带（还原骨架的采样率随发送方，解码端据此重建默认骨架）。 */
 export function encodeShareCode(p: HyperSoundEngineParams): string {
-  const json = JSON.stringify(toShareObject(p))
+  const full = toShareObject(p) as Record<string, unknown>
+  const base = toShareObject(createDefaultParams(p.sampleRate)) as Record<string, unknown>
+  const delta = { ...(shareDelta(base, full) as Record<string, unknown> | undefined), sampleRate: full.sampleRate }
+  const json = JSON.stringify(delta)
   const payload = SHARE_CODEC_VERSION + ':' + checksumOf(SHARE_CODEC_VERSION, json) + ':' + json
-  return bytesToBase64Url(utf8Encode(payload))
+  return SHARE_CODE_PREFIX + '-' + groupCode(bytesToBase32Crockford(utf8Encode(payload)))
 }
 
-/** 反序列化：版本/校验和验证 + 白名单字段 + 数值 clamp；非法输入抛 Error */
+/** 反序列化：HSE2（v2 差异载荷）与 v1 旧串（base64url 全量载荷）双路全收；
+ *  版本/校验和验证 + 白名单字段 + 数值 clamp；非法输入抛 Error */
 export function decodeShareCode(s: string): HyperSoundEngineParams {
   if (typeof s !== 'string' || s.length === 0) {
     throw new Error('invalid share code: empty input')
   }
+  const trimmed = s.trim()
   let text: string
-  try {
-    text = utf8Decode(base64UrlToBytes(s))
-  } catch (e) {
-    throw new Error('invalid share code: ' + (e instanceof Error ? e.message : 'bad base64url'))
+  if (trimmed.length >= 4 && trimmed.slice(0, 4).toUpperCase() === SHARE_CODE_PREFIX) {
+    // v2 传输：HSE2- 分组 Crockford（剥前缀与全部分隔符/空白）
+    text = utf8Decode(base32CrockfordToBytes(trimmed.slice(4).replace(/[-\s]/g, '')))
+  } else {
+    // v1 传输：base64url
+    try {
+      text = utf8Decode(base64UrlToBytes(trimmed))
+    } catch (e) {
+      throw new Error('invalid share code: ' + (e instanceof Error ? e.message : 'bad base64url'))
+    }
   }
   const firstColon = text.indexOf(':')
   if (firstColon <= 0) throw new Error('invalid share code: missing version')
@@ -700,13 +804,13 @@ export function decodeShareCode(s: string): HyperSoundEngineParams {
   // 布局：<version>:<8位校验和>:<json> —— json 起点 = 版本冒号 + 1 + 校验和长度(8) + 1
   const checksum = text.slice(firstColon + 1, firstColon + 9)
   const json = text.slice(firstColon + 10)
-  if (version !== String(SHARE_CODEC_VERSION)) {
+  if (version !== String(SHARE_CODEC_VERSION) && version !== String(SHARE_CODEC_LEGACY_VERSION)) {
     throw new Error('unsupported share code version: ' + version)
   }
   if (!/^[0-9a-f]{8}$/.test(checksum)) {
     throw new Error('invalid share code: bad checksum format')
   }
-  if (checksumOf(SHARE_CODEC_VERSION, json) !== checksum) {
+  if (checksumOf(Number(version), json) !== checksum) {
     throw new Error('share code checksum mismatch')
   }
   let raw: unknown
@@ -715,5 +819,16 @@ export function decodeShareCode(s: string): HyperSoundEngineParams {
   } catch {
     throw new Error('invalid share code: malformed JSON')
   }
-  return sanitizeParams(raw)
+  if (version === String(SHARE_CODEC_LEGACY_VERSION)) {
+    return sanitizeParams(raw) // v1：全量参数快照
+  }
+  // v2：差异载荷 → 以默认参数（发送方采样率）为骨架还原后走同一套白名单清洗
+  // （v2 载荷强制携带 sampleRate，见 encodeShareCode；骨架采样率仅是缺省兜底，
+  //   越界/缺失由 sanitizeParams 的白名单 clamp 最终兜底）
+  const rawRate = raw !== null && typeof raw === 'object' && !Array.isArray(raw)
+    ? (raw as Record<string, unknown>).sampleRate
+    : undefined
+  const sampleRate = typeof rawRate === 'number' && Number.isFinite(rawRate) ? rawRate : 48000
+  const skeleton = toShareObject(createDefaultParams(sampleRate))
+  return sanitizeParams(shareRehydrate(skeleton, raw))
 }

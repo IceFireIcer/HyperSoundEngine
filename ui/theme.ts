@@ -16,6 +16,8 @@ import { useEffect, useState } from 'react'
 export interface HyperSoundEngineTheme {
   dark: boolean
   accentColor: string
+  /** 错误提示色（分享串导入失败等行内错误） */
+  errorColor: string
   glassPanel: string
   glassPanelHighlight: string
   glassCard: string
@@ -58,6 +60,7 @@ export function useHyperSoundEngineTheme(playerTheme: 'dark' | 'light'): HyperSo
   return {
     dark,
     accentColor,
+    errorColor: '#f87171',
     glassPanel: dark ? 'rgba(10, 12, 20, 0.38)' : 'rgba(255, 255, 255, 0.45)',
     glassPanelHighlight: dark
       ? 'linear-gradient(160deg, rgba(255,255,255,0.10) 0%, rgba(255,255,255,0.03) 45%, rgba(255,255,255,0.06) 100%)'

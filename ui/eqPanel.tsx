@@ -54,14 +54,10 @@ export function EqPanel({ controller, theme }: { controller: HyperSoundEnginePar
   const eq = params.eq
   const [presets, setPresets] = useState<EqPreset[]>(loadPresets)
   const [presetName, setPresetName] = useState('')
-  const [importText, setImportText] = useState('')
-  const [exportText, setExportText] = useState('')
 
   const patchEq = useCallback((p: DeepPartial<HyperSoundEngineParams['eq']>) => {
     patch({ eq: { ...eq, ...p } })
   }, [patch, eq])
-
-  const currentPresetJson = JSON.stringify({ mode: eq.mode, simpleBands: eq.simpleBands, proBands: eq.proBands })
 
   const handleSavePreset = () => {
     const name = presetName.trim() || `均衡器 ${presets.length + 1}`
@@ -88,30 +84,6 @@ export function EqPanel({ controller, theme }: { controller: HyperSoundEnginePar
       proBands: PRO_EQ_DEFAULT_BANDS.map((frequency) => ({ frequency, gain: 0, q: 1.1 })),
     })
     window.dispatchEvent(new CustomEvent('showToast', { detail: { message: '均衡器已全部归零', type: 'info' } }))
-  }
-
-  const handleImport = () => {
-    try {
-      const parsed = JSON.parse(importText) as { mode?: EqMode; simpleBands?: number[]; proBands?: EqBand[] }
-      if (parsed.mode && Array.isArray(parsed.simpleBands) && parsed.simpleBands.length === 5 && Array.isArray(parsed.proBands)) {
-        patchEq({ mode: parsed.mode, simpleBands: parsed.simpleBands, proBands: parsed.proBands })
-        setImportText('')
-        window.dispatchEvent(new CustomEvent('showToast', { detail: { message: '均衡器设置已导入', type: 'info' } }))
-      } else {
-        throw new Error('格式无效')
-      }
-    } catch {
-      window.dispatchEvent(new CustomEvent('showToast', { detail: { message: '导入失败：JSON 格式无效', type: 'error' } }))
-    }
-  }
-
-  const handleCopyExport = async () => {
-    try {
-      await navigator.clipboard.writeText(currentPresetJson)
-      window.dispatchEvent(new CustomEvent('showToast', { detail: { message: '均衡器设置已复制到剪贴板', type: 'info' } }))
-    } catch {
-      setExportText(currentPresetJson)
-    }
   }
 
   /** 切换段数时同步重建 proBands：目标频点表包含旧频点则沿用其增益，新增频点补 0 */
@@ -282,30 +254,6 @@ export function EqPanel({ controller, theme }: { controller: HyperSoundEnginePar
                 ))}
               </div>
             )}
-          </GlassCard>
-
-          {/* 导入导出（EQ 部分；完整分享串在调音器页） */}
-          <GlassCard theme={theme}>
-            <div className={`${theme.textPrimary} font-medium mb-2`}>导入 / 导出</div>
-            <div className="flex gap-2 mb-2">
-              <ActionButton onClick={() => void handleCopyExport()} theme={theme}>
-                <Copy className="w-4 h-4" /> 复制我的设置
-              </ActionButton>
-              <ActionButton onClick={() => setExportText(currentPresetJson)} theme={theme} ghost>显示导出文本</ActionButton>
-            </div>
-            {exportText && (
-              <textarea readOnly value={exportText} className={`w-full h-20 px-3 py-2 rounded-lg text-xs outline-none mb-2 ${theme.textPrimary}`}
-                style={{ background: theme.inputBg, border: `1px solid ${theme.glassBorder}` }} />
-            )}
-            <div className="flex gap-2">
-              <textarea value={importText} onChange={(e) => setImportText(e.target.value)} placeholder="粘贴别人分享的均衡器 JSON 到这里"
-                className={`flex-1 h-16 px-3 py-2 rounded-lg text-xs outline-none ${theme.textPrimary}`}
-                style={{ background: theme.inputBg, border: `1px solid ${theme.glassBorder}` }} />
-              <ActionButton onClick={handleImport} theme={theme}>
-                <ClipboardPaste className="w-4 h-4" /> 导入
-              </ActionButton>
-            </div>
-            <InfoLine theme={theme}><Info className="w-3 h-3 shrink-0" /> 分享完整参数（含场景/混响/补偿）请用调音器页的「分享串」。</InfoLine>
           </GlassCard>
         </>
       )}
