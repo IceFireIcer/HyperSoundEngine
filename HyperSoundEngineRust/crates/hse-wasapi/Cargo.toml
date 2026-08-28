@@ -1,0 +1,17 @@
+[package]
+name = "hse-wasapi"
+description = "HyperSoundEngine Rust 支线 Windows 音频后端：共享模式渲染 + loopback 捕获"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+
+[target.'cfg(windows)'.dependencies]
+# WASAPI 绑定（CamillaDSP 作者维护，自带 loopback 语义：渲染设备的 AudioClient
+# 按 Capture 方向初始化即自动附加 AUDCLNT_STREAMFLAGS_LOOPBACK）。
+# 用等号精确锁定版本，保证 StreamMode/is_supported 等 API 面不被上游漂移破坏。
+wasapi = "=0.24.0"

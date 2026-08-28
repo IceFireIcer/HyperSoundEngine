@@ -202,3 +202,5 @@ specs/
 - DSP 实现契约（TS 侧）：`src/dsp/API_SPEC.md`
 - 向量 Schema：[specs/schema/vector-case.schema.json](schema/vector-case.schema.json)
 - 模块规格：[biquad](dsp/biquad.md) ｜ [limiter](dsp/limiter.md) ｜ [reverb-simple](dsp/reverb-simple.md)
+- 服务层·控制面契约：[service/control-plane.md](service/control-plane.md)
+- 服务层·推流协议设计：[service/push-stream.md](service/push-stream.md)

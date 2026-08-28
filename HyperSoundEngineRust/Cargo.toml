@@ -2,8 +2,8 @@
 #
 # 工程结构与分工依据《原生化双支线与Windows音频接入规划书》§2.1 与
 # docs/adr/0003-dual-track-native-rewrite.md。
-# 当前只注册已落地的成员 crate；hse-wasapi / hse-napi / hse-service 目录
-# 目前仅含占位说明文档，各自按规划启动后再加入 members。
+# 当前已注册成员：hse-core / hse-parity / benches / hse-wasapi / hse-service；
+# hse-napi 仍为占位（README），按规划启动后再加入 members。
 #
 # 兼容约束：nightly 工作流（.github/workflows/nightly.yml）检测到本目录后
 # 直接执行 `cargo build --release`，并从 target/release 收集名为 hse-* 的
@@ -11,10 +11,10 @@
 
 [workspace]
 resolver = "2"
-members = ["crates/hse-core", "crates/hse-parity", "benches"]
+members = ["crates/hse-core", "crates/hse-parity", "benches", "crates/hse-wasapi", "crates/hse-service"]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 license = "CC-BY-NC-ND-4.0"
 authors = ["HyperSoundEngine Contributors"]

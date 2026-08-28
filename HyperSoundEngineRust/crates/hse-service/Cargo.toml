@@ -1,0 +1,30 @@
+[package]
+name = "hse-service"
+description = "HyperSoundEngine 引擎服务进程：线程编排 + WebSocket JSON-RPC 控制面"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "hse_service"
+path = "src/lib.rs"
+
+[[bin]]
+name = "hse-service"
+path = "src/main.rs"
+
+[[bin]]
+name = "hse-cli"
+path = "src/bin/hse_cli.rs"
+
+[dependencies]
+hse-core = { path = "../hse-core" }
+hse-wasapi = { path = "../hse-wasapi" }
+serde_json = { workspace = true }
+# 实时安全 SPSC 环形缓冲（规划书 §2.2 指定）
+rtrb = "0.3"
+# 同步 WebSocket（控制面 localhost JSON-RPC；默认特性仅握手，不引 TLS 栈）
+tungstenite = "0.24"
