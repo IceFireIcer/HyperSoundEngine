@@ -83,6 +83,11 @@ export class HyperSoundEngineHost {
   private hostFs = 0
   private attachSeq = 0
   private disposed = false
+  /** setParams 去重指纹（上次下发参数）；null=尚未下发 */
+  private lastParamsKey: string | null = null
+  /** IR 引用指纹表：Float32Array 按引用编号参与指纹，不做 O(n) 逐样本序列化 */
+  private readonly irIds = new WeakMap<Float32Array, number>()
+  private irIdSeq = 0
 
   constructor(opts?: HyperSoundEngineHostOptions) {
     this.defaultMode = opts?.mode ?? 'auto'
@@ -212,9 +217,27 @@ async attach(handle: HyperSoundEngineHostHandle, params?: HyperSoundEngineParams
     if (params) this.lastParams = params
   }
 
-  /** 下发参数：主线程引擎与 worklet 处理器同步更新 */
+  /** 参数指纹：IR（Float32Array）按引用编号参与，避免对大 IR 做逐样本 JSON 序列化 */
+  private paramsKey(p: HyperSoundEngineParams): string {
+    return JSON.stringify(p, (_k, v) => {
+      if (v instanceof Float32Array) {
+        let id = this.irIds.get(v)
+        if (id === undefined) {
+          id = ++this.irIdSeq
+          this.irIds.set(v, id)
+        }
+        return { __irRef: id, irLen: v.length }
+      }
+      return v
+    })
+  }
+
+  /** 下发参数：主线程引擎与 worklet 处理器同步更新；与上次逐字段一致时跳过（去重） */
   setParams(p: HyperSoundEngineParams): void {
     this.lastParams = p
+    const key = this.paramsKey(p)
+    if (key === this.lastParamsKey) return // 未变化：跳过整链重配与 postMessage
+    this.lastParamsKey = key
     this.engine.setParams(p)
     if (this.node?.port) this.node.port.postMessage({ type: 'params', params: p })
   }
@@ -223,6 +246,7 @@ async attach(handle: HyperSoundEngineHostHandle, params?: HyperSoundEngineParams
   dispose(): void {
     this.disposed = true
     this.attachSeq++
+    this.lastParamsKey = null // 拆除后重新下发参数时不再误判"未变化"
     const h = this.handle
     const n = this.node
     this.node = null
