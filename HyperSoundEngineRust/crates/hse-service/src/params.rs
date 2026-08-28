@@ -13,6 +13,8 @@
 use std::collections::HashSet;
 
 use serde_json::{Map, Value};
+use hse_core::bass_enhancer::BassEnhancerSettings;
+use hse_core::compressor::CompressorSettings;
 use hse_core::limiter::LimiterSettings;
 use hse_core::reverb_simple::ReverbSimpleParams;
 
@@ -25,19 +27,44 @@ pub struct BiquadSpec {
     pub gain_db: f64,
 }
 
-/// 试点子链的参数快照（控制面可识别键 biquad / reverbSimple / limiter）。
+/// MidSide 的可配置对（对应全链第 3 级；width 即 TS stereoWidth，vb 仅 pitch 启用时非零）。
+#[derive(Debug, Clone)]
+pub struct MidSideParams {
+    pub width: f64,
+    pub voice_balance: f64,
+}
+
+/// 引擎子链的参数快照（控制面可识别键：midSide / biquad / compressor /
+/// reverbSimple / bassEnhancer / limiter——按全链相对顺序入链）。
 #[derive(Debug, Clone)]
 pub struct PilotParams {
+    pub mid_side: MidSideParams,
     /// None = 未配置滤波器，按 TS 构造默认直通。
     pub biquad: Option<BiquadSpec>,
+    pub compressor: CompressorSettings,
     pub reverb_simple: ReverbSimpleParams,
+    pub bass_enhancer: BassEnhancerSettings,
     pub limiter: LimiterSettings,
 }
 
 impl Default for PilotParams {
     fn default() -> Self {
         Self {
+            // 对齐 TS createDefaultParams().stereoWidth（M/S 恒活跃，width=1 恒等）。
+            mid_side: MidSideParams { width: 1.0, voice_balance: 0.0 },
             biquad: None,
+            // 对齐 TS createDefaultParams().compressor。
+            compressor: CompressorSettings {
+                enabled: false,
+                threshold_db: -20.0,
+                ratio: 4.0,
+                knee_db: 6.0,
+                attack_ms: 10.0,
+                release_ms: 150.0,
+                makeup_db: 0.0,
+                output_gain: 1.0,
+                sidechain_enabled: false,
+            },
             // 对齐 TS createDefaultParams().reverb.algorithmic。
             reverb_simple: ReverbSimpleParams {
                 room_size: 0.5,
@@ -47,6 +74,17 @@ impl Default for PilotParams {
                 pre_delay_ms: 0.0,
                 width: 1.0,
                 reverb_type: "hall".to_string(),
+            },
+            // 对齐 TS createDefaultParams().bassEnhancer。
+            bass_enhancer: BassEnhancerSettings {
+                enabled: false,
+                cutoff_hz: 90.0,
+                q: 0.7,
+                harmonic_type: "odd".to_string(),
+                harmonic_gain: 0.6,
+                mix: 0.5,
+                level_db: 0.0,
+                low_boost_db: Some(0.0),
             },
             // 对齐 TS createDefaultParams().limiter（与 LimiterStage::new 一致）。
             limiter: LimiterSettings {
@@ -91,6 +129,41 @@ pub fn parse_pilot_params(value: &Value) -> Result<(PilotParams, Vec<String>), S
                 if let Some(x) = opt_num(o, "width", "reverbSimple", &mut seen)? { p.reverb_simple.width = x; }
                 if let Some(x) = opt_str(o, "type", "reverbSimple", &mut seen)? { p.reverb_simple.reverb_type = x; }
                 collect_unknown(o, &seen, "reverbSimple", &mut warnings);
+            }
+            "compressor" => {
+                let o = v.as_object().ok_or("compressor 必须是 JSON 对象")?;
+                let mut seen = HashSet::new();
+                if let Some(x) = opt_bool(o, "enabled", "compressor", &mut seen)? { p.compressor.enabled = x; }
+                if let Some(x) = opt_num(o, "thresholdDb", "compressor", &mut seen)? { p.compressor.threshold_db = x; }
+                if let Some(x) = opt_num(o, "ratio", "compressor", &mut seen)? { p.compressor.ratio = x; }
+                if let Some(x) = opt_num(o, "kneeDb", "compressor", &mut seen)? { p.compressor.knee_db = x; }
+                if let Some(x) = opt_num(o, "attackMs", "compressor", &mut seen)? { p.compressor.attack_ms = x; }
+                if let Some(x) = opt_num(o, "releaseMs", "compressor", &mut seen)? { p.compressor.release_ms = x; }
+                if let Some(x) = opt_num(o, "makeupDb", "compressor", &mut seen)? { p.compressor.makeup_db = x; }
+                if let Some(x) = opt_num(o, "outputGain", "compressor", &mut seen)? { p.compressor.output_gain = x; }
+                if let Some(x) = opt_bool(o, "sidechainEnabled", "compressor", &mut seen)? { p.compressor.sidechain_enabled = x; }
+                collect_unknown(o, &seen, "compressor", &mut warnings);
+            }
+            "bassEnhancer" => {
+                let o = v.as_object().ok_or("bassEnhancer 必须是 JSON 对象")?;
+                let mut seen = HashSet::new();
+                if let Some(x) = opt_bool(o, "enabled", "bassEnhancer", &mut seen)? { p.bass_enhancer.enabled = x; }
+                if let Some(x) = opt_num(o, "cutoffHz", "bassEnhancer", &mut seen)? { p.bass_enhancer.cutoff_hz = x; }
+                if let Some(x) = opt_num(o, "q", "bassEnhancer", &mut seen)? { p.bass_enhancer.q = x; }
+                if let Some(x) = opt_str(o, "harmonicType", "bassEnhancer", &mut seen)? { p.bass_enhancer.harmonic_type = x; }
+                if let Some(x) = opt_num(o, "harmonicGain", "bassEnhancer", &mut seen)? { p.bass_enhancer.harmonic_gain = x; }
+                if let Some(x) = opt_num(o, "mix", "bassEnhancer", &mut seen)? { p.bass_enhancer.mix = x; }
+                if let Some(x) = opt_num(o, "levelDb", "bassEnhancer", &mut seen)? { p.bass_enhancer.level_db = x; }
+                // 缺省/null 保留默认 Some(0.0)（对齐 TS Number.isFinite 防御语义）
+                if let Some(x) = opt_num(o, "lowBoostDb", "bassEnhancer", &mut seen)? { p.bass_enhancer.low_boost_db = Some(x); }
+                collect_unknown(o, &seen, "bassEnhancer", &mut warnings);
+            }
+            "midSide" => {
+                let o = v.as_object().ok_or("midSide 必须是 JSON 对象")?;
+                let mut seen = HashSet::new();
+                if let Some(x) = opt_num(o, "width", "midSide", &mut seen)? { p.mid_side.width = x; }
+                if let Some(x) = opt_num(o, "voiceBalance", "midSide", &mut seen)? { p.mid_side.voice_balance = x; }
+                collect_unknown(o, &seen, "midSide", &mut warnings);
             }
             "limiter" => {
                 let o = v.as_object().ok_or("limiter 必须是 JSON 对象")?;

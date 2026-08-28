@@ -16,10 +16,10 @@
   仅以状态机相位与统计计数器的形式在结果中显影。
 - **控制面与数据面分离**（规划书 §2.2）：控制面连接可以随时断开重连，不影响已建立的音频流；
   数据面异常通过事件通知与统计计数器上报，不要求控制面在线。
-- **当前阶段范围声明**（Phase 2，规划书 §五）：单客户端假设（§九）、应用层心跳暂缓（§九）、
-  处理链为试点子链 biquad → reverb-simple → limiter（§八）、音频入口仅回环拦截。
-  推流入口的同端口复用分流规则见 [`push-stream.md`](push-stream.md)，其实施阶段为 Phase 3；
-  在其落地前，控制面连接上的二进制帧无任何语义。
+- **当前阶段范围声明**（Phase 2 起，Phase 3 批次一修订）：单客户端假设（§九）、应用层心跳暂缓（§九）、
+  处理链为引擎子链 midSide → biquad → compressor → reverb-simple → bassEnhancer → limiter（§八）、
+  音频入口为回环拦截 + 推流（Phase 3 起，见 push-stream.md）。
+  推流入口的同端口复用分流规则见 [`push-stream.md`](push-stream.md)。
 
 ## 二、传输与寻址
 
@@ -328,20 +328,33 @@ DeviceInfo 字段表：
   正在处理的块不受影响；控制面线程不得持任何 DSP 内部锁、不得在音频回调路径分配（架构铁律）；
 - 非 running 时快照仅存入状态（lastParams），待下次 start 生效。
 
-#### 可识别键表（当前试点子链）
+#### 可识别键表（引擎子链六模块；随模块落地扩展，属向后兼容变更）
 
 | 顶层键 | 子键 | 类型 | 说明 |
 |---|---|---|---|
+| `midSide` | `width` | number | M/S 宽度（对齐全链 stereoWidth，1=恒等） |
+| | `voiceBalance` | number | 人声比例（pitch 语义位；引擎子链恒等传递于 wb=0） |
 | `biquad` | `type` | string | 八种枚举之一：peaking / lowshelf / highshelf / lowpass / highpass / bandpass / notch / allpass |
 | | `f0` | number（Hz） | 中心/转折频率 |
 | | `q` | number | Q 值 |
 | | `gainDb` | number（dB） | 仅 peaking/shelf 类生效 |
+| `compressor` | `enabled` | bool | 旁路开关（false=恒等） |
+| | `thresholdDb` / `ratio` / `kneeDb` | number | 压缩曲线 |
+| | `attackMs` / `releaseMs` | number（ms） | 包络时间常数 |
+| | `makeupDb` | number（dB） | 补偿增益 |
+| | `outputGain` | number | 输出线性增益 |
+| | `sidechainEnabled` | bool | 按规格 §4.5 从输入派生单声道和 sidechain |
 | `reverbSimple` | `roomSize` | number | 房间尺寸 |
 | | `damping` | number | 高频阻尼 |
 | | `wet` / `dry` | number | 湿/干信号比例 |
 | | `preDelayMs` | number（ms） | 预延迟 |
 | | `width` | number | 立体声宽度 |
 | | `type` | string | 混响算法变体（枚举见 reverb-simple 规格） |
+| `bassEnhancer` | `enabled` | bool | 旁路开关 |
+| | `cutoffHz` / `q` | number | 低通提取 |
+| | `harmonicType` | string | odd / even / atan / soft |
+| | `harmonicGain` / `mix` / `levelDb` | number | 谐波路径 |
+| | `lowBoostDb` | number（dB） | 低音下潜（-6..12，缺省 0=关闭） |
 | `limiter` | `enabled` | bool | 限幅级旁路开关 |
 | | `thresholdDb` | number（dB） | 门限 |
 | | `lookaheadMs` | number（ms） | 前瞻 |
@@ -425,22 +438,26 @@ DeviceInfo 字段表：
 4. 通知只经控制面连接推送；控制面断线期间的 xrun 不补发（重连后靠 getState 对账）；
 5. 同一连接上通知与响应严格按发生序交错发送。
 
-## 八、试点 DSP 子链及其与全链的对应关系
+## 八、引擎子链及其与全链的对应关系
 
-Phase 2 管线内实际运行的链为**试点子链**，固定三级、顺序固定：
+Phase 3 批次一起，管线内实际运行的链为**六模块引擎子链**，顺序固定：
 
 ```text
-交错 f32 进（L,R,L,R,…） → [拆包 planar] → biquad → reverb-simple → limiter → [打包交错] → 交错 f32 出
+交错 f32 进（L,R,L,R,…） → [拆包 planar] → midSide → biquad → compressor
+  → reverb-simple → bass-enhancer → limiter → [打包交错] → 交错 f32 出
 ```
 
-与 TS 支线全链（文档口径 21 级，`src/engine/HyperSoundEngine.ts` 的 buildStages 固定数组）
-的对应关系：三者选取的是全链中 Pre-EQ → Reverb → Limiter 的**相对出现顺序**
-（全链第 4、13、21 级），其余各级在本阶段不参与管线（未移植，而非激活旁路）：
+与 TS 支线全链（文档口径 22 级，`src/engine/HyperSoundEngine.ts` 的 buildStages 固定数组）
+的对应关系：六者选取的是全链中 M/S → Pre-EQ → Compressor → Reverb → BassEnhancer → Limiter 的
+**相对出现顺序**（全链第 3、4、6、13、14、21 级），其余各级在本阶段不参与管线（未移植，而非激活旁路）：
 
-| 试点级 | 对应模块规格 | 全链位置 | 全链实现形态 |
+| 子链级 | 对应模块规格 | 全链位置 | 全链实现形态 |
 |---|---|---|---|
-| biquad | [`specs/dsp/biquad.md`](../dsp/biquad.md) | 第 4 级 pre-eq | EqChain（biquad 级联）——本阶段以单节 biquad 代表该级 |
-| reverb-simple | [`specs/dsp/reverb-simple.md`](../dsp/reverb-simple.md) | 第 13 级 reverb | 三路路由（卷积/算法/off），试点取其中**算法路** ReverbSimple |
+| midSide | [`specs/dsp/mid-side.md`](../dsp/mid-side.md) | 第 3 级 M/S | MidSide 本体（width + voiceBalance） |
+| biquad | [`specs/dsp/biquad.md`](../dsp/biquad.md) | 第 4 级 pre-eq | EqChain（biquad 级联）——以单节 biquad 代表该级 |
+| compressor | [`specs/dsp/compressor.md`](../dsp/compressor.md) | 第 6 级 compressor | Compressor 本体（sidechain 派生见其 §4.5） |
+| reverb-simple | [`specs/dsp/reverb-simple.md`](../dsp/reverb-simple.md) | 第 13 级 reverb | 三路路由（卷积/算法/off），子链取其中**算法路** ReverbSimple |
+| bass-enhancer | [`specs/dsp/bass-enhancer.md`](../dsp/bass-enhancer.md) | 第 14 级 bass | BassEnhancer 本体（含 lowBoostDb） |
 | limiter | [`specs/dsp/limiter.md`](../dsp/limiter.md) | 第 21 级（末级）limiter | Limiter 本体 |
 
 约束：

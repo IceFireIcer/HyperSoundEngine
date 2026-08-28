@@ -1,26 +1,37 @@
-//! 试点 DSP 子链：biquad → reverb-simple → limiter（交错进、planar 过链、交错出）。
+//! 引擎子链：midSide → biquad → compressor → reverb-simple → bass-enhancer → limiter
+//! （交错进、planar 过链、交错出）。
 //!
-//! 对应全链中三者的出现顺序（Pre-EQ → 混响 → Limiter）。构造只在控制面线程
+//! 对应全链中六者的相对出现顺序（第 3 级 M/S → 第 4 级 Pre-EQ → 第 6 级 Compressor →
+//! 第 13 级 混响 → 第 14 级 BassEnhancer → 第 21 级 Limiter）。构造只在控制面线程
 //! 发生（分配合法）；process_planar 在 DSP 线程稳态零分配零锁零系统调用。
 //! 参数热更换经 rtrb 命令环移交整条新链的所有权（见 pipeline）。
 
+use hse_core::bass_enhancer::BassEnhancerStage;
 use hse_core::biquad::BiquadStage;
+use hse_core::compressor::CompressorStage;
 use hse_core::limiter::LimiterStage;
+use hse_core::mid_side::MidSideStage;
 use hse_core::reverb_simple::ReverbSimpleStage;
 use hse_core::Stage;
 
-use crate::params::PilotParams;
+use crate::params::{MidSideParams, PilotParams};
 
-/// 已装配就绪的试点子链（所有权可跨线程移交，rtrb 元素要求 Move）。
+/// 已装配就绪的引擎子链（所有权可跨线程移交，rtrb 元素要求 Move）。
 pub struct PilotSubchain {
+    mid_side: MidSideStage,
     biquad: Option<BiquadStage>,
+    compressor: CompressorStage,
     reverb: ReverbSimpleStage,
+    bass: BassEnhancerStage,
     limiter: LimiterStage,
 }
 
 impl PilotSubchain {
     /// 按参数快照构造并对 max_block 完成预分配（控制面线程调用）。
     pub fn build(params: &PilotParams, sample_rate: f64, max_block: usize) -> Result<Self, String> {
+        let MidSideParams { width, voice_balance } = params.mid_side;
+        let mut mid_side = MidSideStage::new();
+        mid_side.set_params(width, voice_balance);
         let biquad = match &params.biquad {
             Some(spec) => Some(BiquadStage::new(
                 sample_rate,
@@ -31,36 +42,47 @@ impl PilotSubchain {
             )?),
             None => None, // TS 构造默认即恒等直通
         };
+        let compressor = CompressorStage::from_settings(sample_rate, params.compressor.clone())?;
         let reverb = ReverbSimpleStage::from_params(sample_rate, params.reverb_simple.clone())?;
+        let bass = BassEnhancerStage::from_settings(sample_rate, params.bass_enhancer.clone())?;
         let limiter = LimiterStage::from_settings(sample_rate, params.limiter.clone())?;
-        let mut chain = Self { biquad, reverb, limiter };
+        let mut chain = Self { mid_side, biquad, compressor, reverb, bass, limiter };
         chain.prepare(max_block);
         Ok(chain)
     }
 
     fn prepare(&mut self, max_block: usize) {
+        Stage::prepare(&mut self.mid_side, max_block);
         if let Some(b) = self.biquad.as_mut() {
             Stage::prepare(b, max_block);
         }
+        Stage::prepare(&mut self.compressor, max_block);
         Stage::prepare(&mut self.reverb, max_block);
+        Stage::prepare(&mut self.bass, max_block);
         Stage::prepare(&mut self.limiter, max_block);
     }
 
     /// planar 就地过链：左右声道长度恒等（Stage 契约）。
     pub fn process_planar(&mut self, left: &mut [f32], right: &mut [f32]) {
+        self.mid_side.process(left, right);
         if let Some(b) = self.biquad.as_mut() {
             b.process(left, right);
         }
+        self.compressor.process(left, right);
         self.reverb.process(left, right);
+        self.bass.process(left, right);
         self.limiter.process(left, right);
     }
 
     /// 复位全部阶段状态（换链/重启时在非实时侧调用）。
     pub fn reset(&mut self) {
+        self.mid_side.reset();
         if let Some(b) = self.biquad.as_mut() {
             b.reset();
         }
+        self.compressor.reset();
         self.reverb.reset();
+        self.bass.reset();
         self.limiter.reset();
     }
 }
