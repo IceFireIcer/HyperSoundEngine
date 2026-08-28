@@ -286,6 +286,25 @@ export class HyperSoundEngine implements AudioEngine {
 
   /** 参数更新：重算所有模块系数（即时生效）。不修改传入的 p。 */
   setParams(p: HyperSoundEngineParams): void {
+    // 旁通→重新启用检测（旧快照 vs 新参数）：重新启用的级在下方清空流状态，
+    // 避免旁通窗口积压在延迟线/卷积缓冲/包络里的旧音频被回放（爆音/串音）
+    const prev = {
+      eq: this._preEqActive,
+      deesser: this._params.deesser.enabled,
+      compressor: this._params.compressor.enabled,
+      night: this._nightActive,
+      delay: this._params.modEffects.delay.enabled,
+      chorus: this._params.modEffects.chorus.enabled,
+      flanger: this._params.modEffects.flanger.enabled,
+      phaser: this._params.modEffects.phaser.enabled,
+      tremolo: this._params.modEffects.tremolo.enabled,
+      reverb: this._params.reverb.enabled && this._params.reverb.mode !== 'off',
+      bass: this._params.bassEnhancer.enabled,
+      loudnessComp: this._params.loudnessCompensation.enabled,
+      ieq: this._ieqActive,
+      dynamicEq: this._params.dynamicEq.enabled,
+      limiter: this._params.limiter.enabled,
+    }
     this._params = cloneParams(p)
     const p2 = this._params
 
@@ -377,6 +396,32 @@ export class HyperSoundEngine implements AudioEngine {
 
     // —— 多通道子引擎参数同步（perChannelPair 复用同一套参数） ——
     for (const e of this._pairEngines) e.setParams(p2)
+
+    // —— 重新启用级的流状态清空（检测见本方法顶部 prev 快照） ——
+    if (!prev.eq && this._preEqActive) this._eqChain.reset()
+    if (!prev.deesser && p2.deesser.enabled) this._deesser.reset()
+    if (!prev.compressor && p2.compressor.enabled) this._compressor.reset()
+    if (!prev.night && this._nightActive) {
+      this._nightCompressor.reset()
+      this._nightShelfL.reset()
+      this._nightShelfR.reset()
+    }
+    if (!prev.delay && me.delay.enabled) this._delay.reset()
+    if (!prev.chorus && me.chorus.enabled) this._chorus.reset()
+    if (!prev.flanger && me.flanger.enabled) this._flanger.reset()
+    if (!prev.phaser && me.phaser.enabled) this._phaser.reset()
+    if (!prev.tremolo && me.tremolo.enabled) this._tremolo.reset()
+    if (!prev.reverb && p2.reverb.enabled && p2.reverb.mode !== 'off') {
+      if (this._useConvolver) this._convolver.reset()
+      else if (this._useFdn) this._fdnReverb.reset()
+      else this._reverbSimple.reset()
+    }
+    if (!prev.bass && p2.bassEnhancer.enabled) this._bass.reset()
+    if (!prev.loudnessComp && p2.loudnessCompensation.enabled) this._loudnessComp.reset()
+    if (!prev.ieq && this._ieqActive) this._ieqChain.reset()
+    if (!prev.dynamicEq && p2.dynamicEq.enabled) this._dynamicEq.reset()
+    if (!prev.limiter && p2.limiter.enabled) this._limiter.reset()
+
   }
 
   /** 返回当前参数快照（深拷贝，外部修改不影响引擎内部状态）。 */
