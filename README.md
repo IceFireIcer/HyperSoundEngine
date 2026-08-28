@@ -89,6 +89,7 @@ HyperSoundEngine/
 
 - [接口文档](docs/API.md)
 - [架构说明](docs/ARCHITECTURE.md)
+- [算法参考文档](docs/ALGORITHMS.md)
 - [版本策略与命名规范](docs/VERSIONING.md)
 - [架构决策记录（ADR）](docs/adr/)
 - [接入其他软件指南](docs/INTEGRATION.md)
