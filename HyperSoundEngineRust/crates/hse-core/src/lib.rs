@@ -29,10 +29,12 @@ pub mod hse_stretch;
 pub mod limiter;
 pub mod loudness_comp;
 pub mod mid_side;
+pub mod midi;
 pub mod mod_effects;
 pub mod modulation_matrix;
 pub mod reverb_simple;
 pub mod share_codec;
+pub mod wav;
 
 /// 处理链中的单个阶段：立体声、就地、按块处理。
 ///
