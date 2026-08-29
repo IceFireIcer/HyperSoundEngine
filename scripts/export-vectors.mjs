@@ -7,20 +7,24 @@
  * 职责：
  *  - 以 TS 支线（src/）为行为事实标准，为 biquad / limiter / reverb-simple /
  *    compressor / bass-enhancer / mid-side / eq-chain / fdn-reverb / deesser /
- *    loudness-comp / dynamic-eq / mod-effects 十二个流式立体声模块，以及四个特殊
+ *    loudness-comp / dynamic-eq / mod-effects 十二个流式立体声模块，五个特殊
  *    驱动形态的模块——fft（非流式变换，(L,R)=(Re,Im) 平面，specs/dsp/fft.md §三）、
  *    convolver（IR 配方驱动，specs/dsp/convolver.md §4.2）、modulation-matrix
- *    （控制率 Stage 驱动，specs/dsp/modulation-matrix.md §4.4）与 hse-stretch
- *    （块窗映射驱动，specs/dsp/hse-stretch.md §4.6）——
+ *    （控制率 Stage 驱动，specs/dsp/modulation-matrix.md §4.4）、hse-stretch
+ *    （块窗映射驱动，specs/dsp/hse-stretch.md §4.6）与 lufs-meter（计量型读数驱动，
+ *    moduleKind='meter'，specs/dsp/lufs-meter.md §三）——
  *    导出确定性对拍向量到 specs/dsp/vectors/<module>.<case>.json 与同名 .f32；
  *  - 向量格式契约（两支线共享，见 specs/ 目录规划文档）：
  *      JSON：schemaVersion=1 / module / case / sampleRate / blockSize / channels=2 /
  *            frames / params（与模块 setParams 实际消费的字段完全一致）/ tolerance /
- *            notes（可选）；
- *      f32 ：小端、非交错 [输入左][输入右][期望输出左][期望输出右]，各 frames 帧；
+ *            notes（可选）/ moduleKind（可选，计量型='meter'）/ readings（可选，
+ *            计量读数 want+tol，仅 moduleKind='meter'）；
+ *      f32 ：小端、非交错 [输入左][输入右][期望输出左][期望输出右]，各 frames 帧
+ *            （计量型 moduleKind='meter' 无音频输出，仅 [输入左][输入右] 两段）；
  *      语义：输入按 blockSize 顺序分块调用模块处理（末块可短），状态跨块保持，
  *            期望输出 = 逐块输出按序拼接；
- *      容差：|got-want| <= value * max(|want|, floor)。
+ *      容差：音频段 |got-want| <= value * max(|want|, floor)；计量读数
+ *            |got-want| <= tol（绝对制，NaN/±Infinity 走哨兵等值判定）。
  *
  * 模块加载方案：优先 Node 原生 type-stripping 直接 import src/*.ts（Node >=23.6 默认
  * 支持）；bass-enhancer 含运行时相对导入（'./biquad'，无扩展名），原生加载会失败，
@@ -49,6 +53,48 @@ const SCHEMA_VERSION = 1
 const CHANNELS = 2
 const TOLERANCE = { kind: 'relative', value: 1e-6, floor: 1e-9 }
 
+// ==================== 计量型模块（moduleKind='meter'）读数捕获 ====================
+
+/**
+ * 计量读数捕获表：module id → 读数定义列表（读数名 → 取值器 + 绝对容差）。
+ *
+ * readings 是标量读数契约（specs/dsp/lufs-meter.md §三/§五）：want 为有限数时按
+ * 绝对容差 |got − want| ≤ tol 判定（与音频段的相对制公式并立、互不混用）；TS 侧
+ * 同输入逐位确定，容差只为 Rust 移植的浮点结合序差异留安全网。want 为 NaN/±Infinity
+ * 时以字符串哨兵冻结（JSON 数值无法表达非有限值），对拍按哨兵等值判定。
+ * 读数名与 specs/dsp/lufs-meter.md §四逐字一致，两侧加载器共用同一张名字表。
+ */
+const METER_READINGS = {
+  'lufs-meter': [
+    { name: 'integratedLufs', tol: 0.1, get: (m) => m.getIntegratedLufs() },
+    { name: 'momentaryLufs', tol: 0.1, get: (m) => m.getMomentaryLufs() },
+    { name: 'shortTermLufs', tol: 0.1, get: (m) => m.getShortTermLufs() },
+    { name: 'lra', tol: 0.5, get: (m) => m.getLra() },
+    { name: 'peakDb', tol: 0.05, get: (m) => m.getPeakDb() },
+    { name: 'truePeakDb', tol: 0.1, get: (m) => m.getTruePeakDb() },
+  ],
+}
+
+/** 读数 want 序列化：NaN/±Infinity → 字符串哨兵，其余为数值（JSON 数值无法表达非有限值） */
+function serializeReadingWant(v) {
+  if (typeof v !== 'number') throw new Error('计量读数必须为 number，实际 ' + String(v))
+  if (Number.isNaN(v)) return 'NaN'
+  if (v === Infinity) return '+Infinity'
+  if (v === -Infinity) return '-Infinity'
+  return v
+}
+
+/** 全部块馈入完成后，从计量模块实例一次性捕获冻结读数（键序 = 表序，幂等前提之一） */
+function captureReadings(moduleId, meter) {
+  const defs = METER_READINGS[moduleId]
+  if (!defs || !meter) throw new Error('计量型模块读数捕获配置缺失：' + moduleId)
+  const readings = {}
+  for (const def of defs) {
+    readings[def.name] = { want: serializeReadingWant(def.get(meter)), tol: def.tol }
+  }
+  return readings
+}
+
 // ==================== TS 模块加载 ====================
 
 /** 待加载的 TS 模块清单（kebab-case 模块 id → 源文件） */
@@ -70,6 +116,7 @@ const MODULE_SOURCES = [
   { id: 'convolver', file: 'Convolver.ts' },   // IR 配方驱动（specs/dsp/convolver.md §4.2）
   { id: 'modulation-matrix', file: 'modulation.ts' }, // 控制率 Stage 驱动（specs/dsp/modulation-matrix.md §4.4）
   { id: 'hse-stretch', file: 'HseStretch.ts' },       // 块窗映射驱动（specs/dsp/hse-stretch.md §4.6）
+  { id: 'lufs-meter', file: 'LufsMeter.ts' },         // 计量型读数驱动（moduleKind='meter'，specs/dsp/lufs-meter.md §三）
 ]
 
 /**
@@ -214,7 +261,9 @@ function buildIrRecipe(recipe) {
 
 // ==================== case 定义（冻结基线的唯一来源） ====================
 // 每个 case 声明：module / case / sampleRate / blockSize / params / notes /
-// inputL(frames,fs) 与 inputR(frames,fs)。frames 由输入数组长度决定。
+// inputL(frames,fs) 与 inputR(frames,fs)。frames 由 FRAME_COUNTS 声明。
+// 计量型模块（moduleKind='meter'）额外声明 moduleKind，且 params 恒为 {}
+// （无参数模块），行为契约由馈入完成后的 readings 捕获冻结。
 
 const CASES = [
   // ---------- biquad ----------
@@ -1258,6 +1307,79 @@ const CASES = [
     ]),
     inputR: (n) => lcgNoise(n, 99004, 0.5),
   },
+
+  // ---------- lufs-meter（计量型读数驱动，moduleKind='meter'，specs/dsp/lufs-meter.md §三） ----------
+  // 驱动顺序 = 构造 new LufsMeter(fs)（无参数模块，params 恒为 {}）→ 逐块
+  // processStereo（就地分析：不改写缓冲、无音频输出，f32 仅两段输入布局）→ 全部块
+  // 馈入完成后一次性读取六个 getter 冻结为 readings（want + 绝对容差 tol；NaN/±Infinity
+  // 走字符串哨兵）。读数与 blockSize 无关（逐样本状态推进次序恒定，实证任意分块逐位
+  // 同读数），blockSize 仅约定驱动分块口径；两支线读数按绝对容差对拍（非逐位）。
+  {
+    module: 'lufs-meter',
+    caseId: 'case1',
+    sampleRate: 48000,
+    blockSize: 512,
+    moduleKind: 'meter',
+    params: {},
+    notes: 'EBU 合成基准信号（计量读数锚点）：双声道同相 997Hz 正弦、幅度 0.05/声道（约 -26 dBFS/声道）——幅度按整合响度实测约 -23 LUFS 标定（EBU R128 目标响度附近）。160000 帧（3.33s）恰产生 30 个分析块，短时读数越过 30 块门槛为有限值；稳态节目六项读数全部有限（LRA≈0.003 LU 近恒定、peak/truePeak≈-26.02 dBFS=20·log10(0.05)）。读数为绝对容差契约（±0.1 LU 等，specs/dsp/lufs-meter.md §五），非逐位对拍。',
+    inputL: (n, fs) => sine(n, fs, 997, 0.05),
+    inputR: (n, fs) => sine(n, fs, 997, 0.05),
+  },
+  {
+    module: 'lufs-meter',
+    caseId: 'case2',
+    sampleRate: 48000,
+    blockSize: 256,
+    moduleKind: 'meter',
+    params: {},
+    notes: '静音输入（非有限读数哨兵语义）：全零 0.5s（2 个完整分析块）。静音块响度记 NaN（块功率 ≤1e-30 防止 -Infinity 泄漏进门限统计）→ 整合/瞬时/短时/LRA 读数全部 NaN（无块过 -70 LUFS 绝对门限、块数 <30、有效块 <2），样本峰值/真峰值为 -Infinity。六项读数以字符串哨兵 "NaN"/"-Infinity" 冻结、按哨兵等值判定——移植若以 0/有限值/错号无穷大替代任一哨兵语义必然暴露。',
+    inputL: (n) => silence(n),
+    inputR: (n) => silence(n),
+  },
+  {
+    module: 'lufs-meter',
+    caseId: 'case3',
+    sampleRate: 44100,
+    blockSize: 500,
+    moduleKind: 'meter',
+    params: {},
+    notes: '突强突发（momentary/峰值路径 + 44100 精确系数路径）：头 8820 帧（0.2s）静音，其后响信号直达结尾（0.88 正弦 1kHz + 0.1 固定种子 LCG 噪声，左右 π/3 去相关）——momentary 取末块响度（实测约 +0.66 LUFS 的热区值）、peakDb ≈ -0.18 dBFS（含噪声尖峰）、truePeakDb 为 4× 过采样 24 抽头多相内插的确定性指纹（全带宽噪声下内插峰值低于样本峰值，跨实现须复刻同一内核调度）。分析块仅 9 个 → shortTerm NaN（<30 块门槛）。采样率 44100 走构造器精确系数分支（RLB/搁架系数与 48k 不同，GWT-LUFSMETER-07）。',
+    inputL: (n, fs) => {
+      const x = sineSum(n, fs, [{ freqHz: 1000, amp: 0.88, phaseRad: 0 }])
+      const noise = lcgNoise(n, 53001, 0.1)
+      for (let i = 8820; i < n; i++) x[i] += noise[i]
+      return x
+    },
+    inputR: (n, fs) => {
+      const x = sineSum(n, fs, [{ freqHz: 1000, amp: 0.88, phaseRad: Math.PI / 3 }])
+      const noise = lcgNoise(n, 53002, 0.1)
+      for (let i = 8820; i < n; i++) x[i] += noise[i]
+      return x
+    },
+  },
+  {
+    module: 'lufs-meter',
+    caseId: 'case4',
+    sampleRate: 48000,
+    blockSize: 1024,
+    moduleKind: 'meter',
+    params: {},
+    notes: '10s 两电平节目（读数稳定性 + LRA 全路径）：0–4s 响段（0.5 正弦 1kHz + 0.1 LCG 噪声）、4–10s 静段（同形信号 ×0.1，实测约 -23.6 LUFS），左右 π/4 去相关——LRA = 门限后块响度 10/95 百分位差实测约 20 LU（EBU Tech 3342 绝对 -70 + 相对 -20 双门限 + 线性插值百分位全路径）、integrated 不被静段拉低（相对门限剔除）、shortTerm（30 块功率环形）与 momentary 取自尾部静段电平。blockSize=1024 非整除（末块 768 帧）；读数与分块无关（GWT-LUFSMETER-05：逐样本状态推进次序恒定，任意 blockSize 逐位同读数，实证）。',
+    inputL: (n, fs) => {
+      const x = sineSum(n, fs, [{ freqHz: 1000, amp: 0.5, phaseRad: 0 }])
+      const noise = lcgNoise(n, 54001, 0.1)
+      for (let i = 0; i < n; i++) x[i] += noise[i]
+      for (let i = 192000; i < n; i++) x[i] *= 0.1
+      return x
+    },
+    inputR: (n, fs) => {
+      const x = sineSum(n, fs, [{ freqHz: 1000, amp: 0.5, phaseRad: Math.PI / 4 }])
+      const noise = lcgNoise(n, 54002, 0.1)
+      for (let i = 0; i < n; i++) x[i] += noise[i]
+      for (let i = 192000; i < n; i++) x[i] *= 0.1
+      return x
+    },
+  },
 ]
 
 // ==================== 模块实例化与分块处理 ====================
@@ -1535,6 +1657,19 @@ function instantiateProcessor(modules, moduleId, sampleRate, params) {
         return [outL, outR]
       }
     }
+    case 'lufs-meter': {
+      if (!modules['lufs-meter'] || !modules['lufs-meter'].LufsMeter) throw new Error('lufs-meter 模块加载失败')
+      // 计量型驱动（specs/dsp/lufs-meter.md §三）：processStereo 就地分析——不改写缓冲、
+      // 无音频输出（返回零长数组，f32 固定为两段输入布局）；模块实例挂在 process.meter
+      // 上，全部块馈入完成后由主流程经 METER_READINGS 一次性捕获冻结读数。
+      const meter = new modules['lufs-meter'].LufsMeter(sampleRate)
+      const process = (l, r) => {
+        meter.processStereo(l, r)
+        return [new Float32Array(0), new Float32Array(0)]
+      }
+      process.meter = meter
+      return process
+    }
     default:
       throw new Error('未知模块 id：' + moduleId)
   }
@@ -1573,7 +1708,26 @@ function serializeF32(inL, inR, outL, outR) {
   return buffer
 }
 
-/** JSON 固定键序序列化（幂等性的前提之一） */
+/**
+ * f32 小端两段布局（计量型 moduleKind='meter' 专用）：[输入左][输入右] = 8×frames 字节。
+ * 计量模块 processStereo 就地分析、无音频输出，期望输出段为零长（不落盘），
+ * 行为契约由 JSON readings 标量承载（specs/dsp/lufs-meter.md §三）。
+ */
+function serializeF32MeterInputOnly(inL, inR) {
+  const frames = inL.length
+  const buffer = Buffer.alloc(frames * 4 * CHANNELS)
+  const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength)
+  let offset = 0
+  for (const seg of [inL, inR]) {
+    for (let i = 0; i < seg.length; i++) {
+      view.setFloat32(offset, seg[i], true)
+      offset += 4
+    }
+  }
+  return buffer
+}
+
+/** JSON 固定键序序列化（幂等性的前提之一）；moduleKind/readings 仅在存在时追加（既有 case 键序不变） */
 function serializeJson(caseDef, meta) {
   const doc = {
     schemaVersion: SCHEMA_VERSION,
@@ -1587,6 +1741,8 @@ function serializeJson(caseDef, meta) {
     tolerance: TOLERANCE,
     notes: caseDef.notes,
   }
+  if (caseDef.moduleKind) doc.moduleKind = caseDef.moduleKind
+  if (meta.readings) doc.readings = meta.readings
   return Buffer.from(JSON.stringify(doc, null, 2) + '\n', 'utf8')
 }
 
@@ -1629,11 +1785,16 @@ async function main() {
     }
 
     const process = instantiateProcessor(modules, caseDef.module, caseDef.sampleRate, caseDef.params)
+    const isMeter = caseDef.moduleKind === 'meter'
+    // 计量型：renderChunked 只负责按契约分块把输入馈入 meter（块输出为零长数组），
+    // 馈入完成后从实例一次性捕获冻结读数——readings 即该向量的行为契约。
     const { outL, outR } = renderChunked(process, inL, inR, caseDef.blockSize)
+    const readings = isMeter ? captureReadings(caseDef.module, process.meter) : undefined
 
     const baseName = caseDef.module + '.' + caseDef.caseId
-    const jsonResult = writeFrozen(path.join(outDir, baseName + '.json'), serializeJson(caseDef, { frames }))
-    const f32Result = writeFrozen(path.join(outDir, baseName + '.f32'), serializeF32(inL, inR, outL, outR))
+    const jsonResult = writeFrozen(path.join(outDir, baseName + '.json'), serializeJson(caseDef, { frames, readings }))
+    const f32Content = isMeter ? serializeF32MeterInputOnly(inL, inR) : serializeF32(inL, inR, outL, outR)
+    const f32Result = writeFrozen(path.join(outDir, baseName + '.f32'), f32Content)
     written += (jsonResult === 'written' ? 1 : 0) + (f32Result === 'written' ? 1 : 0)
     unchanged += (jsonResult === 'unchanged' ? 1 : 0) + (f32Result === 'unchanged' ? 1 : 0)
     console.log('[' + jsonResult.padEnd(9) + '] ' + baseName + '.json   [' + f32Result + '] ' + baseName + '.f32   (' + caseDef.sampleRate + 'Hz / ' + frames + ' 帧 / 块 ' + caseDef.blockSize + ')')
@@ -1717,6 +1878,13 @@ const FRAME_COUNTS = {
   'hse-stretch.case2': 6400,
   'hse-stretch.case3': 6000,
   'hse-stretch.case4': 6400,
+  // lufs-meter：case1 = 160000 帧（恰 30 个分析块，短时读数越过 30 块门槛）；
+  // case2 = 0.5s 静音；case3 = 44100 下 1.2s（52920 = 8820 静音头 + 响信号）；
+  // case4 = 10s 两电平节目（LRA 全路径）。
+  'lufs-meter.case1': 160000,
+  'lufs-meter.case2': 24000,
+  'lufs-meter.case3': 52920,
+  'lufs-meter.case4': 480000,
 }
 
 main().catch((err) => {

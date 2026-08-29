@@ -29,6 +29,7 @@ import { DelayEffect, ChorusEffect, FlangerEffect, PhaserEffect, TremoloEffect }
 import { Convolver, type ConvolverOptions } from '../src/dsp/Convolver'
 import { ModulationMatrix } from '../src/dsp/modulation'
 import { HseStretch } from '../src/dsp/HseStretch'
+import { LufsMeter } from '../src/dsp/LufsMeter'
 import { fft } from '../src/dsp/fft'
 import type { LimiterSettings, CompressorSettings, BassEnhancerSettings, DeesserSettings, ModEffectsSettings, ModulationRoute, LfoShape } from '../src/types'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
@@ -36,7 +37,13 @@ import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const VECTOR_DIR = resolve(fileURLToPath(import.meta.url), '..', '..', 'specs', 'dsp', 'vectors')
-const SUPPORTED_MODULES = ['biquad', 'limiter', 'reverb-simple', 'compressor', 'bass-enhancer', 'mid-side', 'eq-chain', 'fdn-reverb', 'deesser', 'loudness-comp', 'dynamic-eq', 'mod-effects', 'fft', 'convolver', 'modulation-matrix', 'hse-stretch'] as const
+const SUPPORTED_MODULES = ['biquad', 'limiter', 'reverb-simple', 'compressor', 'bass-enhancer', 'mid-side', 'eq-chain', 'fdn-reverb', 'deesser', 'loudness-comp', 'dynamic-eq', 'mod-effects', 'fft', 'convolver', 'modulation-matrix', 'hse-stretch', 'lufs-meter'] as const
+
+/** 计量读数条目（specs/dsp/lufs-meter.md §三/§五）：want 为数值或非有限哨兵字符串 */
+interface ReadingEntry {
+  want: number | 'NaN' | '+Infinity' | '-Infinity'
+  tol: number
+}
 
 /** 向量 JSON 元数据（与 specs/dsp/vectors 契约一致） */
 interface VectorMeta {
@@ -49,6 +56,10 @@ interface VectorMeta {
   frames: number
   params: Record<string, unknown>
   tolerance: { kind: string; value: number; floor: number }
+  /** 可选模块驱动形态（缺省视为 'stream'）；meter = 计量型读数驱动（specs/dsp/lufs-meter.md §三） */
+  moduleKind?: 'stream' | 'meter'
+  /** 计量读数契约（仅 moduleKind='meter'）：读数名 → { want, tol } */
+  readings?: Record<string, ReadingEntry>
   notes?: string
 }
 
@@ -96,11 +107,35 @@ function validateMeta(found: DiscoveredCase): void {
   if (!(m.tolerance.value > 0) || !(m.tolerance.floor >= 0)) {
     throw new Error(found.label + ': 容差 value/floor 非法')
   }
-  // f32 四段布局：[输入左][输入右][期望输出左][期望输出右] × frames × 4 字节
-  const expectedBytes = m.frames * 4 * 4
+  // moduleKind / readings 双向绑定（Schema allOf 的加载器侧对偶校验）
+  if (m.moduleKind !== undefined && m.moduleKind !== 'stream' && m.moduleKind !== 'meter') {
+    throw new Error(found.label + ': moduleKind 必须为 stream/meter，实际 ' + String(m.moduleKind))
+  }
+  if (m.readings !== undefined && m.moduleKind !== 'meter') {
+    throw new Error(found.label + ': readings 仅允许出现在 moduleKind="meter" 的计量型向量')
+  }
+  if (m.moduleKind === 'meter') {
+    if (!m.readings || Object.keys(m.readings).length === 0) {
+      throw new Error(found.label + ': 计量型向量（moduleKind="meter"）必须携带非空 readings')
+    }
+    for (const [name, entry] of Object.entries(m.readings)) {
+      const w = entry.want
+      if (typeof w !== 'number' && w !== 'NaN' && w !== '+Infinity' && w !== '-Infinity') {
+        throw new Error(found.label + ': 读数 ' + name + ' 的 want 必须为数值或 NaN/±Infinity 哨兵')
+      }
+      if (typeof entry.tol !== 'number' || !(entry.tol >= 0) || !Number.isFinite(entry.tol)) {
+        throw new Error(found.label + ': 读数 ' + name + ' 的 tol 必须为非负有限数')
+      }
+    }
+  }
+  // f32 布局：流式 = [输入左][输入右][期望输出左][期望输出右] × frames × 4 字节；
+  // 计量型（moduleKind='meter'）= [输入左][输入右] 两段 × frames × 4 字节（无期望输出段，
+  // specs/dsp/lufs-meter.md §三）。
+  const expectedBytes = m.moduleKind === 'meter' ? m.frames * 4 * 2 : m.frames * 4 * 4
   if (found.f32Bytes.byteLength !== expectedBytes) {
     throw new Error(
-      found.label + ': .f32 字节数应为 ' + expectedBytes + '（frames×4 段×4 字节），实际 ' + found.f32Bytes.byteLength,
+      found.label + ': .f32 字节数应为 ' + expectedBytes +
+      '（' + (m.moduleKind === 'meter' ? 'frames×2 段×4 字节，计量型' : 'frames×4 段×4 字节') + '），实际 ' + found.f32Bytes.byteLength,
     )
   }
 }
@@ -176,12 +211,16 @@ function buildIrRecipe(recipe: IrRecipe): Float32Array {
   throw new Error('未知 IR 配方 kind：' + recipe.kind)
 }
 
-/** 按 module id 用 TS 支线实现构造分块处理器（状态在闭包实例上跨块保持） */
+/** 分块处理器形态：每块调用一次，返回该块输出（计量型模块返回零长数组） */
+type ProcessFn = (l: Float32Array, r: Float32Array) => [Float32Array, Float32Array]
+
+/** 按 module id 用 TS 支线实现构造分块处理器（状态在闭包实例上跨块保持）；
+ *  计量型模块（moduleKind='meter'）在返回的处理器上附加 meter 实例，供读数对拍取回 */
 function instantiate(
   moduleId: string,
   sampleRate: number,
   params: Record<string, unknown>,
-): (l: Float32Array, r: Float32Array) => [Float32Array, Float32Array] {
+): ProcessFn & { meter?: LufsMeter } {
   switch (moduleId) {
     case 'biquad': {
       // 单声道模块的立体声扩展语义（与导出脚本一致）：左右各一个独立 TDF2 实例，
@@ -454,6 +493,19 @@ function instantiate(
         return [outL, outR]
       }
     }
+    case 'lufs-meter': {
+      // 计量型读数驱动（specs/dsp/lufs-meter.md §三）：processStereo 就地分析——不改写
+      // 缓冲、无音频输出（返回零长数组，f32 为两段输入布局）；实例附在 process.meter 上，
+      // 全部块馈入完成后由读数判定取回（assertReadingsWithinTolerance）。
+      // 无参数模块：构造仅 fs，params 恒为 {}，不调用 setParams。
+      const meter = new LufsMeter(sampleRate)
+      const process = ((l: Float32Array, r: Float32Array) => {
+        meter.processStereo(l, r)
+        return [new Float32Array(0), new Float32Array(0)] as [Float32Array, Float32Array]
+      }) as ProcessFn & { meter?: LufsMeter }
+      process.meter = meter
+      return process
+    }
     default:
       throw new Error('未知模块 id：' + moduleId)
   }
@@ -504,6 +556,58 @@ function assertWithinTolerance(
   expect(worstRatio).toBeLessThanOrEqual(1)
 }
 
+/** 计量读数 getter 表（读数名与导出工具 METER_READINGS 逐字一致，specs/dsp/lufs-meter.md §二/§四） */
+const READING_GETTERS: Record<string, (m: LufsMeter) => number> = {
+  integratedLufs: (m) => m.getIntegratedLufs(),
+  momentaryLufs: (m) => m.getMomentaryLufs(),
+  shortTermLufs: (m) => m.getShortTermLufs(),
+  lra: (m) => m.getLra(),
+  peakDb: (m) => m.getPeakDb(),
+  truePeakDb: (m) => m.getTruePeakDb(),
+}
+
+/** 单条计量读数判定（specs/dsp/lufs-meter.md §三/§五）：
+ *  want 为有限数 → 绝对容差 |got-want| <= tol；want 为哨兵 → 等值判定（tol 不参与） */
+function assertReadingWithinTolerance(label: string, name: string, entry: ReadingEntry, got: number): void {
+  const w = entry.want
+  if (w === 'NaN') {
+    if (!Number.isNaN(got)) {
+      throw new Error(label + ' 读数 ' + name + ' 应为 NaN，实际 ' + got)
+    }
+    return
+  }
+  if (w === '+Infinity') {
+    if (got !== Infinity) {
+      throw new Error(label + ' 读数 ' + name + ' 应为 +Infinity，实际 ' + got)
+    }
+    return
+  }
+  if (w === '-Infinity') {
+    if (got !== -Infinity) {
+      throw new Error(label + ' 读数 ' + name + ' 应为 -Infinity，实际 ' + got)
+    }
+    return
+  }
+  const err = Math.abs(got - w)
+  if (!(err <= entry.tol)) {
+    throw new Error(
+      label + ' 读数 ' + name + ' 超出容差：got=' + got + ' want=' + w +
+      ' |err|=' + err + ' 允许上限=' + entry.tol,
+    )
+  }
+}
+
+/** 计量型读数对拍：与冻结 readings 逐项判定（未知名视为向量非法） */
+function assertReadingsWithinTolerance(label: string, readings: Record<string, ReadingEntry>, meter: LufsMeter): void {
+  for (const name of Object.keys(readings)) {
+    const getter = READING_GETTERS[name]
+    if (!getter) {
+      throw new Error(label + ': 未知读数名 "' + name + '"（合法集合见 specs/dsp/lufs-meter.md §二）')
+    }
+    assertReadingWithinTolerance(label, name, readings[name], getter(meter))
+  }
+}
+
 const discovered = discoverCases()
 
 describe('spec-vectors 对拍门禁（TS 侧）', () => {
@@ -532,6 +636,11 @@ for (const found of discovered) {
       const { outL, outR } = renderChunked(process, inputL, inputR, m.blockSize)
       assertWithinTolerance(found.label, '输出左', outL, wantL, m.tolerance)
       assertWithinTolerance(found.label, '输出右', outR, wantR, m.tolerance)
+      // 计量型（moduleKind='meter'）：音频段为零长（无期望输出段），行为契约由
+      // 冻结 readings 标量承载（specs/dsp/lufs-meter.md §三/§五）。
+      if (m.moduleKind === 'meter') {
+        assertReadingsWithinTolerance(found.label, m.readings as Record<string, ReadingEntry>, process.meter as LufsMeter)
+      }
     })
   })
 }
