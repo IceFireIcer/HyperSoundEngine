@@ -73,3 +73,13 @@ cargo run -p hse-cli -- stop
 ```powershell
 cargo test -p hse-service           # 单测+集成测试全绿，不依赖真实音频设备
 ```
+## 8h 稳定性压测
+
+```powershell
+cargo run -p hse-service --release        # 终端 A
+node ../../scripts/soak-8h.mjs --duration 28800 --report soak-report.json   # 终端 B（过夜）
+```
+
+- 默认合成馈送 + 静音链路（wet=0/dry=0）：测稳定性/泄漏/计数器单调，不出声；
+- `--no-session`：真实播放器模式（用户播放音乐，回环为实时时钟源），`xrunsOut==0` 为硬判据（零 xrun 判定）；
+- 报告 JSON 含逐分钟采样（phase/frames/xruns），判定：phase 全程 running、计数器单调、吞吐合格。
