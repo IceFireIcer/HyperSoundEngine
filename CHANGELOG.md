@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- **Phase 4 启动：基准矩阵 + SIMD 评估 + 指标留档**：16 个 criterion bench（全 12 已移植模块 × 块长矩阵 + 全链 60s 离线 + fft/convolver/midi/wav/share_codec）+ `docs/audit/phase4-bench-matrix.md`（热点排名：convolver 385 ns/帧断层第一）+ `docs/audit/phase4-simd-eval.md`（逐位对拍约束分析：零期望样本须逐位、非零样本余量仅 8–10 f32 ulp → 仅通道级 SIMD 安全；自动向量化实测 +6–10%）。**§三指标全部达标**：全链离线 0.546% realtime = TS 基线的 9.7–10.2×（目标 ≥3×）；默认链 CPU 0.546%（≤5%）；最重场景 10.7%（≤25%）。SIMD 实施与 8h 压测按评估结论显式缓办（Convolver 1.8–2.0× 潜力为未来 64 对象场景储备；8h 压测需真机长跑）。
+
 ## [0.6.0] - 2026-08
 
 ### Added
