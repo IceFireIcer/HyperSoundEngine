@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "module": "dynamic-eq",
+  "case": "case1",
+  "sampleRate": 48000,
+  "blockSize": 256,
+  "channels": 2,
+  "frames": 6000,
+  "params": {
+    "enabled": false,
+    "strength": 0.8,
+    "thresholdDb": -30,
+    "ratio": 8,
+    "kneeDb": 6,
+    "attackMs": 10,
+    "releaseMs": 200,
+    "blockSize": 128,
+    "bands": [
+      {
+        "enabled": true,
+        "frequency": 200,
+        "targetGainDb": 6
+      },
+      {
+        "enabled": true,
+        "frequency": 800,
+        "targetGainDb": -6
+      },
+      {
+        "enabled": true,
+        "frequency": 2500,
+        "targetGainDb": 8
+      },
+      {
+        "enabled": true,
+        "frequency": 8000,
+        "targetGainDb": -8
+      },
+      {
+        "enabled": true,
+        "frequency": 0,
+        "targetGainDb": 3
+      }
+    ]
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "禁用恒等锚点：enabled=false 时 processStereo 首行直接返回、缓冲零改写，期望输出与输入逐位一致（左右声道皆然，增益/目标/电平/交叉树全部状态不推进）；其余参数取激进值随载荷固化（bands 的 frequency 与引擎固定注入 DYNAMIC_EQ_CROSSOVERS=[200,800,2500,8000] 一致、末带 0 被模块忽略，见 specs/dsp/dynamic-eq.md §4.7）。左=三频正弦叠加(120/800/6000Hz)，右=固定种子LCG噪声。帧数非整除（末块 112 帧）。"
+}

@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "module": "dynamic-eq",
+  "case": "case4",
+  "sampleRate": 44100,
+  "blockSize": 480,
+  "channels": 2,
+  "frames": 6000,
+  "params": {
+    "enabled": true,
+    "strength": 1.5,
+    "thresholdDb": -90,
+    "ratio": 120,
+    "kneeDb": 45,
+    "attackMs": 0,
+    "releaseMs": 0,
+    "blockSize": 8,
+    "bands": [
+      {
+        "enabled": true,
+        "frequency": 10,
+        "targetGainDb": 20
+      },
+      {
+        "enabled": false,
+        "frequency": 30000,
+        "targetGainDb": -20
+      },
+      {
+        "enabled": true,
+        "frequency": 2500,
+        "targetGainDb": 3
+      },
+      {
+        "enabled": false,
+        "frequency": 8000,
+        "targetGainDb": 0
+      },
+      {
+        "enabled": true,
+        "frequency": 99999,
+        "targetGainDb": 1
+      }
+    ]
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "部分带禁用 + 钳制极值：bands[1]/bands[3] 禁用（目标恒 1、带信号仍以增益 1 参与求和）；strength=1.5→1、thresholdDb=-90→-80、ratio=120→100、kneeDb=45→40、attackMs=0→0.05ms、releaseMs=0→1ms、params.blockSize=8→16 双向越界钳制；bands[0].frequency=10→30 下界、bands[1].frequency=30000→19845（44100 下 nyq×0.9 上界）、bands[4].frequency=99999 完全被忽略（末带不读取）、targetGainDb ±20→±12。多采样率 44100 覆盖 crossover 上界与 attack/release 系数随 fs 变化。帧数非整除（末块 240 帧）。"
+}

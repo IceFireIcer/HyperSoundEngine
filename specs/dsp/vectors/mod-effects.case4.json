@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "module": "mod-effects",
+  "case": "case4",
+  "sampleRate": 44100,
+  "blockSize": 480,
+  "channels": 2,
+  "frames": 6000,
+  "params": {
+    "delay": {
+      "enabled": false,
+      "delayMs": 300,
+      "feedback": 0.5,
+      "mix": 0.3
+    },
+    "chorus": {
+      "enabled": false,
+      "rateHz": 1.5,
+      "depthMs": 6,
+      "mix": 0.4
+    },
+    "flanger": {
+      "enabled": false,
+      "rateHz": 1,
+      "depthMs": 5,
+      "feedback": 0.5,
+      "mix": 0.5
+    },
+    "phaser": {
+      "enabled": true,
+      "rateHz": 1.5,
+      "depth": 0.8,
+      "feedback": 0.5,
+      "mix": 0.5,
+      "stages": 6
+    },
+    "tremolo": {
+      "enabled": true,
+      "rateHz": 8,
+      "depth": 0.7,
+      "mix": 1
+    }
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "Phaser + Tremolo 组合（隔离 case，stages 变体）：phaser（1.5Hz/depth0.8/反馈0.5/mix0.5/stages=6 非默认级数；各级全通并行处理同一输入、仅末级输出被采用——非级联，specs/dsp/mod-effects.md §4.5）+ tremolo（8Hz/depth0.7/mix1 深度幅度调制）级联；两者 LFO 均逐样本步进（分块与整块逐位一致）。多采样率 44100 覆盖全通系数 tan(π·fc/fs) 与相位步进随 fs 变化。帧数非整除（末块 240 帧）。"
+}

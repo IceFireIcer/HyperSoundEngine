@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "module": "dynamic-eq",
+  "case": "case2",
+  "sampleRate": 48000,
+  "blockSize": 333,
+  "channels": 2,
+  "frames": 6000,
+  "params": {
+    "enabled": true,
+    "strength": 0.5,
+    "thresholdDb": -10,
+    "ratio": 2,
+    "kneeDb": 6,
+    "attackMs": 20,
+    "releaseMs": 200,
+    "blockSize": 128,
+    "bands": [
+      {
+        "enabled": true,
+        "frequency": 200,
+        "targetGainDb": 6
+      },
+      {
+        "enabled": true,
+        "frequency": 800,
+        "targetGainDb": 4
+      },
+      {
+        "enabled": true,
+        "frequency": 2500,
+        "targetGainDb": 3
+      },
+      {
+        "enabled": true,
+        "frequency": 8000,
+        "targetGainDb": 2
+      },
+      {
+        "enabled": true,
+        "frequency": 0,
+        "targetGainDb": 1
+      }
+    ]
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "全带静态提升 + strength 干湿混合：5 带全启用、目标曲线全正（+6/+4/+3/+2/+1 dB）、strength 0.5、阈值 -10dB 较高（激励电平多在阈下，静态曲线主导）——各带增益从 1 沿 release 路径爬升至 strength 混合目标。顶层 blockSize=333 非 params.blockSize=128 的整数倍：控制更新在每次驱动调用边界提前触发，输出依赖驱动分块（specs/dsp/dynamic-eq.md §4.5 实证），两支线必须按同一块长回放。帧数非整除（末块 6 帧）。"
+}

@@ -7,7 +7,7 @@
  * 职责：
  *  - 以 TS 支线（src/）为行为事实标准，为 biquad / limiter / reverb-simple /
  *    compressor / bass-enhancer / mid-side / eq-chain / fdn-reverb / deesser /
- *    loudness-comp 十个模块
+ *    loudness-comp / dynamic-eq / mod-effects 十二个模块
  *    导出确定性对拍向量到 specs/dsp/vectors/<module>.<case>.json 与同名 .f32；
  *  - 向量格式契约（两支线共享，见 specs/ 目录规划文档）：
  *      JSON：schemaVersion=1 / module / case / sampleRate / blockSize / channels=2 /
@@ -59,6 +59,8 @@ const MODULE_SOURCES = [
   { id: 'fdn-reverb', file: 'FdnReverb.ts' },
   { id: 'deesser', file: 'Deesser.ts' },
   { id: 'loudness-comp', file: 'LoudnessComp.ts' },
+  { id: 'dynamic-eq', file: 'DynamicEq.ts' },
+  { id: 'mod-effects', file: 'ModEffects.ts' },
 ]
 
 /**
@@ -744,6 +746,205 @@ const CASES = [
     ]),
     inputR: (n) => lcgNoise(n, 63004, 0.5),
   },
+
+  // ---------- dynamic-eq ----------
+  {
+    module: 'dynamic-eq',
+    caseId: 'case1',
+    sampleRate: 48000,
+    blockSize: 256,
+    params: {
+      enabled: false,
+      strength: 0.8,
+      thresholdDb: -30,
+      ratio: 8,
+      kneeDb: 6,
+      attackMs: 10,
+      releaseMs: 200,
+      blockSize: 128,
+      bands: [
+        { enabled: true, frequency: 200, targetGainDb: 6 },
+        { enabled: true, frequency: 800, targetGainDb: -6 },
+        { enabled: true, frequency: 2500, targetGainDb: 8 },
+        { enabled: true, frequency: 8000, targetGainDb: -8 },
+        { enabled: true, frequency: 0, targetGainDb: 3 },
+      ],
+    },
+    notes: '禁用恒等锚点：enabled=false 时 processStereo 首行直接返回、缓冲零改写，期望输出与输入逐位一致（左右声道皆然，增益/目标/电平/交叉树全部状态不推进）；其余参数取激进值随载荷固化（bands 的 frequency 与引擎固定注入 DYNAMIC_EQ_CROSSOVERS=[200,800,2500,8000] 一致、末带 0 被模块忽略，见 specs/dsp/dynamic-eq.md §4.7）。左=三频正弦叠加(120/800/6000Hz)，右=固定种子LCG噪声。帧数非整除（末块 112 帧）。',
+    inputL: (n, fs) => sineSum(n, fs, [
+      { freqHz: 120, amp: 0.45, phaseRad: 0 },
+      { freqHz: 800, amp: 0.3, phaseRad: Math.PI / 5 },
+      { freqHz: 6000, amp: 0.2, phaseRad: Math.PI / 3 },
+    ]),
+    inputR: (n) => lcgNoise(n, 85001, 0.5),
+  },
+  {
+    module: 'dynamic-eq',
+    caseId: 'case2',
+    sampleRate: 48000,
+    blockSize: 333,
+    params: {
+      enabled: true,
+      strength: 0.5,
+      thresholdDb: -10,
+      ratio: 2,
+      kneeDb: 6,
+      attackMs: 20,
+      releaseMs: 200,
+      blockSize: 128,
+      bands: [
+        { enabled: true, frequency: 200, targetGainDb: 6 },
+        { enabled: true, frequency: 800, targetGainDb: 4 },
+        { enabled: true, frequency: 2500, targetGainDb: 3 },
+        { enabled: true, frequency: 8000, targetGainDb: 2 },
+        { enabled: true, frequency: 0, targetGainDb: 1 },
+      ],
+    },
+    notes: '全带静态提升 + strength 干湿混合：5 带全启用、目标曲线全正（+6/+4/+3/+2/+1 dB）、strength 0.5、阈值 -10dB 较高（激励电平多在阈下，静态曲线主导）——各带增益从 1 沿 release 路径爬升至 strength 混合目标。顶层 blockSize=333 非 params.blockSize=128 的整数倍：控制更新在每次驱动调用边界提前触发，输出依赖驱动分块（specs/dsp/dynamic-eq.md §4.5 实证），两支线必须按同一块长回放。帧数非整除（末块 6 帧）。',
+    inputL: (n, fs) => sineSum(n, fs, [
+      { freqHz: 110, amp: 0.35, phaseRad: 0 },
+      { freqHz: 900, amp: 0.25, phaseRad: Math.PI / 4 },
+      { freqHz: 3200, amp: 0.15, phaseRad: Math.PI / 3 },
+    ]),
+    inputR: (n) => lcgNoise(n, 85002, 0.35),
+  },
+  {
+    module: 'dynamic-eq',
+    caseId: 'case3',
+    sampleRate: 48000,
+    blockSize: 384,
+    params: {
+      enabled: true,
+      strength: 0.7,
+      thresholdDb: -20,
+      ratio: 4,
+      kneeDb: 6,
+      attackMs: 10,
+      releaseMs: 300,
+      blockSize: 128,
+      bands: [
+        { enabled: true, frequency: 200, targetGainDb: 0 },
+        { enabled: true, frequency: 800, targetGainDb: 0 },
+        { enabled: true, frequency: 2500, targetGainDb: 0 },
+        { enabled: true, frequency: 8000, targetGainDb: 0 },
+        { enabled: true, frequency: 0, targetGainDb: 0 },
+      ],
+    },
+    notes: '阈值/attack-release 行为：阈值 -20dB、ratio 4、strength 0.7——前半段强激励（0.9 幅度正弦叠加 + 0.9 噪声）使多带电平稳定超阈、增益沿 attack 路径下探至压缩稳态；后半段静音、增益沿 release 路径恢复；控制延迟一个分析块（128 样本）随轨迹整段冻结。顶层 blockSize=384 为 params.blockSize 的整数倍（=3×128，分块与整块处理逐位一致）。帧数非整除（末块 200 帧）。',
+    inputL: (n, fs) => burstThenSilence(sineSum(n, fs, [
+      { freqHz: 100, amp: 0.9, phaseRad: 0 },
+      { freqHz: 3000, amp: 0.9, phaseRad: Math.PI / 4 },
+    ]), Math.floor(n / 2)),
+    inputR: (n) => burstThenSilence(lcgNoise(n, 85003, 0.9), Math.floor(n / 2)),
+  },
+  {
+    module: 'dynamic-eq',
+    caseId: 'case4',
+    sampleRate: 44100,
+    blockSize: 480,
+    params: {
+      enabled: true,
+      strength: 1.5,
+      thresholdDb: -90,
+      ratio: 120,
+      kneeDb: 45,
+      attackMs: 0,
+      releaseMs: 0,
+      blockSize: 8,
+      bands: [
+        { enabled: true, frequency: 10, targetGainDb: 20 },
+        { enabled: false, frequency: 30000, targetGainDb: -20 },
+        { enabled: true, frequency: 2500, targetGainDb: 3 },
+        { enabled: false, frequency: 8000, targetGainDb: 0 },
+        { enabled: true, frequency: 99999, targetGainDb: 1 },
+      ],
+    },
+    notes: '部分带禁用 + 钳制极值：bands[1]/bands[3] 禁用（目标恒 1、带信号仍以增益 1 参与求和）；strength=1.5→1、thresholdDb=-90→-80、ratio=120→100、kneeDb=45→40、attackMs=0→0.05ms、releaseMs=0→1ms、params.blockSize=8→16 双向越界钳制；bands[0].frequency=10→30 下界、bands[1].frequency=30000→19845（44100 下 nyq×0.9 上界）、bands[4].frequency=99999 完全被忽略（末带不读取）、targetGainDb ±20→±12。多采样率 44100 覆盖 crossover 上界与 attack/release 系数随 fs 变化。帧数非整除（末块 240 帧）。',
+    inputL: (n, fs) => sineSum(n, fs, [
+      { freqHz: 80, amp: 0.6, phaseRad: 0 },
+      { freqHz: 1500, amp: 0.4, phaseRad: Math.PI / 5 },
+      { freqHz: 9000, amp: 0.3, phaseRad: Math.PI / 3 },
+    ]),
+    inputR: (n) => lcgNoise(n, 85004, 0.5),
+  },
+
+  // ---------- mod-effects ----------
+  {
+    module: 'mod-effects',
+    caseId: 'case1',
+    sampleRate: 48000,
+    blockSize: 256,
+    params: {
+      delay: { enabled: false, delayMs: 1500, feedback: 0.9, mix: 0.8 },
+      chorus: { enabled: false, rateHz: 15, depthMs: 30, mix: 1 },
+      flanger: { enabled: false, rateHz: 15, depthMs: 30, feedback: 0.9, mix: 1 },
+      phaser: { enabled: false, rateHz: 15, depth: 1, feedback: 0.9, mix: 1, stages: 9 },
+      tremolo: { enabled: false, rateHz: 25, depth: 1, mix: 1 },
+    },
+    notes: '全禁用恒等锚点：五效果 enabled 全 false，链路驱动器跳过全部五级（禁用级逐位旁路、状态不推进），期望输出与输入逐位一致；激进参数随载荷固化（含 phaser stages=9→8 越界钳制），驱动器对五效果无条件 setParams（enabled 字段被效果类自身忽略，引擎接线语义见 specs/dsp/mod-effects.md §4.1）。左=双频正弦叠加(220/3300Hz)，右=固定种子LCG噪声。帧数非整除（末块 112 帧）。',
+    inputL: (n, fs) => sineSum(n, fs, [
+      { freqHz: 220, amp: 0.5, phaseRad: 0 },
+      { freqHz: 3300, amp: 0.25, phaseRad: Math.PI / 4 },
+    ]),
+    inputR: (n) => lcgNoise(n, 86001, 0.6),
+  },
+  {
+    module: 'mod-effects',
+    caseId: 'case2',
+    sampleRate: 48000,
+    blockSize: 333,
+    params: {
+      delay: { enabled: true, delayMs: 40, feedback: 0.55, mix: 0.4 },
+      chorus: { enabled: false, rateHz: 1.2, depthMs: 5, mix: 0.4 },
+      flanger: { enabled: false, rateHz: 0.8, depthMs: 4, feedback: 0.5, mix: 0.5 },
+      phaser: { enabled: false, rateHz: 0.5, depth: 0.5, feedback: 0.4, mix: 0.5, stages: 4 },
+      tremolo: { enabled: false, rateHz: 5, depth: 0.5, mix: 1 },
+    },
+    notes: 'Delay 单独激活（隔离 case）：仅 delay enabled（40ms≈1920 样本延迟线 + 反馈 0.55 + mix 0.4），左声道前 3000 帧有声后段静音——反馈回声族（40ms 间隔逐代衰减）与衰减尾清晰；delay 为纯逐样本递推（分块与整块逐位一致）；其余四级禁用逐位旁路。帧数非整除（末块 6 帧）。',
+    inputL: (n, fs) => burstThenSilence(sineSum(n, fs, [
+      { freqHz: 1000, amp: 0.8, phaseRad: 0 },
+      { freqHz: 2500, amp: 0.3, phaseRad: Math.PI / 3 },
+    ]), 3000),
+    inputR: (n) => lcgNoise(n, 86002, 0.5),
+  },
+  {
+    module: 'mod-effects',
+    caseId: 'case3',
+    sampleRate: 48000,
+    blockSize: 333,
+    params: {
+      delay: { enabled: false, delayMs: 300, feedback: 0.5, mix: 0.3 },
+      chorus: { enabled: true, rateHz: 4, depthMs: 5, mix: 0.5 },
+      flanger: { enabled: true, rateHz: 2.5, depthMs: 4, feedback: 0.6, mix: 0.5 },
+      phaser: { enabled: false, rateHz: 0.5, depth: 0.5, feedback: 0.4, mix: 0.5, stages: 4 },
+      tremolo: { enabled: false, rateHz: 5, depth: 0.5, mix: 1 },
+    },
+    notes: 'Chorus + Flanger 组合（隔离 case）：chorus（4Hz/5ms/mix0.5，基础延迟固定 20ms、反馈恒 0）+ flanger（2.5Hz/4ms/反馈0.6/mix0.5，基础延迟固定 1ms）级联；flanger 调制负半周（1ms−4ms<0）触发 readDelay 下界钳制与 d<1 退化读取区（整环回绕前值，specs/dsp/mod-effects.md §4.2 实证连续、有限）。chorus/flanger 的 LFO 相位按整块步进（块内调制量常量）→ 输出依赖顶层 blockSize，两支线必须按同一块长回放。帧数非整除（末块 12 帧）。',
+    inputL: (n, fs) => sineSum(n, fs, [
+      { freqHz: 440, amp: 0.5, phaseRad: 0 },
+      { freqHz: 1320, amp: 0.25, phaseRad: Math.PI / 5 },
+    ]),
+    inputR: (n) => lcgNoise(n, 86003, 0.5),
+  },
+  {
+    module: 'mod-effects',
+    caseId: 'case4',
+    sampleRate: 44100,
+    blockSize: 480,
+    params: {
+      delay: { enabled: false, delayMs: 300, feedback: 0.5, mix: 0.3 },
+      chorus: { enabled: false, rateHz: 1.5, depthMs: 6, mix: 0.4 },
+      flanger: { enabled: false, rateHz: 1, depthMs: 5, feedback: 0.5, mix: 0.5 },
+      phaser: { enabled: true, rateHz: 1.5, depth: 0.8, feedback: 0.5, mix: 0.5, stages: 6 },
+      tremolo: { enabled: true, rateHz: 8, depth: 0.7, mix: 1 },
+    },
+    notes: 'Phaser + Tremolo 组合（隔离 case，stages 变体）：phaser（1.5Hz/depth0.8/反馈0.5/mix0.5/stages=6 非默认级数；各级全通并行处理同一输入、仅末级输出被采用——非级联，specs/dsp/mod-effects.md §4.5）+ tremolo（8Hz/depth0.7/mix1 深度幅度调制）级联；两者 LFO 均逐样本步进（分块与整块逐位一致）。多采样率 44100 覆盖全通系数 tan(π·fc/fs) 与相位步进随 fs 变化。帧数非整除（末块 240 帧）。',
+    inputL: (n, fs) => sineSum(n, fs, [
+      { freqHz: 600, amp: 0.6, phaseRad: 0 },
+      { freqHz: 2400, amp: 0.3, phaseRad: Math.PI / 4 },
+    ]),
+    inputR: (n) => lcgNoise(n, 86004, 0.5),
+  },
 ]
 
 // ==================== 模块实例化与分块处理 ====================
@@ -889,6 +1090,51 @@ function instantiateProcessor(modules, moduleId, sampleRate, params) {
         const outL = l.slice()
         const outR = r.slice()
         comp.processStereo(outL, outR)
+        return [outL, outR]
+      }
+    }
+    case 'dynamic-eq': {
+      if (!modules['dynamic-eq'] || !modules['dynamic-eq'].DynamicEq) throw new Error('dynamic-eq 模块加载失败')
+      // 向量 params 为模块完整形状（DynamicEqParams，specs/dsp/dynamic-eq.md §三）；
+      // 输出依赖顶层驱动分块与 params.blockSize 的控制节奏耦合（§4.5 实证），
+      // 两支线必须按冻结向量的同一 blockSize 回放。
+      const eq = new modules['dynamic-eq'].DynamicEq(sampleRate, params)
+      return (l, r) => {
+        const outL = l.slice()
+        const outR = r.slice()
+        eq.processStereo(outL, outR)
+        return [outL, outR]
+      }
+    }
+    case 'mod-effects': {
+      if (!modules['mod-effects'] || !modules['mod-effects'].DelayEffect) throw new Error('mod-effects 模块加载失败')
+      // 五效果按引擎接线顺序级联（HyperSoundEngine buildStages：delay→chorus→flanger→
+      // phaser→tremolo，specs/dsp/mod-effects.md §4.1）。引擎语义：五效果无条件 setParams
+      // （enabled 字段被效果类自身忽略），仅 enabled 的效果参与链路，禁用级逐位旁路。
+      const M = modules['mod-effects']
+      const delay = new M.DelayEffect(sampleRate)
+      const chorus = new M.ChorusEffect(sampleRate)
+      const flanger = new M.FlangerEffect(sampleRate)
+      const phaser = new M.PhaserEffect(sampleRate)
+      const tremolo = new M.TremoloEffect(sampleRate)
+      delay.setParams(params.delay)
+      chorus.setParams(params.chorus)
+      flanger.setParams(params.flanger)
+      phaser.setParams(params.phaser)
+      tremolo.setParams(params.tremolo)
+      const chain = [
+        { enabled: params.delay.enabled, run: (l, r) => delay.processStereo(l, r) },
+        { enabled: params.chorus.enabled, run: (l, r) => chorus.processStereo(l, r) },
+        { enabled: params.flanger.enabled, run: (l, r) => flanger.processStereo(l, r) },
+        { enabled: params.phaser.enabled, run: (l, r) => phaser.processStereo(l, r) },
+        { enabled: params.tremolo.enabled, run: (l, r) => tremolo.processStereo(l, r) },
+      ]
+      return (l, r) => {
+        const outL = l.slice()
+        const outR = r.slice()
+        for (const stage of chain) {
+          if (stage.enabled) stage.run(outL, outR)
+        }
         return [outL, outR]
       }
     }
@@ -1047,6 +1293,14 @@ const FRAME_COUNTS = {
   'loudness-comp.case2': 9800,
   'loudness-comp.case3': 6000,
   'loudness-comp.case4': 6400,
+  'dynamic-eq.case1': 6000,
+  'dynamic-eq.case2': 6000,
+  'dynamic-eq.case3': 9800,
+  'dynamic-eq.case4': 6000,
+  'mod-effects.case1': 6000,
+  'mod-effects.case2': 6000,
+  'mod-effects.case3': 12000,
+  'mod-effects.case4': 6000,
 }
 
 main().catch((err) => {

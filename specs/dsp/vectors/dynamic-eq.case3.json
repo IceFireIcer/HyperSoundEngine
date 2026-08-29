@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "module": "dynamic-eq",
+  "case": "case3",
+  "sampleRate": 48000,
+  "blockSize": 384,
+  "channels": 2,
+  "frames": 9800,
+  "params": {
+    "enabled": true,
+    "strength": 0.7,
+    "thresholdDb": -20,
+    "ratio": 4,
+    "kneeDb": 6,
+    "attackMs": 10,
+    "releaseMs": 300,
+    "blockSize": 128,
+    "bands": [
+      {
+        "enabled": true,
+        "frequency": 200,
+        "targetGainDb": 0
+      },
+      {
+        "enabled": true,
+        "frequency": 800,
+        "targetGainDb": 0
+      },
+      {
+        "enabled": true,
+        "frequency": 2500,
+        "targetGainDb": 0
+      },
+      {
+        "enabled": true,
+        "frequency": 8000,
+        "targetGainDb": 0
+      },
+      {
+        "enabled": true,
+        "frequency": 0,
+        "targetGainDb": 0
+      }
+    ]
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "阈值/attack-release 行为：阈值 -20dB、ratio 4、strength 0.7——前半段强激励（0.9 幅度正弦叠加 + 0.9 噪声）使多带电平稳定超阈、增益沿 attack 路径下探至压缩稳态；后半段静音、增益沿 release 路径恢复；控制延迟一个分析块（128 样本）随轨迹整段冻结。顶层 blockSize=384 为 params.blockSize 的整数倍（=3×128，分块与整块处理逐位一致）。帧数非整除（末块 200 帧）。"
+}

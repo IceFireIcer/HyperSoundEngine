@@ -1,8 +1,9 @@
 //! 模块分发器：按向量用例的 `module` id 构造被测阶段。
 //!
 //! 已落地的模块（biquad / limiter / reverb-simple / compressor / bass-enhancer /
-//! mid-side / eq-chain / fdn-reverb / deesser / loudness-comp）从 hse-core 构造
-//! 真实实现；尚未落地的模块一律回退 [`PassthroughStage`]（数值 FAIL 属预期）。
+//! mid-side / eq-chain / fdn-reverb / deesser / loudness-comp / dynamic-eq /
+//! mod-effects）从 hse-core 构造真实实现；尚未落地的模块一律回退
+//! [`PassthroughStage`]（数值 FAIL 属预期）。
 //! 参数字段名以 TS 源码为准（camelCase），缺失/类型不符即报夹具错误。
 
 use serde_json::{Map, Value};
@@ -13,11 +14,16 @@ use hse_core::bass_enhancer::{BassEnhancerSettings, BassEnhancerStage};
 use hse_core::biquad::BiquadStage;
 use hse_core::compressor::{CompressorSettings, CompressorStage};
 use hse_core::deesser::{DeesserSettings, DeesserStage};
+use hse_core::dynamic_eq::{DynamicEqBandParam, DynamicEqParams, DynamicEqStage};
 use hse_core::eq_chain::{EqBandParam, EqChainStage};
 use hse_core::fdn_reverb::{FdnReverbParams, FdnReverbStage};
 use hse_core::limiter::{LimiterSettings, LimiterStage};
 use hse_core::loudness_comp::{LoudnessBandParam, LoudnessCompSettings, LoudnessCompStage};
 use hse_core::mid_side::MidSideStage;
+use hse_core::mod_effects::{
+    ChorusSettings, DelaySettings, FlangerSettings, ModEffectsSettings, ModEffectsStage,
+    PhaserSettings, TremoloSettings,
+};
 use hse_core::reverb_simple::{ReverbSimpleParams, ReverbSimpleStage};
 use hse_core::Stage;
 
@@ -184,6 +190,95 @@ pub fn make_stage(case: &VectorCase) -> Result<Box<dyn Stage>, String> {
                 },
             )?))
         }
+        "dynamic-eq" => {
+            // 规格（specs/dsp/dynamic-eq.md §4.6）：向量 params 为模块完整形状，
+            // 构造即 applyParams（等价构造后一次 setParams）；bands 固定 5 项且
+            // 每项必含 frequency（缺 frequency 属 NaN 级联的禁止形态）。
+            // 内部分析块 blockSize 与顶层驱动分块是两个独立参数，构造时都由
+            // 阶段内钳制（[16, 2048] 整数语义）。
+            let bands_val = obj.get("bands").ok_or_else(|| "缺少 params.bands".to_string())?;
+            let arr = bands_val
+                .as_array()
+                .ok_or_else(|| "params.bands 必须是数组".to_string())?;
+            let mut bands = Vec::with_capacity(arr.len());
+            for (i, item) in arr.iter().enumerate() {
+                let o = item
+                    .as_object()
+                    .ok_or_else(|| format!("params.bands[{i}] 必须是对象"))?;
+                bands.push(DynamicEqBandParam {
+                    enabled: bool_field(o, "enabled")?,
+                    frequency: number_field(o, "frequency")?,
+                    // TS 可选字段（targetGainDb?: number）；向量固定显式给出，
+                    // 缺省按 None（保持该带当前/默认静态偏移语义）。
+                    target_gain_db: optional_number_field(o, "targetGainDb")?,
+                });
+            }
+            Ok(Box::new(DynamicEqStage::from_params(
+                case.sample_rate,
+                DynamicEqParams {
+                    enabled: Some(bool_field(obj, "enabled")?),
+                    strength: Some(number_field(obj, "strength")?),
+                    threshold_db: Some(number_field(obj, "thresholdDb")?),
+                    ratio: Some(number_field(obj, "ratio")?),
+                    knee_db: Some(number_field(obj, "kneeDb")?),
+                    attack_ms: Some(number_field(obj, "attackMs")?),
+                    release_ms: Some(number_field(obj, "releaseMs")?),
+                    block_size: Some(number_field(obj, "blockSize")?),
+                    bands: Some(bands),
+                },
+            )?))
+        }
+        "mod-effects" => {
+            // 规格（specs/dsp/mod-effects.md §4.1/§4.6）：五子对象全部完整给出；
+            // 级联顺序 = 引擎接线顺序（delay → chorus → flanger → phaser →
+            // tremolo），由 ModEffectsStage 内固定；五级无条件 setParams（enabled
+            // 字段被效果类自身忽略），仅 enabled 的级参与链路。
+            // chorus/flanger 的 LFO 按整块步进 → 输出依赖顶层 blockSize，
+            // harness 已按向量顶层 blockSize 分块回放（run_case）。
+            let delay = object_field(obj, "delay")?;
+            let chorus = object_field(obj, "chorus")?;
+            let flanger = object_field(obj, "flanger")?;
+            let phaser = object_field(obj, "phaser")?;
+            let tremolo = object_field(obj, "tremolo")?;
+            Ok(Box::new(ModEffectsStage::from_settings(
+                case.sample_rate,
+                ModEffectsSettings {
+                    delay: DelaySettings {
+                        enabled: bool_field(delay, "enabled")?,
+                        delay_ms: number_field(delay, "delayMs")?,
+                        feedback: number_field(delay, "feedback")?,
+                        mix: number_field(delay, "mix")?,
+                    },
+                    chorus: ChorusSettings {
+                        enabled: bool_field(chorus, "enabled")?,
+                        rate_hz: number_field(chorus, "rateHz")?,
+                        depth_ms: number_field(chorus, "depthMs")?,
+                        mix: number_field(chorus, "mix")?,
+                    },
+                    flanger: FlangerSettings {
+                        enabled: bool_field(flanger, "enabled")?,
+                        rate_hz: number_field(flanger, "rateHz")?,
+                        depth_ms: number_field(flanger, "depthMs")?,
+                        feedback: number_field(flanger, "feedback")?,
+                        mix: number_field(flanger, "mix")?,
+                    },
+                    phaser: PhaserSettings {
+                        enabled: bool_field(phaser, "enabled")?,
+                        rate_hz: number_field(phaser, "rateHz")?,
+                        depth: number_field(phaser, "depth")?,
+                        feedback: number_field(phaser, "feedback")?,
+                        mix: number_field(phaser, "mix")?,
+                        stages: number_field(phaser, "stages")?,
+                    },
+                    tremolo: TremoloSettings {
+                        enabled: bool_field(tremolo, "enabled")?,
+                        rate_hz: number_field(tremolo, "rateHz")?,
+                        depth: number_field(tremolo, "depth")?,
+                        mix: number_field(tremolo, "mix")?,
+                    },
+                },
+            )?))
+        }
         // 未落地模块：直通占位（FAIL 属预期，证明比对链路仍在工作）。
         _ => Ok(Box::new(PassthroughStage)),
     }
@@ -193,6 +288,15 @@ fn string_field(obj: &Map<String, Value>, key: &str) -> Result<String, String> {
     match obj.get(key) {
         Some(Value::String(s)) => Ok(s.clone()),
         Some(other) => Err(format!("params.{key} 必须是字符串，实际 {other}")),
+        None => Err(format!("缺少 params.{key}")),
+    }
+}
+
+/// 取一个子对象字段（如 mod-effects 的 params.delay / params.chorus 等）。
+fn object_field<'a>(obj: &'a Map<String, Value>, key: &str) -> Result<&'a Map<String, Value>, String> {
+    match obj.get(key) {
+        Some(Value::Object(o)) => Ok(o),
+        Some(other) => Err(format!("params.{key} 必须是对象，实际 {other}")),
         None => Err(format!("缺少 params.{key}")),
     }
 }

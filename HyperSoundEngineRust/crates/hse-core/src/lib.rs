@@ -20,11 +20,13 @@ pub mod bass_enhancer;
 pub mod biquad;
 pub mod compressor;
 pub mod deesser;
+pub mod dynamic_eq;
 pub mod eq_chain;
 pub mod fdn_reverb;
 pub mod limiter;
 pub mod loudness_comp;
 pub mod mid_side;
+pub mod mod_effects;
 pub mod reverb_simple;
 
 /// 处理链中的单个阶段：立体声、就地、按块处理。

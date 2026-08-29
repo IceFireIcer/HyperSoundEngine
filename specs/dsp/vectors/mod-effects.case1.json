@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "module": "mod-effects",
+  "case": "case1",
+  "sampleRate": 48000,
+  "blockSize": 256,
+  "channels": 2,
+  "frames": 6000,
+  "params": {
+    "delay": {
+      "enabled": false,
+      "delayMs": 1500,
+      "feedback": 0.9,
+      "mix": 0.8
+    },
+    "chorus": {
+      "enabled": false,
+      "rateHz": 15,
+      "depthMs": 30,
+      "mix": 1
+    },
+    "flanger": {
+      "enabled": false,
+      "rateHz": 15,
+      "depthMs": 30,
+      "feedback": 0.9,
+      "mix": 1
+    },
+    "phaser": {
+      "enabled": false,
+      "rateHz": 15,
+      "depth": 1,
+      "feedback": 0.9,
+      "mix": 1,
+      "stages": 9
+    },
+    "tremolo": {
+      "enabled": false,
+      "rateHz": 25,
+      "depth": 1,
+      "mix": 1
+    }
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "全禁用恒等锚点：五效果 enabled 全 false，链路驱动器跳过全部五级（禁用级逐位旁路、状态不推进），期望输出与输入逐位一致；激进参数随载荷固化（含 phaser stages=9→8 越界钳制），驱动器对五效果无条件 setParams（enabled 字段被效果类自身忽略，引擎接线语义见 specs/dsp/mod-effects.md §4.1）。左=双频正弦叠加(220/3300Hz)，右=固定种子LCG噪声。帧数非整除（末块 112 帧）。"
+}

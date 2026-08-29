@@ -24,13 +24,15 @@ import { EqChain } from '../src/dsp/EqChain'
 import { FdnReverb, type FdnReverbParams } from '../src/dsp/FdnReverb'
 import { Deesser } from '../src/dsp/Deesser'
 import { LoudnessComp, type LoudnessCompParams } from '../src/dsp/LoudnessComp'
-import type { LimiterSettings, CompressorSettings, BassEnhancerSettings, DeesserSettings } from '../src/types'
+import { DynamicEq, type DynamicEqParams } from '../src/dsp/DynamicEq'
+import { DelayEffect, ChorusEffect, FlangerEffect, PhaserEffect, TremoloEffect } from '../src/dsp/ModEffects'
+import type { LimiterSettings, CompressorSettings, BassEnhancerSettings, DeesserSettings, ModEffectsSettings } from '../src/types'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const VECTOR_DIR = resolve(fileURLToPath(import.meta.url), '..', '..', 'specs', 'dsp', 'vectors')
-const SUPPORTED_MODULES = ['biquad', 'limiter', 'reverb-simple', 'compressor', 'bass-enhancer', 'mid-side', 'eq-chain', 'fdn-reverb', 'deesser', 'loudness-comp'] as const
+const SUPPORTED_MODULES = ['biquad', 'limiter', 'reverb-simple', 'compressor', 'bass-enhancer', 'mid-side', 'eq-chain', 'fdn-reverb', 'deesser', 'loudness-comp', 'dynamic-eq', 'mod-effects'] as const
 
 /** 向量 JSON 元数据（与 specs/dsp/vectors 契约一致） */
 interface VectorMeta {
@@ -256,6 +258,49 @@ function instantiate(
         const outL = l.slice()
         const outR = r.slice()
         comp.processStereo(outL, outR)
+        return [outL, outR]
+      }
+    }
+    case 'dynamic-eq': {
+      // 向量 params 为模块完整形状（DynamicEqParams，specs/dsp/dynamic-eq.md §三）；
+      // 输出依赖顶层驱动分块与 params.blockSize 的控制节奏耦合（§4.5 实证），
+      // 与导出脚本及 Rust 门禁按同一块长回放。
+      const eq = new DynamicEq(sampleRate, params as unknown as DynamicEqParams)
+      return (l, r) => {
+        const outL = l.slice()
+        const outR = r.slice()
+        eq.processStereo(outL, outR)
+        return [outL, outR]
+      }
+    }
+    case 'mod-effects': {
+      // 五效果按引擎接线顺序级联（HyperSoundEngine buildStages：delay→chorus→flanger→
+      // phaser→tremolo，specs/dsp/mod-effects.md §4.1）。引擎语义：五效果无条件 setParams
+      // （enabled 字段被效果类自身忽略），仅 enabled 的效果参与链路，禁用级逐位旁路。
+      const me = params as unknown as ModEffectsSettings
+      const delay = new DelayEffect(sampleRate)
+      const chorus = new ChorusEffect(sampleRate)
+      const flanger = new FlangerEffect(sampleRate)
+      const phaser = new PhaserEffect(sampleRate)
+      const tremolo = new TremoloEffect(sampleRate)
+      delay.setParams(me.delay)
+      chorus.setParams(me.chorus)
+      flanger.setParams(me.flanger)
+      phaser.setParams(me.phaser)
+      tremolo.setParams(me.tremolo)
+      const chain = [
+        { enabled: me.delay.enabled, run: (l: Float32Array, r: Float32Array) => delay.processStereo(l, r) },
+        { enabled: me.chorus.enabled, run: (l: Float32Array, r: Float32Array) => chorus.processStereo(l, r) },
+        { enabled: me.flanger.enabled, run: (l: Float32Array, r: Float32Array) => flanger.processStereo(l, r) },
+        { enabled: me.phaser.enabled, run: (l: Float32Array, r: Float32Array) => phaser.processStereo(l, r) },
+        { enabled: me.tremolo.enabled, run: (l: Float32Array, r: Float32Array) => tremolo.processStereo(l, r) },
+      ]
+      return (l, r) => {
+        const outL = l.slice()
+        const outR = r.slice()
+        for (const stage of chain) {
+          if (stage.enabled) stage.run(outL, outR)
+        }
         return [outL, outR]
       }
     }

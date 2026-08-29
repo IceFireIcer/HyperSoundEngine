@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "module": "mod-effects",
+  "case": "case2",
+  "sampleRate": 48000,
+  "blockSize": 333,
+  "channels": 2,
+  "frames": 6000,
+  "params": {
+    "delay": {
+      "enabled": true,
+      "delayMs": 40,
+      "feedback": 0.55,
+      "mix": 0.4
+    },
+    "chorus": {
+      "enabled": false,
+      "rateHz": 1.2,
+      "depthMs": 5,
+      "mix": 0.4
+    },
+    "flanger": {
+      "enabled": false,
+      "rateHz": 0.8,
+      "depthMs": 4,
+      "feedback": 0.5,
+      "mix": 0.5
+    },
+    "phaser": {
+      "enabled": false,
+      "rateHz": 0.5,
+      "depth": 0.5,
+      "feedback": 0.4,
+      "mix": 0.5,
+      "stages": 4
+    },
+    "tremolo": {
+      "enabled": false,
+      "rateHz": 5,
+      "depth": 0.5,
+      "mix": 1
+    }
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "Delay 单独激活（隔离 case）：仅 delay enabled（40ms≈1920 样本延迟线 + 反馈 0.55 + mix 0.4），左声道前 3000 帧有声后段静音——反馈回声族（40ms 间隔逐代衰减）与衰减尾清晰；delay 为纯逐样本递推（分块与整块逐位一致）；其余四级禁用逐位旁路。帧数非整除（末块 6 帧）。"
+}

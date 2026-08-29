@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "module": "mod-effects",
+  "case": "case3",
+  "sampleRate": 48000,
+  "blockSize": 333,
+  "channels": 2,
+  "frames": 12000,
+  "params": {
+    "delay": {
+      "enabled": false,
+      "delayMs": 300,
+      "feedback": 0.5,
+      "mix": 0.3
+    },
+    "chorus": {
+      "enabled": true,
+      "rateHz": 4,
+      "depthMs": 5,
+      "mix": 0.5
+    },
+    "flanger": {
+      "enabled": true,
+      "rateHz": 2.5,
+      "depthMs": 4,
+      "feedback": 0.6,
+      "mix": 0.5
+    },
+    "phaser": {
+      "enabled": false,
+      "rateHz": 0.5,
+      "depth": 0.5,
+      "feedback": 0.4,
+      "mix": 0.5,
+      "stages": 4
+    },
+    "tremolo": {
+      "enabled": false,
+      "rateHz": 5,
+      "depth": 0.5,
+      "mix": 1
+    }
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "Chorus + Flanger 组合（隔离 case）：chorus（4Hz/5ms/mix0.5，基础延迟固定 20ms、反馈恒 0）+ flanger（2.5Hz/4ms/反馈0.6/mix0.5，基础延迟固定 1ms）级联；flanger 调制负半周（1ms−4ms<0）触发 readDelay 下界钳制与 d<1 退化读取区（整环回绕前值，specs/dsp/mod-effects.md §4.2 实证连续、有限）。chorus/flanger 的 LFO 相位按整块步进（块内调制量常量）→ 输出依赖顶层 blockSize，两支线必须按同一块长回放。帧数非整除（末块 12 帧）。"
+}
