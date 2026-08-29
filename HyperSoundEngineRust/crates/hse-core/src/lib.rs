@@ -32,6 +32,7 @@ pub mod mid_side;
 pub mod mod_effects;
 pub mod modulation_matrix;
 pub mod reverb_simple;
+pub mod share_codec;
 
 /// 处理链中的单个阶段：立体声、就地、按块处理。
 ///
