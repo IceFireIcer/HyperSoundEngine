@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "module": "loudness-comp",
+  "case": "case4",
+  "sampleRate": 48000,
+  "blockSize": 480,
+  "channels": 2,
+  "frames": 6400,
+  "params": {
+    "volumePercent": 100,
+    "maxBoostDb": 12,
+    "preset": "night",
+    "bands": [],
+    "mode": "preset",
+    "smoothingSeconds": 0.05
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "preset 曲线 6 段满配：preset=night（含负增益中频控制点）→ 拟合达 6 段上限（120Hz 低架、12kHz 高架、315/630/4000/6300Hz peaking 正负混合）；volumePercent/maxBoostDb 不被 preset 模式消费。左=五频正弦(80/315/1000/6300/12000Hz)对准拟合频点，右=固定种子LCG噪声。帧数非整除（末块 160 帧）。"
+}

@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "module": "loudness-comp",
+  "case": "case2",
+  "sampleRate": 48000,
+  "blockSize": 384,
+  "channels": 2,
+  "frames": 9800,
+  "params": {
+    "volumePercent": 20,
+    "maxBoostDb": 12,
+    "preset": "flat",
+    "bands": [],
+    "mode": "auto",
+    "smoothingSeconds": 0.05
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "auto 低音量提升（与 case1 构成 volumePercent 对照对）：volumePercent=20 → 5 个活动段（120Hz 低架、12kHz 高架、2500/4000/6300Hz peaking，ISO 226 简化近似低频 0-12dB/高频 0-6dB 曲线）；smoothingSeconds=0.05 逐块一阶爬升轨迹整段冻结——本模块输出依赖 blockSize，两支线必须按同一块长回放。左=五频正弦(63/120/1000/4000/10000Hz)，右=固定种子LCG噪声。帧数非整除（末块 200 帧）。"
+}

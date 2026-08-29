@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "module": "fdn-reverb",
+  "case": "case2",
+  "sampleRate": 48000,
+  "blockSize": 128,
+  "channels": 2,
+  "frames": 8000,
+  "params": {
+    "roomSize": 0.5,
+    "damping": 0.5,
+    "wet": 1,
+    "dry": 0,
+    "preDelayMs": 0,
+    "width": 1,
+    "type": "hall",
+    "lines": 8
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "hall 冲激响应快照：纯湿声（dry=0）、用户 roomSize/damping=0.5 中性（即 type 基准 0.7/0.4、delayScale 1.3）；仅左声道首帧冲激、右声道全零（不对称激励验证左右 FDN 网络不同素数表的立体声去相关）。互质延迟线 → 高密度尾音，冲激响应整段冻结。帧数非整除（末块 64 帧）。"
+}

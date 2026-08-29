@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "module": "fdn-reverb",
+  "case": "case1",
+  "sampleRate": 48000,
+  "blockSize": 256,
+  "channels": 2,
+  "frames": 6000,
+  "params": {
+    "roomSize": 0.5,
+    "damping": 0.5,
+    "wet": 0,
+    "dry": 1,
+    "preDelayMs": 1200,
+    "width": 1,
+    "type": "hall",
+    "lines": 8
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "纯干声恒等锚点：wet=0/dry=1 时湿路项精确为零、干路乘 1.0，期望输出与输入逐位一致（左右声道皆然，实证）；preDelayMs=1200 越上界按 1000ms 生效（仅作用于湿路输入侧，不影响逐位干路）。左=固定种子LCG噪声，右=双频正弦叠加(220/3300Hz)。帧数非整除（末块 112 帧）。"
+}

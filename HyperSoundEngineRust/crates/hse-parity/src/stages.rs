@@ -1,9 +1,9 @@
 //! 模块分发器：按向量用例的 `module` id 构造被测阶段。
 //!
 //! 已落地的模块（biquad / limiter / reverb-simple / compressor / bass-enhancer /
-//! mid-side / eq-chain）从 hse-core 构造真实实现；尚未落地的模块一律回退
-//! [`PassthroughStage`]（数值 FAIL 属预期）。参数字段名以 TS 源码为准
-//! （camelCase），缺失/类型不符即报夹具错误。
+//! mid-side / eq-chain / fdn-reverb / deesser / loudness-comp）从 hse-core 构造
+//! 真实实现；尚未落地的模块一律回退 [`PassthroughStage`]（数值 FAIL 属预期）。
+//! 参数字段名以 TS 源码为准（camelCase），缺失/类型不符即报夹具错误。
 
 use serde_json::{Map, Value};
 
@@ -12,8 +12,11 @@ use crate::vector::VectorCase;
 use hse_core::bass_enhancer::{BassEnhancerSettings, BassEnhancerStage};
 use hse_core::biquad::BiquadStage;
 use hse_core::compressor::{CompressorSettings, CompressorStage};
+use hse_core::deesser::{DeesserSettings, DeesserStage};
 use hse_core::eq_chain::{EqBandParam, EqChainStage};
+use hse_core::fdn_reverb::{FdnReverbParams, FdnReverbStage};
 use hse_core::limiter::{LimiterSettings, LimiterStage};
+use hse_core::loudness_comp::{LoudnessBandParam, LoudnessCompSettings, LoudnessCompStage};
 use hse_core::mid_side::MidSideStage;
 use hse_core::reverb_simple::{ReverbSimpleParams, ReverbSimpleStage};
 use hse_core::Stage;
@@ -118,6 +121,68 @@ pub fn make_stage(case: &VectorCase) -> Result<Box<dyn Stage>, String> {
             stage.set_bands(&bands);
             stage.set_q_compensation(q_compensation);
             Ok(Box::new(stage))
+        }
+        "fdn-reverb" => Ok(Box::new(FdnReverbStage::from_params(
+            case.sample_rate,
+            FdnReverbParams {
+                room_size: number_field(obj, "roomSize")?,
+                damping: number_field(obj, "damping")?,
+                wet: number_field(obj, "wet")?,
+                dry: number_field(obj, "dry")?,
+                pre_delay_ms: number_field(obj, "preDelayMs")?,
+                width: number_field(obj, "width")?,
+                reverb_type: string_field(obj, "type")?,
+                // TS 可选字段；向量固定显式给出（缺省按 undefined → 8 线语义）。
+                lines: optional_number_field(obj, "lines")?,
+            },
+        )?)),
+        "deesser" => Ok(Box::new(DeesserStage::from_settings(
+            case.sample_rate,
+            DeesserSettings {
+                enabled: bool_field(obj, "enabled")?,
+                center_hz: number_field(obj, "centerHz")?,
+                q: number_field(obj, "q")?,
+                threshold_db: number_field(obj, "thresholdDb")?,
+                ratio: number_field(obj, "ratio")?,
+                attack_ms: number_field(obj, "attackMs")?,
+                release_ms: number_field(obj, "releaseMs")?,
+                split_band: bool_field(obj, "splitBand")?,
+                mix: number_field(obj, "mix")?,
+                // TS 可选字段；本模块自身不读取（引擎接线层标志，specs/dsp/deesser.md
+                // §4.5）。置 true 时按 §4.6 由驱动器派生单声道和 sidechain
+                // （sideL=sideR=inL+inR，f64 加法、f32 快照、处理前快照）——本批
+                // 冻结向量全部为两参形态（sidechainEnabled=false）。
+                sidechain_enabled: optional_bool_field(obj, "sidechainEnabled")?,
+            },
+        )?)),
+        "loudness-comp" => {
+            // 规格（specs/dsp/loudness-comp.md §一）：本模块没有 enabled 字段——
+            // 直接按六个快照字段构造，向量 params 不含 enabled。
+            let bands_val = obj.get("bands").ok_or_else(|| "缺少 params.bands".to_string())?;
+            let arr = bands_val
+                .as_array()
+                .ok_or_else(|| "params.bands 必须是数组".to_string())?;
+            let mut bands = Vec::with_capacity(arr.len());
+            for (i, item) in arr.iter().enumerate() {
+                let o = item
+                    .as_object()
+                    .ok_or_else(|| format!("params.bands[{i}] 必须是对象"))?;
+                bands.push(LoudnessBandParam {
+                    frequency: number_field(o, "frequency")?,
+                    gain: number_field(o, "gain")?,
+                });
+            }
+            Ok(Box::new(LoudnessCompStage::from_settings(
+                case.sample_rate,
+                LoudnessCompSettings {
+                    volume_percent: number_field(obj, "volumePercent")?,
+                    max_boost_db: number_field(obj, "maxBoostDb")?,
+                    preset: string_field(obj, "preset")?,
+                    bands,
+                    mode: string_field(obj, "mode")?,
+                    smoothing_seconds: number_field(obj, "smoothingSeconds")?,
+                },
+            )?))
         }
         // 未落地模块：直通占位（FAIL 属预期，证明比对链路仍在工作）。
         _ => Ok(Box::new(PassthroughStage)),

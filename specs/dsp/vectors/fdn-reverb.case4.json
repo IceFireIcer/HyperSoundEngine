@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "module": "fdn-reverb",
+  "case": "case4",
+  "sampleRate": 48000,
+  "blockSize": 700,
+  "channels": 2,
+  "frames": 9600,
+  "params": {
+    "roomSize": 1.5,
+    "damping": -0.3,
+    "wet": 4.5,
+    "dry": -0.5,
+    "preDelayMs": 80,
+    "width": 2.5,
+    "type": "stage",
+    "lines": 16
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "stage 满配极值钳制：lines=16 满配素数表；roomSize=1.5/damping=-0.3 越界按 clamp01 后与 stage 基准（0.55/0.5/delayScale 1.5）混合生效、wet=4.5→4、dry=-0.5→0（纯湿）、width=2.5→2（wet2 为负的超宽反相交叉）；输入为前半段噪声突发→后半段静音，覆盖衰减尾与环路稳定性（反馈 g≤0.98、g²<1 有界不发散）。帧数非整除（末块 500 帧）。"
+}

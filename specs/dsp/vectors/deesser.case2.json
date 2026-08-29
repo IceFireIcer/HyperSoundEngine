@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "module": "deesser",
+  "case": "case2",
+  "sampleRate": 48000,
+  "blockSize": 384,
+  "channels": 2,
+  "frames": 9800,
+  "params": {
+    "enabled": true,
+    "centerHz": 8000,
+    "q": 0.7,
+    "thresholdDb": -30,
+    "ratio": 8,
+    "attackMs": 1,
+    "releaseMs": 80,
+    "splitBand": true,
+    "mix": 1,
+    "sidechainEnabled": false
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "分带重衰减：splitBand=true，检测信号=左右单声道和经 8kHz/Q0.7 带通，齿音能量使包络稳态超阈、g 进入稳态压缩；左=持续合成齿音（4–8kHz 频带限定），右=200Hz 正弦——分带式只压高频带，低频带幅度保持（LR-4 全通仅相位旋转）。与 case3 成对对照（仅 splitBand 不同）。帧数非整除（末块 200 帧）。"
+}

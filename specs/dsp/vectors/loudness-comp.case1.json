@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "module": "loudness-comp",
+  "case": "case1",
+  "sampleRate": 48000,
+  "blockSize": 256,
+  "channels": 2,
+  "frames": 6000,
+  "params": {
+    "volumePercent": 100,
+    "maxBoostDb": 12,
+    "preset": "flat",
+    "bands": [],
+    "mode": "auto",
+    "smoothingSeconds": 0.2
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "auto 满音量恒等锚点：volumePercent=100 → 全部目标增益为 0 → 恒等系数链 + 零状态，期望输出与输入逐位一致（左右声道皆然，实证为精确恒等而非近似）。左=四频正弦叠加(63/440/4000/10000Hz)覆盖等响度全频段，右=固定种子LCG噪声。帧数非整除（末块 112 帧）。"
+}

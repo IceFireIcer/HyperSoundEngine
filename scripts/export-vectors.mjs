@@ -6,7 +6,8 @@
  *
  * 职责：
  *  - 以 TS 支线（src/）为行为事实标准，为 biquad / limiter / reverb-simple /
- *    compressor / bass-enhancer / mid-side / eq-chain 七个模块
+ *    compressor / bass-enhancer / mid-side / eq-chain / fdn-reverb / deesser /
+ *    loudness-comp 十个模块
  *    导出确定性对拍向量到 specs/dsp/vectors/<module>.<case>.json 与同名 .f32；
  *  - 向量格式契约（两支线共享，见 specs/ 目录规划文档）：
  *      JSON：schemaVersion=1 / module / case / sampleRate / blockSize / channels=2 /
@@ -55,6 +56,9 @@ const MODULE_SOURCES = [
   { id: 'bass-enhancer', file: 'BassEnhancer.ts' },
   { id: 'mid-side', file: 'MidSide.ts' },
   { id: 'eq-chain', file: 'EqChain.ts' },
+  { id: 'fdn-reverb', file: 'FdnReverb.ts' },
+  { id: 'deesser', file: 'Deesser.ts' },
+  { id: 'loudness-comp', file: 'LoudnessComp.ts' },
 ]
 
 /**
@@ -147,6 +151,20 @@ function burstThenSilence(source, activeFrames) {
   const x = source.slice()
   x.fill(0, activeFrames)
   return x
+}
+
+/**
+ * 合成齿音：4–8kHz 频带限定的确定性带限噪声——9 个固定频点正弦（4000..8000Hz，步进 500Hz）
+ * 幅度统一，相位由固定种子 LCG 派生（禁 Math.random，同机同版本逐位可复现）。
+ */
+function bandNoise(frames, sampleRate, ampPerComp, seed) {
+  const comps = []
+  let s = seed >>> 0
+  for (let k = 0; k < 9; k++) {
+    s = (Math.imul(s, 1664525) + 1013904223) >>> 0
+    comps.push({ freqHz: 4000 + k * 500, amp: ampPerComp, phaseRad: (s / 4294967296) * 2 * Math.PI })
+  }
+  return sineSum(frames, sampleRate, comps)
 }
 
 // ==================== case 定义（冻结基线的唯一来源） ====================
@@ -561,6 +579,171 @@ const CASES = [
     ]),
     inputR: (n) => lcgNoise(n, 80804, 0.7),
   },
+
+  // ---------- fdn-reverb ----------
+  {
+    module: 'fdn-reverb',
+    caseId: 'case1',
+    sampleRate: 48000,
+    blockSize: 256,
+    params: { roomSize: 0.5, damping: 0.5, wet: 0, dry: 1, preDelayMs: 1200, width: 1, type: 'hall', lines: 8 },
+    notes: '纯干声恒等锚点：wet=0/dry=1 时湿路项精确为零、干路乘 1.0，期望输出与输入逐位一致（左右声道皆然，实证）；preDelayMs=1200 越上界按 1000ms 生效（仅作用于湿路输入侧，不影响逐位干路）。左=固定种子LCG噪声，右=双频正弦叠加(220/3300Hz)。帧数非整除（末块 112 帧）。',
+    inputL: (n) => lcgNoise(n, 61001, 0.7),
+    inputR: (n, fs) => sineSum(n, fs, [
+      { freqHz: 220, amp: 0.5, phaseRad: 0 },
+      { freqHz: 3300, amp: 0.25, phaseRad: Math.PI / 4 },
+    ]),
+  },
+  {
+    module: 'fdn-reverb',
+    caseId: 'case2',
+    sampleRate: 48000,
+    blockSize: 128,
+    params: { roomSize: 0.5, damping: 0.5, wet: 1, dry: 0, preDelayMs: 0, width: 1, type: 'hall', lines: 8 },
+    notes: 'hall 冲激响应快照：纯湿声（dry=0）、用户 roomSize/damping=0.5 中性（即 type 基准 0.7/0.4、delayScale 1.3）；仅左声道首帧冲激、右声道全零（不对称激励验证左右 FDN 网络不同素数表的立体声去相关）。互质延迟线 → 高密度尾音，冲激响应整段冻结。帧数非整除（末块 64 帧）。',
+    inputL: (n) => {
+      const x = silence(n)
+      x[0] = 1
+      return x
+    },
+    inputR: (n) => silence(n),
+  },
+  {
+    module: 'fdn-reverb',
+    caseId: 'case3',
+    sampleRate: 44100,
+    blockSize: 441,
+    params: { roomSize: 0.5, damping: 0.5, wet: 0.8, dry: 0.3, preDelayMs: 0, width: 0, type: 'room', lines: 8 },
+    notes: 'width=0 湿路对半交叉对照：type room（基准 0.4/0.6/delayScale 0.6，与 case2 的 hall 形成类型对照）；输入为左右同源单声道 LCG 噪声——width=0 时 wet1=wet2=wet/2，湿路对半交叉后左右输出在 1 ulp f32 量级一致（实证约 7.5e-9，浮点加法结合序所致，不主张逐位一致）。多采样率 44100 覆盖延迟长度 fs/44100 缩放路径；blockSize=441 恰为该采样率 10ms，帧数非整除（末块 267 帧）。',
+    inputL: (n) => lcgNoise(n, 61003, 0.6),
+    inputR: (n) => lcgNoise(n, 61003, 0.6),
+  },
+  {
+    module: 'fdn-reverb',
+    caseId: 'case4',
+    sampleRate: 48000,
+    blockSize: 700,
+    params: { roomSize: 1.5, damping: -0.3, wet: 4.5, dry: -0.5, preDelayMs: 80, width: 2.5, type: 'stage', lines: 16 },
+    notes: 'stage 满配极值钳制：lines=16 满配素数表；roomSize=1.5/damping=-0.3 越界按 clamp01 后与 stage 基准（0.55/0.5/delayScale 1.5）混合生效、wet=4.5→4、dry=-0.5→0（纯湿）、width=2.5→2（wet2 为负的超宽反相交叉）；输入为前半段噪声突发→后半段静音，覆盖衰减尾与环路稳定性（反馈 g≤0.98、g²<1 有界不发散）。帧数非整除（末块 500 帧）。',
+    inputL: (n) => burstThenSilence(lcgNoise(n, 61004, 0.7), Math.floor(n / 2)),
+    inputR: (n) => burstThenSilence(lcgNoise(n, 61005, 0.7), Math.floor(n / 2)),
+  },
+
+  // ---------- deesser ----------
+  {
+    module: 'deesser',
+    caseId: 'case1',
+    sampleRate: 48000,
+    blockSize: 256,
+    params: { enabled: false, centerHz: 8000, q: 0.7, thresholdDb: -30, ratio: 8, attackMs: 1, releaseMs: 80, splitBand: true, mix: 1, sidechainEnabled: false },
+    notes: '禁用恒等锚点：enabled=false 时 processStereo 首行直接返回、缓冲零改写，期望输出与输入逐位一致（左右声道皆然，包络与全部滤波器状态不推进）；其余参数取激进值随载荷固化。左=合成齿音（4–8kHz 九频点正弦族 + 固定种子 LCG 相位，带限确定性、无 Math.random），右=200Hz 正弦。帧数非整除（末块 112 帧）。',
+    inputL: (n, fs) => bandNoise(n, fs, 0.05, 62001),
+    inputR: (n, fs) => sine(n, fs, 200, 0.4),
+  },
+  {
+    module: 'deesser',
+    caseId: 'case2',
+    sampleRate: 48000,
+    blockSize: 384,
+    params: { enabled: true, centerHz: 8000, q: 0.7, thresholdDb: -30, ratio: 8, attackMs: 1, releaseMs: 80, splitBand: true, mix: 1, sidechainEnabled: false },
+    notes: '分带重衰减：splitBand=true，检测信号=左右单声道和经 8kHz/Q0.7 带通，齿音能量使包络稳态超阈、g 进入稳态压缩；左=持续合成齿音（4–8kHz 频带限定），右=200Hz 正弦——分带式只压高频带，低频带幅度保持（LR-4 全通仅相位旋转）。与 case3 成对对照（仅 splitBand 不同）。帧数非整除（末块 200 帧）。',
+    inputL: (n, fs) => bandNoise(n, fs, 0.05, 62001),
+    inputR: (n, fs) => sine(n, fs, 200, 0.4),
+  },
+  {
+    module: 'deesser',
+    caseId: 'case3',
+    sampleRate: 48000,
+    blockSize: 384,
+    params: { enabled: true, centerHz: 8000, q: 0.7, thresholdDb: -30, ratio: 8, attackMs: 1, releaseMs: 80, splitBand: false, mix: 1, sidechainEnabled: false },
+    notes: '宽带对照：与 case2 参数与输入完全相同、仅 splitBand=false——整体乘 g，右声道 200Hz 低频成分与齿音同被衰减（分带式则保持），两向量输出显著可区分（驱动器漏做交叉/误用宽带路径必然暴露）。帧数非整除（末块 200 帧）。',
+    inputL: (n, fs) => bandNoise(n, fs, 0.05, 62001),
+    inputR: (n, fs) => sine(n, fs, 200, 0.4),
+  },
+  {
+    module: 'deesser',
+    caseId: 'case4',
+    sampleRate: 44100,
+    blockSize: 441,
+    params: { enabled: true, centerHz: 30000, q: 0.05, thresholdDb: -20, ratio: 8, attackMs: 0, releaseMs: 0, splitBand: true, mix: 1, sidechainEnabled: false },
+    notes: '阈下不衰减 + 钳制极值：低电平输入使包络稳态低于阈值 -20dB → reduction 恒 0、g 恒 1，输出为 LR-4 全通重构（幅度不变、相位旋转——非逐位一致，幅度语义以冻结向量界定）；centerHz=30000 按 fs×0.45=19845 生效（44100 采样率上界）、q=0.05→0.1 下界、attackMs=0→0.05ms、releaseMs=0→1ms（release 下限与 attack 不同）。多采样率 44100 覆盖 attack/release/交叉系数随 fs 变化。帧数非整除（末块 126 帧）。',
+    inputL: (n, fs) => bandNoise(n, fs, 0.008, 62004),
+    inputR: (n, fs) => sine(n, fs, 200, 0.06),
+  },
+
+  // ---------- loudness-comp ----------
+  {
+    module: 'loudness-comp',
+    caseId: 'case1',
+    sampleRate: 48000,
+    blockSize: 256,
+    params: { volumePercent: 100, maxBoostDb: 12, preset: 'flat', bands: [], mode: 'auto', smoothingSeconds: 0.2 },
+    notes: 'auto 满音量恒等锚点：volumePercent=100 → 全部目标增益为 0 → 恒等系数链 + 零状态，期望输出与输入逐位一致（左右声道皆然，实证为精确恒等而非近似）。左=四频正弦叠加(63/440/4000/10000Hz)覆盖等响度全频段，右=固定种子LCG噪声。帧数非整除（末块 112 帧）。',
+    inputL: (n, fs) => sineSum(n, fs, [
+      { freqHz: 63, amp: 0.4, phaseRad: 0 },
+      { freqHz: 440, amp: 0.3, phaseRad: Math.PI / 5 },
+      { freqHz: 4000, amp: 0.2, phaseRad: Math.PI / 3 },
+      { freqHz: 10000, amp: 0.15, phaseRad: Math.PI / 2 },
+    ]),
+    inputR: (n) => lcgNoise(n, 63001, 0.6),
+  },
+  {
+    module: 'loudness-comp',
+    caseId: 'case2',
+    sampleRate: 48000,
+    blockSize: 384,
+    params: { volumePercent: 20, maxBoostDb: 12, preset: 'flat', bands: [], mode: 'auto', smoothingSeconds: 0.05 },
+    notes: 'auto 低音量提升（与 case1 构成 volumePercent 对照对）：volumePercent=20 → 5 个活动段（120Hz 低架、12kHz 高架、2500/4000/6300Hz peaking，ISO 226 简化近似低频 0-12dB/高频 0-6dB 曲线）；smoothingSeconds=0.05 逐块一阶爬升轨迹整段冻结——本模块输出依赖 blockSize，两支线必须按同一块长回放。左=五频正弦(63/120/1000/4000/10000Hz)，右=固定种子LCG噪声。帧数非整除（末块 200 帧）。',
+    inputL: (n, fs) => sineSum(n, fs, [
+      { freqHz: 63, amp: 0.35, phaseRad: 0 },
+      { freqHz: 120, amp: 0.3, phaseRad: Math.PI / 6 },
+      { freqHz: 1000, amp: 0.3, phaseRad: Math.PI / 4 },
+      { freqHz: 4000, amp: 0.2, phaseRad: Math.PI / 3 },
+      { freqHz: 10000, amp: 0.15, phaseRad: Math.PI / 2 },
+    ]),
+    inputR: (n) => lcgNoise(n, 63002, 0.5),
+  },
+  {
+    module: 'loudness-comp',
+    caseId: 'case3',
+    sampleRate: 48000,
+    blockSize: 333,
+    params: {
+      volumePercent: 42, maxBoostDb: 12, preset: 'flat', mode: 'custom', smoothingSeconds: 0.05,
+      bands: [
+        { frequency: 60, gain: 18 },
+        { frequency: 30, gain: 200 },
+        { frequency: 300, gain: 0.1 },
+        { frequency: 1000, gain: -6 },
+        { frequency: 4000, gain: 9 },
+        { frequency: 20000, gain: 5 },
+      ],
+    },
+    notes: 'custom 分组/钳制/丢弃语义：low 组(≤250Hz)取钳制后均值——{60,+18} 与 {30,+200→按+24 生效} 的均值 +21 → 120Hz 低架；mid 项 {300,+0.1} 因 |gain|<0.25 被丢弃；mid peaking -6@1kHz、+9@4kHz；high 组(≥6kHz) {20000,+5} → 12kHz 高架；volumePercent=42 不被 custom 模式消费（语义随载荷固化）。左=四频正弦(100/1000/4000/12000Hz)，右=固定种子LCG噪声。blockSize=333 非整除（末块 6 帧，极短短块覆盖）。',
+    inputL: (n, fs) => sineSum(n, fs, [
+      { freqHz: 100, amp: 0.4, phaseRad: 0 },
+      { freqHz: 1000, amp: 0.3, phaseRad: Math.PI / 4 },
+      { freqHz: 4000, amp: 0.25, phaseRad: Math.PI / 3 },
+      { freqHz: 12000, amp: 0.2, phaseRad: Math.PI / 2 },
+    ]),
+    inputR: (n) => lcgNoise(n, 63003, 0.5),
+  },
+  {
+    module: 'loudness-comp',
+    caseId: 'case4',
+    sampleRate: 48000,
+    blockSize: 480,
+    params: { volumePercent: 100, maxBoostDb: 12, preset: 'night', bands: [], mode: 'preset', smoothingSeconds: 0.05 },
+    notes: 'preset 曲线 6 段满配：preset=night（含负增益中频控制点）→ 拟合达 6 段上限（120Hz 低架、12kHz 高架、315/630/4000/6300Hz peaking 正负混合）；volumePercent/maxBoostDb 不被 preset 模式消费。左=五频正弦(80/315/1000/6300/12000Hz)对准拟合频点，右=固定种子LCG噪声。帧数非整除（末块 160 帧）。',
+    inputL: (n, fs) => sineSum(n, fs, [
+      { freqHz: 80, amp: 0.4, phaseRad: 0 },
+      { freqHz: 315, amp: 0.3, phaseRad: Math.PI / 5 },
+      { freqHz: 1000, amp: 0.25, phaseRad: Math.PI / 4 },
+      { freqHz: 6300, amp: 0.2, phaseRad: Math.PI / 3 },
+      { freqHz: 12000, amp: 0.15, phaseRad: Math.PI / 2 },
+    ]),
+    inputR: (n) => lcgNoise(n, 63004, 0.5),
+  },
 ]
 
 // ==================== 模块实例化与分块处理 ====================
@@ -664,6 +847,48 @@ function instantiateProcessor(modules, moduleId, sampleRate, params) {
         const outL = l.slice()
         const outR = r.slice()
         eq.processStereo(outL, outR)
+        return [outL, outR]
+      }
+    }
+    case 'fdn-reverb': {
+      if (!modules['fdn-reverb'] || !modules['fdn-reverb'].FdnReverb) throw new Error('fdn-reverb 模块加载失败')
+      const reverb = new modules['fdn-reverb'].FdnReverb(sampleRate)
+      reverb.setParams(params)
+      return (l, r) => {
+        const outL = l.slice()
+        const outR = r.slice()
+        reverb.processStereo(outL, outR)
+        return [outL, outR]
+      }
+    }
+    case 'deesser': {
+      if (!modules.deesser || !modules.deesser.Deesser) throw new Error('deesser 模块加载失败')
+      const dss = new modules.deesser.Deesser(sampleRate)
+      dss.setParams(params)
+      const useSidechain = params.sidechainEnabled === true
+      return (l, r) => {
+        const outL = l.slice()
+        const outR = r.slice()
+        if (useSidechain) {
+          // sidechain 向量语义（specs/dsp/deesser.md §4.6）：本块原始输入的单声道和派生，
+          // 双精度加法、就地处理前快照；sideL 与 sideR 内容相同（本批向量不含该形态）。
+          const side = new Float32Array(l.length)
+          for (let i = 0; i < side.length; i++) side[i] = l[i] + r[i]
+          dss.processStereo(outL, outR, side, side)
+        } else {
+          dss.processStereo(outL, outR)
+        }
+        return [outL, outR]
+      }
+    }
+    case 'loudness-comp': {
+      if (!modules['loudness-comp'] || !modules['loudness-comp'].LoudnessComp) throw new Error('loudness-comp 模块加载失败')
+      const comp = new modules['loudness-comp'].LoudnessComp(sampleRate)
+      comp.setParams(params)
+      return (l, r) => {
+        const outL = l.slice()
+        const outR = r.slice()
+        comp.processStereo(outL, outR)
         return [outL, outR]
       }
     }
@@ -810,6 +1035,18 @@ const FRAME_COUNTS = {
   'eq-chain.case2': 6000,
   'eq-chain.case3': 6000,
   'eq-chain.case4': 6000,
+  'fdn-reverb.case1': 6000,
+  'fdn-reverb.case2': 8000,
+  'fdn-reverb.case3': 6000,
+  'fdn-reverb.case4': 9600,
+  'deesser.case1': 6000,
+  'deesser.case2': 9800,
+  'deesser.case3': 9800,
+  'deesser.case4': 6300,
+  'loudness-comp.case1': 6000,
+  'loudness-comp.case2': 9800,
+  'loudness-comp.case3': 6000,
+  'loudness-comp.case4': 6400,
 }
 
 main().catch((err) => {

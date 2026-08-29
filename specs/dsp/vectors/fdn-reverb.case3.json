@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "module": "fdn-reverb",
+  "case": "case3",
+  "sampleRate": 44100,
+  "blockSize": 441,
+  "channels": 2,
+  "frames": 6000,
+  "params": {
+    "roomSize": 0.5,
+    "damping": 0.5,
+    "wet": 0.8,
+    "dry": 0.3,
+    "preDelayMs": 0,
+    "width": 0,
+    "type": "room",
+    "lines": 8
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "width=0 湿路对半交叉对照：type room（基准 0.4/0.6/delayScale 0.6，与 case2 的 hall 形成类型对照）；输入为左右同源单声道 LCG 噪声——width=0 时 wet1=wet2=wet/2，湿路对半交叉后左右输出在 1 ulp f32 量级一致（实证约 7.5e-9，浮点加法结合序所致，不主张逐位一致）。多采样率 44100 覆盖延迟长度 fs/44100 缩放路径；blockSize=441 恰为该采样率 10ms，帧数非整除（末块 267 帧）。"
+}

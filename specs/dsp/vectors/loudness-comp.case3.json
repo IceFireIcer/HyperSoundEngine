@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "module": "loudness-comp",
+  "case": "case3",
+  "sampleRate": 48000,
+  "blockSize": 333,
+  "channels": 2,
+  "frames": 6000,
+  "params": {
+    "volumePercent": 42,
+    "maxBoostDb": 12,
+    "preset": "flat",
+    "mode": "custom",
+    "smoothingSeconds": 0.05,
+    "bands": [
+      {
+        "frequency": 60,
+        "gain": 18
+      },
+      {
+        "frequency": 30,
+        "gain": 200
+      },
+      {
+        "frequency": 300,
+        "gain": 0.1
+      },
+      {
+        "frequency": 1000,
+        "gain": -6
+      },
+      {
+        "frequency": 4000,
+        "gain": 9
+      },
+      {
+        "frequency": 20000,
+        "gain": 5
+      }
+    ]
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "custom 分组/钳制/丢弃语义：low 组(≤250Hz)取钳制后均值——{60,+18} 与 {30,+200→按+24 生效} 的均值 +21 → 120Hz 低架；mid 项 {300,+0.1} 因 |gain|<0.25 被丢弃；mid peaking -6@1kHz、+9@4kHz；high 组(≥6kHz) {20000,+5} → 12kHz 高架；volumePercent=42 不被 custom 模式消费（语义随载荷固化）。左=四频正弦(100/1000/4000/12000Hz)，右=固定种子LCG噪声。blockSize=333 非整除（末块 6 帧，极短短块覆盖）。"
+}

@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "module": "deesser",
+  "case": "case1",
+  "sampleRate": 48000,
+  "blockSize": 256,
+  "channels": 2,
+  "frames": 6000,
+  "params": {
+    "enabled": false,
+    "centerHz": 8000,
+    "q": 0.7,
+    "thresholdDb": -30,
+    "ratio": 8,
+    "attackMs": 1,
+    "releaseMs": 80,
+    "splitBand": true,
+    "mix": 1,
+    "sidechainEnabled": false
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "禁用恒等锚点：enabled=false 时 processStereo 首行直接返回、缓冲零改写，期望输出与输入逐位一致（左右声道皆然，包络与全部滤波器状态不推进）；其余参数取激进值随载荷固化。左=合成齿音（4–8kHz 九频点正弦族 + 固定种子 LCG 相位，带限确定性、无 Math.random），右=200Hz 正弦。帧数非整除（末块 112 帧）。"
+}

@@ -34,6 +34,9 @@ specs/
     ├── bass-enhancer.md             ← 模块规格：bass-enhancer
     ├── mid-side.md                  ← 模块规格：mid-side
     ├── eq-chain.md                  ← 模块规格：eq-chain
+    ├── fdn-reverb.md                ← 模块规格：fdn-reverb
+    ├── deesser.md                   ← 模块规格：deesser
+    ├── loudness-comp.md             ← 模块规格：loudness-comp
     └── vectors/                     ← 冻结测试向量（.json 元数据 + .f32 数据成对出现）
         ├── biquad.<case>.json / biquad.<case>.f32
         ├── limiter.<case>.json / limiter.<case>.f32
@@ -205,6 +208,6 @@ specs/
 - 立体声处理器通用契约：`src/interfaces.ts`（`StereoProcessor`：`setParams`/`processStereo`/`reset`）
 - DSP 实现契约（TS 侧）：`src/dsp/API_SPEC.md`
 - 向量 Schema：[specs/schema/vector-case.schema.json](schema/vector-case.schema.json)
-- 模块规格：[biquad](dsp/biquad.md) ｜ [limiter](dsp/limiter.md) ｜ [reverb-simple](dsp/reverb-simple.md) ｜ [compressor](dsp/compressor.md) ｜ [bass-enhancer](dsp/bass-enhancer.md) ｜ [mid-side](dsp/mid-side.md) ｜ [eq-chain](dsp/eq-chain.md)
+- 模块规格：[biquad](dsp/biquad.md) ｜ [limiter](dsp/limiter.md) ｜ [reverb-simple](dsp/reverb-simple.md) ｜ [compressor](dsp/compressor.md) ｜ [bass-enhancer](dsp/bass-enhancer.md) ｜ [mid-side](dsp/mid-side.md) ｜ [eq-chain](dsp/eq-chain.md) ｜ [fdn-reverb](dsp/fdn-reverb.md) ｜ [deesser](dsp/deesser.md) ｜ [loudness-comp](dsp/loudness-comp.md)
 - 服务层·控制面契约：[service/control-plane.md](service/control-plane.md)
 - 服务层·推流协议设计：[service/push-stream.md](service/push-stream.md)

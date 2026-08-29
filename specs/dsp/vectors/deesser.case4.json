@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "module": "deesser",
+  "case": "case4",
+  "sampleRate": 44100,
+  "blockSize": 441,
+  "channels": 2,
+  "frames": 6300,
+  "params": {
+    "enabled": true,
+    "centerHz": 30000,
+    "q": 0.05,
+    "thresholdDb": -20,
+    "ratio": 8,
+    "attackMs": 0,
+    "releaseMs": 0,
+    "splitBand": true,
+    "mix": 1,
+    "sidechainEnabled": false
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "阈下不衰减 + 钳制极值：低电平输入使包络稳态低于阈值 -20dB → reduction 恒 0、g 恒 1，输出为 LR-4 全通重构（幅度不变、相位旋转——非逐位一致，幅度语义以冻结向量界定）；centerHz=30000 按 fs×0.45=19845 生效（44100 采样率上界）、q=0.05→0.1 下界、attackMs=0→0.05ms、releaseMs=0→1ms（release 下限与 attack 不同）。多采样率 44100 覆盖 attack/release/交叉系数随 fs 变化。帧数非整除（末块 126 帧）。"
+}

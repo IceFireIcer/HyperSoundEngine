@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "module": "deesser",
+  "case": "case3",
+  "sampleRate": 48000,
+  "blockSize": 384,
+  "channels": 2,
+  "frames": 9800,
+  "params": {
+    "enabled": true,
+    "centerHz": 8000,
+    "q": 0.7,
+    "thresholdDb": -30,
+    "ratio": 8,
+    "attackMs": 1,
+    "releaseMs": 80,
+    "splitBand": false,
+    "mix": 1,
+    "sidechainEnabled": false
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "宽带对照：与 case2 参数与输入完全相同、仅 splitBand=false——整体乘 g，右声道 200Hz 低频成分与齿音同被衰减（分带式则保持），两向量输出显著可区分（驱动器漏做交叉/误用宽带路径必然暴露）。帧数非整除（末块 200 帧）。"
+}

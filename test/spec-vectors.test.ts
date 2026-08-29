@@ -21,13 +21,16 @@ import { Compressor } from '../src/dsp/Compressor'
 import { BassEnhancer } from '../src/dsp/BassEnhancer'
 import { MidSide } from '../src/dsp/MidSide'
 import { EqChain } from '../src/dsp/EqChain'
-import type { LimiterSettings, CompressorSettings, BassEnhancerSettings } from '../src/types'
+import { FdnReverb, type FdnReverbParams } from '../src/dsp/FdnReverb'
+import { Deesser } from '../src/dsp/Deesser'
+import { LoudnessComp, type LoudnessCompParams } from '../src/dsp/LoudnessComp'
+import type { LimiterSettings, CompressorSettings, BassEnhancerSettings, DeesserSettings } from '../src/types'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const VECTOR_DIR = resolve(fileURLToPath(import.meta.url), '..', '..', 'specs', 'dsp', 'vectors')
-const SUPPORTED_MODULES = ['biquad', 'limiter', 'reverb-simple', 'compressor', 'bass-enhancer', 'mid-side', 'eq-chain'] as const
+const SUPPORTED_MODULES = ['biquad', 'limiter', 'reverb-simple', 'compressor', 'bass-enhancer', 'mid-side', 'eq-chain', 'fdn-reverb', 'deesser', 'loudness-comp'] as const
 
 /** 向量 JSON 元数据（与 specs/dsp/vectors 契约一致） */
 interface VectorMeta {
@@ -211,6 +214,48 @@ function instantiate(
         const outL = l.slice()
         const outR = r.slice()
         eq.processStereo(outL, outR)
+        return [outL, outR]
+      }
+    }
+    case 'fdn-reverb': {
+      const reverb = new FdnReverb(sampleRate)
+      reverb.setParams(params as unknown as FdnReverbParams)
+      return (l, r) => {
+        const outL = l.slice()
+        const outR = r.slice()
+        reverb.processStereo(outL, outR)
+        return [outL, outR]
+      }
+    }
+    case 'deesser': {
+      const dss = new Deesser(sampleRate)
+      dss.setParams(params as unknown as DeesserSettings)
+      const useSidechain = params.sidechainEnabled === true
+      return (l, r) => {
+        const outL = l.slice()
+        const outR = r.slice()
+        if (useSidechain) {
+          // sidechain 向量语义（specs/dsp/deesser.md §4.6）：本块原始输入的
+          // 单声道和派生，双精度加法、就地处理前快照；sideL 与 sideR 内容相同
+          // （本批向量不含该形态，规则与 compressor §4.5 同构）。
+          const side = new Float32Array(l.length)
+          for (let i = 0; i < side.length; i++) side[i] = l[i] + r[i]
+          dss.processStereo(outL, outR, side, side)
+        } else {
+          dss.processStereo(outL, outR)
+        }
+        return [outL, outR]
+      }
+    }
+    case 'loudness-comp': {
+      // 平滑 alpha 逐块计算（specs/dsp/loudness-comp.md §4.3）：输出依赖 blockSize，
+      // 与导出脚本及 Rust 门禁按同一块长回放。
+      const comp = new LoudnessComp(sampleRate)
+      comp.setParams(params as unknown as LoudnessCompParams)
+      return (l, r) => {
+        const outL = l.slice()
+        const outR = r.slice()
+        comp.processStereo(outL, outR)
         return [outL, outR]
       }
     }
