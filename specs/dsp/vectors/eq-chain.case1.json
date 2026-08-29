@@ -1,0 +1,71 @@
+{
+  "schemaVersion": 1,
+  "module": "eq-chain",
+  "case": "case1",
+  "sampleRate": 48000,
+  "blockSize": 256,
+  "channels": 2,
+  "frames": 6000,
+  "params": {
+    "bandCount": 10,
+    "qCompensation": false,
+    "bands": [
+      {
+        "frequency": 40,
+        "gain": 0,
+        "q": 0.5
+      },
+      {
+        "frequency": 80,
+        "gain": 0,
+        "q": 0.8
+      },
+      {
+        "frequency": 160,
+        "gain": 0,
+        "q": 1
+      },
+      {
+        "frequency": 320,
+        "gain": 0,
+        "q": 1.2
+      },
+      {
+        "frequency": 640,
+        "gain": 0,
+        "q": 1.4
+      },
+      {
+        "frequency": 1280,
+        "gain": 0,
+        "q": 2
+      },
+      {
+        "frequency": 2560,
+        "gain": 0,
+        "q": 3
+      },
+      {
+        "frequency": 5120,
+        "gain": 0,
+        "q": 4
+      },
+      {
+        "frequency": 10240,
+        "gain": 0,
+        "q": 0.707
+      },
+      {
+        "frequency": 16000,
+        "gain": 0,
+        "q": 6
+      }
+    ]
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "零增益全直通锚点：10 段全部 gain=0（frequency/q 取多变体），peaking A=1 时分子分母多项式解析恒等、TDF2 状态恒零，期望输出与输入逐位一致（左右声道皆然，含共享状态续跑的右声道）——最强跨实现精度锚点。左=三频正弦叠加(50/800/6000Hz)，右=固定种子LCG噪声。帧数非整除（末块 112 帧）。"
+}

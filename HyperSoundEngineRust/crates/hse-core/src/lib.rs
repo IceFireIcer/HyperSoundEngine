@@ -19,6 +19,7 @@
 pub mod bass_enhancer;
 pub mod biquad;
 pub mod compressor;
+pub mod eq_chain;
 pub mod limiter;
 pub mod mid_side;
 pub mod reverb_simple;

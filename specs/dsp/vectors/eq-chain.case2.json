@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "module": "eq-chain",
+  "case": "case2",
+  "sampleRate": 48000,
+  "blockSize": 384,
+  "channels": 2,
+  "frames": 6000,
+  "params": {
+    "bandCount": 5,
+    "qCompensation": true,
+    "bands": [
+      {
+        "frequency": 40,
+        "gain": 6,
+        "q": 1.4
+      },
+      {
+        "frequency": 1000,
+        "gain": -4,
+        "q": 1
+      },
+      {
+        "frequency": 8000,
+        "gain": 3,
+        "q": 0.8
+      }
+    ]
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "boost/cut 混合级联 + 级联 Q 补偿开启：3 个活动段（40Hz+6 / 1kHz−4 / 8kHz+3）+ 2 个尾部填充段（bands 短于 bandCount 的回退语义，填充段不参与补偿）。补偿迭代（Gauss-Seidel 逐段、0.8 阻尼、至多 5 轮、<0.05dB 提前终止）实测 2 轮收敛。左=活动段频点三频正弦叠加(40/1000/8000Hz)，右=固定种子LCG噪声（宽频激励）。与 case3 成对对照（仅 qCompensation 不同）。帧数非整除（末块 240 帧）。"
+}

@@ -6,7 +6,7 @@
  *
  * 职责：
  *  - 以 TS 支线（src/）为行为事实标准，为 biquad / limiter / reverb-simple /
- *    compressor / bass-enhancer / mid-side 六个模块
+ *    compressor / bass-enhancer / mid-side / eq-chain 七个模块
  *    导出确定性对拍向量到 specs/dsp/vectors/<module>.<case>.json 与同名 .f32；
  *  - 向量格式契约（两支线共享，见 specs/ 目录规划文档）：
  *      JSON：schemaVersion=1 / module / case / sampleRate / blockSize / channels=2 /
@@ -54,6 +54,7 @@ const MODULE_SOURCES = [
   { id: 'compressor', file: 'Compressor.ts' },
   { id: 'bass-enhancer', file: 'BassEnhancer.ts' },
   { id: 'mid-side', file: 'MidSide.ts' },
+  { id: 'eq-chain', file: 'EqChain.ts' },
 ]
 
 /**
@@ -446,6 +447,120 @@ const CASES = [
       { freqHz: 1320, amp: 0.2, phaseRad: Math.PI / 3 },
     ]),
   },
+
+  // ---------- eq-chain ----------
+  {
+    module: 'eq-chain',
+    caseId: 'case1',
+    sampleRate: 48000,
+    blockSize: 256,
+    params: {
+      bandCount: 10,
+      qCompensation: false,
+      bands: [
+        { frequency: 40, gain: 0, q: 0.5 },
+        { frequency: 80, gain: 0, q: 0.8 },
+        { frequency: 160, gain: 0, q: 1.0 },
+        { frequency: 320, gain: 0, q: 1.2 },
+        { frequency: 640, gain: 0, q: 1.4 },
+        { frequency: 1280, gain: 0, q: 2.0 },
+        { frequency: 2560, gain: 0, q: 3.0 },
+        { frequency: 5120, gain: 0, q: 4.0 },
+        { frequency: 10240, gain: 0, q: 0.707 },
+        { frequency: 16000, gain: 0, q: 6.0 },
+      ],
+    },
+    notes: '零增益全直通锚点：10 段全部 gain=0（frequency/q 取多变体），peaking A=1 时分子分母多项式解析恒等、TDF2 状态恒零，期望输出与输入逐位一致（左右声道皆然，含共享状态续跑的右声道）——最强跨实现精度锚点。左=三频正弦叠加(50/800/6000Hz)，右=固定种子LCG噪声。帧数非整除（末块 112 帧）。',
+    inputL: (n, fs) => sineSum(n, fs, [
+      { freqHz: 50, amp: 0.45, phaseRad: 0 },
+      { freqHz: 800, amp: 0.35, phaseRad: Math.PI / 5 },
+      { freqHz: 6000, amp: 0.25, phaseRad: Math.PI / 3 },
+    ]),
+    inputR: (n) => lcgNoise(n, 80801, 0.6),
+  },
+  {
+    module: 'eq-chain',
+    caseId: 'case2',
+    sampleRate: 48000,
+    blockSize: 384,
+    params: {
+      bandCount: 5,
+      qCompensation: true,
+      bands: [
+        { frequency: 40, gain: 6, q: 1.4 },
+        { frequency: 1000, gain: -4, q: 1.0 },
+        { frequency: 8000, gain: 3, q: 0.8 },
+      ],
+    },
+    notes: 'boost/cut 混合级联 + 级联 Q 补偿开启：3 个活动段（40Hz+6 / 1kHz−4 / 8kHz+3）+ 2 个尾部填充段（bands 短于 bandCount 的回退语义，填充段不参与补偿）。补偿迭代（Gauss-Seidel 逐段、0.8 阻尼、至多 5 轮、<0.05dB 提前终止）实测 2 轮收敛。左=活动段频点三频正弦叠加(40/1000/8000Hz)，右=固定种子LCG噪声（宽频激励）。与 case3 成对对照（仅 qCompensation 不同）。帧数非整除（末块 240 帧）。',
+    inputL: (n, fs) => sineSum(n, fs, [
+      { freqHz: 40, amp: 0.5, phaseRad: 0 },
+      { freqHz: 1000, amp: 0.35, phaseRad: Math.PI / 4 },
+      { freqHz: 8000, amp: 0.2, phaseRad: Math.PI / 2 },
+    ]),
+    inputR: (n) => lcgNoise(n, 80802, 0.5),
+  },
+  {
+    module: 'eq-chain',
+    caseId: 'case3',
+    sampleRate: 48000,
+    blockSize: 384,
+    params: {
+      bandCount: 5,
+      qCompensation: false,
+      bands: [
+        { frequency: 40, gain: 6, q: 1.4 },
+        { frequency: 1000, gain: -4, q: 1.0 },
+        { frequency: 8000, gain: 3, q: 0.8 },
+      ],
+    },
+    notes: '与 case2 完全成对的补偿关闭对照：参数与输入全同、仅 qCompensation=false——增益恰为用户目标、无补偿迭代，相邻段叠加使级联响应偏离控制点目标，输出与 case2 显著可区分（驱动器漏做/错做补偿迭代必然在此暴露）。帧数非整除（末块 240 帧）。',
+    inputL: (n, fs) => sineSum(n, fs, [
+      { freqHz: 40, amp: 0.5, phaseRad: 0 },
+      { freqHz: 1000, amp: 0.35, phaseRad: Math.PI / 4 },
+      { freqHz: 8000, amp: 0.2, phaseRad: Math.PI / 2 },
+    ]),
+    inputR: (n) => lcgNoise(n, 80802, 0.5),
+  },
+  {
+    module: 'eq-chain',
+    caseId: 'case4',
+    sampleRate: 48000,
+    blockSize: 480,
+    params: {
+      bandCount: 20,
+      qCompensation: false,
+      bands: [
+        { frequency: 5, gain: 30, q: 0.05 },
+        { frequency: 40, gain: 6, q: 1.4 },
+        { frequency: 80, gain: -3, q: 1.0 },
+        { frequency: 160, gain: 4.5, q: 0.9 },
+        { frequency: 320, gain: -6, q: 1.2 },
+        { frequency: 640, gain: 2, q: 1.5 },
+        { frequency: 1000, gain: -1.5, q: 0.8 },
+        { frequency: 1500, gain: 3.5, q: 1.1 },
+        { frequency: 2000, gain: -2, q: 1.6 },
+        { frequency: 3000, gain: 4, q: 0.85 },
+        { frequency: 4000, gain: -5, q: 1.3 },
+        { frequency: 5000, gain: 2.5, q: 0.95 },
+        { frequency: 6000, gain: -3.5, q: 1.25 },
+        { frequency: 8000, gain: 3, q: 1.0 },
+        { frequency: 10000, gain: -1, q: 0.75 },
+        { frequency: 12000, gain: 2, q: 1.45 },
+        { frequency: 14000, gain: -2.5, q: 0.7 },
+        { frequency: 16000, gain: 1.5, q: 1.15 },
+        { frequency: 18000, gain: -1.5, q: 0.65 },
+        { frequency: 30000, gain: -40, q: 50 },
+      ],
+    },
+    notes: '满配钳制极值：bandCount=20、20 段全配；首段 frequency=5/gain=30/q=0.05 越下界（按 20Hz/+24dB/Q0.1 生效），末段 frequency=30000/gain=-40/q=50 越上界（按 20kHz/−24dB/Q18 生效），三参数双向钳制语义随载荷固化。左=三频正弦叠加(220/3300/11000Hz)，右=固定种子LCG噪声。帧数非整除（末块 240 帧）。',
+    inputL: (n, fs) => sineSum(n, fs, [
+      { freqHz: 220, amp: 0.4, phaseRad: 0 },
+      { freqHz: 3300, amp: 0.25, phaseRad: Math.PI / 6 },
+      { freqHz: 11000, amp: 0.15, phaseRad: Math.PI / 3 },
+    ]),
+    inputR: (n) => lcgNoise(n, 80804, 0.7),
+  },
 ]
 
 // ==================== 模块实例化与分块处理 ====================
@@ -533,6 +648,22 @@ function instantiateProcessor(modules, moduleId, sampleRate, params) {
         const outL = l.slice()
         const outR = r.slice()
         ms.processStereo(outL, outR)
+        return [outL, outR]
+      }
+    }
+    case 'eq-chain': {
+      if (!modules['eq-chain'] || !modules['eq-chain'].EqChain) throw new Error('eq-chain 模块加载失败')
+      // 驱动顺序采用引擎接线顺序（HyperSoundEngine.ts：先 setBands 后 setQCompensation；
+      // specs/dsp/eq-chain.md §4.3 实证两种顺序终态逐位一致）。立体声语义（§4.4）：
+      // 左右声道共享同一条级联滤波状态，每块内先整条处理 L、再整条处理 R；
+      // 输出依赖 blockSize，由向量固定，两支线须按同一块长回放。
+      const eq = new modules['eq-chain'].EqChain(sampleRate, params.bandCount)
+      eq.setBands(params.bands)
+      eq.setQCompensation(params.qCompensation === true)
+      return (l, r) => {
+        const outL = l.slice()
+        const outR = r.slice()
+        eq.processStereo(outL, outR)
         return [outL, outR]
       }
     }
@@ -675,6 +806,10 @@ const FRAME_COUNTS = {
   'mid-side.case2': 4096,
   'mid-side.case3': 5000,
   'mid-side.case4': 5000,
+  'eq-chain.case1': 6000,
+  'eq-chain.case2': 6000,
+  'eq-chain.case3': 6000,
+  'eq-chain.case4': 6000,
 }
 
 main().catch((err) => {

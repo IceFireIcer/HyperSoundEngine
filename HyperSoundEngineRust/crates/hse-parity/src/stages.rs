@@ -1,7 +1,7 @@
 //! 模块分发器：按向量用例的 `module` id 构造被测阶段。
 //!
 //! 已落地的模块（biquad / limiter / reverb-simple / compressor / bass-enhancer /
-//! mid-side）从 hse-core 构造真实实现；尚未落地的模块一律回退
+//! mid-side / eq-chain）从 hse-core 构造真实实现；尚未落地的模块一律回退
 //! [`PassthroughStage`]（数值 FAIL 属预期）。参数字段名以 TS 源码为准
 //! （camelCase），缺失/类型不符即报夹具错误。
 
@@ -12,6 +12,7 @@ use crate::vector::VectorCase;
 use hse_core::bass_enhancer::{BassEnhancerSettings, BassEnhancerStage};
 use hse_core::biquad::BiquadStage;
 use hse_core::compressor::{CompressorSettings, CompressorStage};
+use hse_core::eq_chain::{EqBandParam, EqChainStage};
 use hse_core::limiter::{LimiterSettings, LimiterStage};
 use hse_core::mid_side::MidSideStage;
 use hse_core::reverb_simple::{ReverbSimpleParams, ReverbSimpleStage};
@@ -90,6 +91,32 @@ pub fn make_stage(case: &VectorCase) -> Result<Box<dyn Stage>, String> {
             // setParams 为位置参数接口，sampleRate 不得传入模块。
             let mut stage = MidSideStage::new();
             stage.set_params(number_field(obj, "width")?, number_field(obj, "voiceBalance")?);
+            Ok(Box::new(stage))
+        }
+        "eq-chain" => {
+            // 驱动顺序采用引擎接线顺序（先 setBands 后 setQCompensation；
+            // specs/dsp/eq-chain.md §4.3 实证两种顺序终态逐位一致）。
+            // bandCount 生效值 = max(1, floor(bandCount))，由阶段内复刻。
+            let band_count = number_field(obj, "bandCount")?;
+            let q_compensation = bool_field(obj, "qCompensation")?;
+            let bands_val = obj.get("bands").ok_or_else(|| "缺少 params.bands".to_string())?;
+            let arr = bands_val
+                .as_array()
+                .ok_or_else(|| "params.bands 必须是数组".to_string())?;
+            let mut bands = Vec::with_capacity(arr.len());
+            for (i, item) in arr.iter().enumerate() {
+                let o = item
+                    .as_object()
+                    .ok_or_else(|| format!("params.bands[{i}] 必须是对象"))?;
+                bands.push(EqBandParam {
+                    frequency: number_field(o, "frequency")?,
+                    gain: number_field(o, "gain")?,
+                    q: number_field(o, "q")?,
+                });
+            }
+            let mut stage = EqChainStage::new(case.sample_rate, band_count)?;
+            stage.set_bands(&bands);
+            stage.set_q_compensation(q_compensation);
             Ok(Box::new(stage))
         }
         // 未落地模块：直通占位（FAIL 属预期，证明比对链路仍在工作）。

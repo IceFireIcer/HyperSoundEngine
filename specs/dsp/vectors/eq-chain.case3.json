@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "module": "eq-chain",
+  "case": "case3",
+  "sampleRate": 48000,
+  "blockSize": 384,
+  "channels": 2,
+  "frames": 6000,
+  "params": {
+    "bandCount": 5,
+    "qCompensation": false,
+    "bands": [
+      {
+        "frequency": 40,
+        "gain": 6,
+        "q": 1.4
+      },
+      {
+        "frequency": 1000,
+        "gain": -4,
+        "q": 1
+      },
+      {
+        "frequency": 8000,
+        "gain": 3,
+        "q": 0.8
+      }
+    ]
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "与 case2 完全成对的补偿关闭对照：参数与输入全同、仅 qCompensation=false——增益恰为用户目标、无补偿迭代，相邻段叠加使级联响应偏离控制点目标，输出与 case2 显著可区分（驱动器漏做/错做补偿迭代必然在此暴露）。帧数非整除（末块 240 帧）。"
+}

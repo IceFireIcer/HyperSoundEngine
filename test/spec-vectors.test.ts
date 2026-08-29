@@ -20,13 +20,14 @@ import { ReverbSimple, type ReverbSimpleParams } from '../src/dsp/ReverbSimple'
 import { Compressor } from '../src/dsp/Compressor'
 import { BassEnhancer } from '../src/dsp/BassEnhancer'
 import { MidSide } from '../src/dsp/MidSide'
+import { EqChain } from '../src/dsp/EqChain'
 import type { LimiterSettings, CompressorSettings, BassEnhancerSettings } from '../src/types'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const VECTOR_DIR = resolve(fileURLToPath(import.meta.url), '..', '..', 'specs', 'dsp', 'vectors')
-const SUPPORTED_MODULES = ['biquad', 'limiter', 'reverb-simple', 'compressor', 'bass-enhancer', 'mid-side'] as const
+const SUPPORTED_MODULES = ['biquad', 'limiter', 'reverb-simple', 'compressor', 'bass-enhancer', 'mid-side', 'eq-chain'] as const
 
 /** 向量 JSON 元数据（与 specs/dsp/vectors 契约一致） */
 interface VectorMeta {
@@ -195,6 +196,21 @@ function instantiate(
         const outL = l.slice()
         const outR = r.slice()
         ms.processStereo(outL, outR)
+        return [outL, outR]
+      }
+    }
+    case 'eq-chain': {
+      // 驱动顺序采用引擎接线顺序（HyperSoundEngine.ts：先 setBands 后 setQCompensation；
+      // specs/dsp/eq-chain.md §4.3 实证两种顺序终态逐位一致）。立体声语义（§4.4）：
+      // 左右声道共享同一条级联滤波状态，每块内先整条处理 L、再整条处理 R；
+      // 输出依赖 blockSize，由向量固定，与导出脚本及 Rust 门禁按同一块长回放。
+      const eq = new EqChain(sampleRate, params.bandCount as number)
+      eq.setBands(params.bands as { frequency: number; gain: number; q: number }[])
+      eq.setQCompensation(params.qCompensation === true)
+      return (l, r) => {
+        const outL = l.slice()
+        const outR = r.slice()
+        eq.processStereo(outL, outR)
         return [outL, outR]
       }
     }
