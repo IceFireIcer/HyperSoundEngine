@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "module": "modulation-matrix",
+  "case": "case4",
+  "sampleRate": 48000,
+  "blockSize": 256,
+  "channels": 2,
+  "frames": 6000,
+  "params": {
+    "routes": [
+      {
+        "source": "lfo",
+        "target": "stereoWidth",
+        "amount": 1.5,
+        "offset": 0.5
+      }
+    ],
+    "lfo": {
+      "shape": "square",
+      "rateHz": 2,
+      "depth": 1
+    },
+    "envelope": {
+      "attackMs": 10,
+      "releaseMs": 200,
+      "amount": 0.5
+    }
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "恒等锚点：路由表仅含 stereoWidth 目标路由（amount 1.5/offset 0.5）→ masterGain 恒精确 1，期望输出与输入逐位一致（最强跨实现精度锚点，捕获宽度路由误入增益路径/求和基线偏离 1 的实现）；square LFO 相位照常推进（状态推进与路由无关）但不进音频路径。输入与 case1 相同（成对对照）。帧数非整除（末块 112 帧）。"
+}

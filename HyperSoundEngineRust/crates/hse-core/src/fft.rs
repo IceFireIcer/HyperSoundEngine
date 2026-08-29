@@ -65,7 +65,12 @@ pub fn next_pow2(n: usize) -> usize {
 //
 // 移植来源：v8/v8 tag 14.1.146 `src/base/ieee754.cc`
 // （fdlibm 谱系，Sun 版权声明 + Google 修改；V8 为 BSD-3）。
-mod ts_trig {
+//
+// `pub(crate)`：位精确三角函数是全 crate 的共享事实标准——hse-stretch 的
+// Hann 窗 / 合成谱 cos/sin / 重采样 sinc 内核与 modulation-matrix 的 LFO sine
+// 都按 TS `Math.sin/Math.cos` 逐位复刻（specs/dsp/hse-stretch.md §4.7、
+// specs/dsp/modulation-matrix.md §4.1），与 FFT twiddle 同源同口径。
+pub(crate) mod ts_trig {
     /// __ieee754_rem_pio2 的 π/2 高位字表（npio2_hw，用于快速无消除检查）。
     const NPIO2_HW: [u32; 32] = [
         0x3FF9_21FB, 0x4009_21FB, 0x4012_D97C, 0x4019_21FB, 0x401F_6A7A, 0x4022_D97C,
@@ -95,8 +100,11 @@ mod ts_trig {
             return (0, x, 0.0);
         }
         if ix < 0x4002_D97C {
-            // |x| < 3π/4，n = ±1 特例
-            if hx > 0 {
+            // |x| < 3π/4，n = ±1 特例。hx 的正负判定必须是**有符号**语义
+            // （fdlibm/V8 中 hx 为 int32）：无符号比较会把一切负 x（高字
+            // 0xB… > 0）误入正分支——2026-08 修复（hse-stretch 相位域
+            // (−π, π] 大量负角实证暴露），twiddle 角恒正、既有向量不受影响。
+            if (hx as i32) > 0 {
                 let mut z = x - PIO2_1;
                 let y0;
                 let y1;
@@ -317,6 +325,40 @@ mod ts_trig_tests {
             let got_c = ts_trig::cos(x);
             assert_eq!(bits(got_s), *sb, "sin[{i}] x={x:e}: got {:016x} want {sb:016x}", bits(got_s));
             assert_eq!(bits(got_c), *cb, "cos[{i}] x={x:e}: got {:016x} want {cb:016x}", bits(got_c));
+        }
+    }
+
+    /// 黄金参考补充：**负角域**（node 直跑 Math.sin/Math.cos 的位型）。
+    /// 覆盖 rem_pio2 ±1 分支的负 x 路径（hse-stretch 相位域 (−π, π] 的主用
+    /// 路径——2026-08 有符号比较修复的回归锚点）与 medium 路径负 x。
+    /// 输入为 f32 位型（hse-stretch 的 synPhase 是 f32 存储，宽化后求值）。
+    #[test]
+    fn ts_trig_负角命中_node_黄金参考位型() {
+        // (f32_bits, sin_bits, cos_bits) —— 由 node 生成
+        const GOLDEN_NEG: [(u32, u64, u64); 8] = [
+            // −1.98363：±1 分支负 x（33+53 位 π 路径）
+            (0xbffe_b97f, 0xbfed_3a90_04d9_43c2, 0xbfda_0d5e_82cf_0808),
+            // −1.73185：±1 分支负 x
+            (0xbfdd_ad65, 0xbfef_95fb_1a42_a1b0, 0xbfc4_86c0_fc8d_1ee4),
+            // −1.93416：±1 分支负 x
+            (0xbff7_9275, 0xbfed_e920_0871_9be7, 0xbfd6_bf29_04b9_a045),
+            // −3.13111：medium 路径负 x（|x| > 3π/4，末尾符号回填）
+            (0xc048_7018, 0xbf83_f83f_86cd_b39d, 0xbfef_ff9c_4cda_65ef),
+            // +3.14159（π）：medium 路径正 x（回归对照）
+            (0x4049_0fdb, 0xbe77_77a5_cf72_cec6, 0xbfef_ffff_ffff_ffde),
+            // +0.64025：kernel 直算（|x| ≤ π/4）
+            (0x3f22_7336, 0x3fe2_f87a_1c86_745c, 0x3fe9_c53b_e110_4e71),
+            // +0.24490：kernel 直算
+            (0x3e56_2698, 0x3fca_92fb_1533_9503, 0x3fef_4d82_5b3a_9192),
+            // +1.15395：±1 分支正 x
+            (0x3f93_c544, 0x3fed_4434_50a2_4325, 0x3fd9_e1ee_246c_f3f5),
+        ];
+        for (i, (fb, sb, cb)) in GOLDEN_NEG.iter().enumerate() {
+            let x = f64::from(f32::from_bits(*fb));
+            let got_s = ts_trig::sin(x);
+            let got_c = ts_trig::cos(x);
+            assert_eq!(bits(got_s), *sb, "sin[{i}] f32={fb:08x}: got {:016x}", bits(got_s));
+            assert_eq!(bits(got_c), *cb, "cos[{i}] f32={fb:08x}: got {:016x}", bits(got_c));
         }
     }
 

@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "module": "modulation-matrix",
+  "case": "case2",
+  "sampleRate": 44100,
+  "blockSize": 441,
+  "channels": 2,
+  "frames": 6000,
+  "params": {
+    "routes": [
+      {
+        "source": "envelope",
+        "target": "masterGain",
+        "amount": 1,
+        "offset": -1
+      }
+    ],
+    "lfo": {
+      "shape": "triangle",
+      "rateHz": 2,
+      "depth": 1
+    },
+    "envelope": {
+      "attackMs": 2,
+      "releaseMs": 120,
+      "amount": 1
+    }
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "包络→masterGain 攻击/释放轨迹：masterGain = 包络值（route amount 1、offset -1、envelope amount 1）；输入为「头部静音 882 帧 → 有声突发至 3000 帧 → 尾部静音」三段式——静音段包络精确保持 0（整块增益 0）、突发段沿 attack 从 0 爬升、尾段沿 release 衰减；联合峰值 max(|L|,|R|) 由左右去相关激励固化。多采样率 44100 覆盖 attack/release 系数随 fs 变化；lfo triangle 参数随载荷固化（无 lfo 路由，不进音频路径）。帧数非整除（末块 267 帧）。"
+}

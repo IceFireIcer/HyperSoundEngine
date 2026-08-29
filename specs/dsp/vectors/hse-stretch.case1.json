@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "module": "hse-stretch",
+  "case": "case1",
+  "sampleRate": 48000,
+  "blockSize": 6400,
+  "channels": 2,
+  "frames": 6400,
+  "params": {
+    "semitones": 0,
+    "rate": 1
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "rate=1/semitones=0 恒速 STFT 重构（整段单块，blockSize = frames）：输出既非逐位直通也非 1e-6 内近似恒等——中腹重构区为相位累积噪声级（相对偏差 ~1e-5、实测逐位相等样本 149/5800、rms 误差 ~7.7e-6），两端约 210 样本为 S(t)≤0.01 窗边缘保留区淡入淡出小值（~1e-12..1e-9）；outLen=6656 → 块窗映射截断回填 6400。跨实现对拍以算术调度等价为前提、实践目标逐位一致（specs/dsp/hse-stretch.md §4.7）。"
+}

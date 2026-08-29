@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "module": "hse-stretch",
+  "case": "case2",
+  "sampleRate": 48000,
+  "blockSize": 3000,
+  "channels": 2,
+  "frames": 6400,
+  "params": {
+    "semitones": 0,
+    "rate": 2
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "rate=2 时间伸缩（与 case1 同输入成对对照，多块分块依赖）：块 3000/3000/400——前两块各含 3 个分析帧（outLen 4096 → 截断回填 3000），末块 < N=2048 为单部分帧形态（outLen 2048 → 截断回填 400）；每块独立伸缩（跨调用无状态，实证），STFT 分帧与驱动块长的交互随载荷固化，两支线须按同一块长回放。"
+}

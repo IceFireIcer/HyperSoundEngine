@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "module": "hse-stretch",
+  "case": "case3",
+  "sampleRate": 48000,
+  "blockSize": 2048,
+  "channels": 2,
+  "frames": 6000,
+  "params": {
+    "semitones": 5,
+    "rate": 1
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "semitones=+5 变调（正弦激励，rate=1）：两阶段 = 伸缩 ×2^(5/12)（Hs=round(512·1.335)=683）+ Resampler 按 1/pitchScale 重采样；440Hz 双声道（相位 π/4 去相关）中腹频率 ≈ 587Hz（实证过零估计 584.5Hz）；块 2048/2048/1904 的输出长度 2046/2046/1534 均短于块长 → 块窗映射补零形态入向量（尾部补零为非重构区，保留区语义见规格 §4.4）。"
+}

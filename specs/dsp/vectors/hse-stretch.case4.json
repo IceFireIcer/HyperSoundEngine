@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "module": "hse-stretch",
+  "case": "case4",
+  "sampleRate": 48000,
+  "blockSize": 2048,
+  "channels": 2,
+  "frames": 6400,
+  "params": {
+    "semitones": 3,
+    "rate": 1.5,
+    "initialParams": {
+      "semitones": 0,
+      "rate": 1
+    },
+    "switchAtBlock": 2
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "参数突变双 setParams 合法序列：先以 initialParams（恒速）setParams，处理第 switchAtBlock=2 块（0 起）之前以终参 {semitones:3, rate:1.5} setParams（TS 源码在参数变化时内部 reset）——切换前各块 = 全新初参实例逐块输出（outLen 2560）、切换后 = 全新终参实例逐块输出（outLen 2490/2490/1722，均截断回填）；TS 实证跨调用无状态、reset 对输出不可观测，本向量固化「切换后 = 全新终参行为」契约（specs/dsp/hse-stretch.md §4.5）。块 2048×3 + 256 短末块。"
+}

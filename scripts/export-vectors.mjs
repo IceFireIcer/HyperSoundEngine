@@ -7,9 +7,11 @@
  * 职责：
  *  - 以 TS 支线（src/）为行为事实标准，为 biquad / limiter / reverb-simple /
  *    compressor / bass-enhancer / mid-side / eq-chain / fdn-reverb / deesser /
- *    loudness-comp / dynamic-eq / mod-effects 十二个流式立体声模块，以及两个特殊
- *    驱动形态的模块——fft（非流式变换，(L,R)=(Re,Im) 平面，specs/dsp/fft.md §三）与
- *    convolver（IR 配方驱动，specs/dsp/convolver.md §4.2）——
+ *    loudness-comp / dynamic-eq / mod-effects 十二个流式立体声模块，以及四个特殊
+ *    驱动形态的模块——fft（非流式变换，(L,R)=(Re,Im) 平面，specs/dsp/fft.md §三）、
+ *    convolver（IR 配方驱动，specs/dsp/convolver.md §4.2）、modulation-matrix
+ *    （控制率 Stage 驱动，specs/dsp/modulation-matrix.md §4.4）与 hse-stretch
+ *    （块窗映射驱动，specs/dsp/hse-stretch.md §4.6）——
  *    导出确定性对拍向量到 specs/dsp/vectors/<module>.<case>.json 与同名 .f32；
  *  - 向量格式契约（两支线共享，见 specs/ 目录规划文档）：
  *      JSON：schemaVersion=1 / module / case / sampleRate / blockSize / channels=2 /
@@ -66,6 +68,8 @@ const MODULE_SOURCES = [
   // 特殊驱动形态（非 StereoProcessor 流式模块，见各自规格的驱动模型章节）：
   { id: 'fft', file: 'fft.ts' },               // 非流式变换：(L,R)=(Re,Im) 平面（specs/dsp/fft.md §三）
   { id: 'convolver', file: 'Convolver.ts' },   // IR 配方驱动（specs/dsp/convolver.md §4.2）
+  { id: 'modulation-matrix', file: 'modulation.ts' }, // 控制率 Stage 驱动（specs/dsp/modulation-matrix.md §4.4）
+  { id: 'hse-stretch', file: 'HseStretch.ts' },       // 块窗映射驱动（specs/dsp/hse-stretch.md §4.6）
 ]
 
 /**
@@ -1111,6 +1115,149 @@ const CASES = [
       return x
     },
   },
+
+  // ---------- modulation-matrix（控制率 Stage 驱动，specs/dsp/modulation-matrix.md §4.4） ----------
+  // 驱动顺序 = 引擎接线顺序：new ModulationMatrix(fs) → setRoutes → setLfoParams →
+  // setEnvelopeParams → 逐块 processBlock（包络读取增益前输入）→ 取 masterGain 逐样本
+  // 乘到 L/R（引擎 mod-master-gain 阶段语义）。stereoWidth 产物不入向量（引擎 mid-side
+  // 组合，模块向量作用域外）。输出依赖 blockSize（LFO 相位按块推进、增益按块常量），
+  // 两支线必须按同一块长回放。
+  {
+    module: 'modulation-matrix',
+    caseId: 'case1',
+    sampleRate: 48000,
+    blockSize: 256,
+    params: {
+      routes: [{ source: 'lfo', target: 'masterGain', amount: 0.5 }],
+      lfo: { shape: 'sine', rateHz: 4, depth: 1 },
+      envelope: { attackMs: 10, releaseMs: 200, amount: 0.5 },
+    },
+    notes: 'LFO→masterGain 块率幅度调制：单条路由 amount 0.5、sine 4Hz depth 1——增益 = 1 + 0.5·LFO 的块率阶梯，首块即推进后相位采样 sin(2π·rateHz·块长/fs)（非相位 0 值，实证）；包络有激励（左正弦叠加/右 LCG 噪声）但无路由（状态照常推进、不进输出）。输出依赖 blockSize（相位按块推进），两支线须按同一块长回放。帧数非整除（末块 112 帧）。',
+    inputL: (n, fs) => sineSum(n, fs, [
+      { freqHz: 220, amp: 0.5, phaseRad: 0 },
+      { freqHz: 3300, amp: 0.25, phaseRad: Math.PI / 4 },
+    ]),
+    inputR: (n) => lcgNoise(n, 87001, 0.6),
+  },
+  {
+    module: 'modulation-matrix',
+    caseId: 'case2',
+    sampleRate: 44100,
+    blockSize: 441,
+    params: {
+      routes: [{ source: 'envelope', target: 'masterGain', amount: 1, offset: -1 }],
+      lfo: { shape: 'triangle', rateHz: 2, depth: 1 },
+      envelope: { attackMs: 2, releaseMs: 120, amount: 1 },
+    },
+    notes: '包络→masterGain 攻击/释放轨迹：masterGain = 包络值（route amount 1、offset -1、envelope amount 1）；输入为「头部静音 882 帧 → 有声突发至 3000 帧 → 尾部静音」三段式——静音段包络精确保持 0（整块增益 0）、突发段沿 attack 从 0 爬升、尾段沿 release 衰减；联合峰值 max(|L|,|R|) 由左右去相关激励固化。多采样率 44100 覆盖 attack/release 系数随 fs 变化；lfo triangle 参数随载荷固化（无 lfo 路由，不进音频路径）。帧数非整除（末块 267 帧）。',
+    inputL: (n, fs) => {
+      const x = silence(n)
+      for (let i = 882; i < 3000; i++) x[i] = 0.9 * Math.sin((2 * Math.PI * 440 * i) / fs)
+      return x
+    },
+    inputR: (n) => {
+      const x = lcgNoise(n, 87002, 0.8)
+      x.fill(0, 3000)
+      for (let i = 0; i < 882; i++) x[i] = 0
+      return x
+    },
+  },
+  {
+    module: 'modulation-matrix',
+    caseId: 'case3',
+    sampleRate: 48000,
+    blockSize: 384,
+    params: {
+      routes: [
+        { source: 'lfo', target: 'masterGain', amount: 3 },
+        { source: 'envelope', target: 'masterGain', amount: 1.5, offset: -0.5 },
+        { source: 'lfo', target: 'stereoWidth', amount: 1 },
+      ],
+      lfo: { shape: 'saw', rateHz: 12, depth: 1 },
+      envelope: { attackMs: 1, releaseMs: 50, amount: 1 },
+    },
+    notes: '双源叠加 + 双向钳制 + 宽度路由惰性：lfo(saw 12Hz) amount 3 与 envelope amount 1.5/offset -0.5 叠加，masterGain = 1 + 3·saw + 1.5·env − 0.5 越 [0,4] 双向钳制（实测 5 块触 0、1 块触 4）；同时含 stereoWidth 目标路由——对 masterGain 路径无贡献（宽度路径属引擎 mid-side 组合，不入模块向量，specs/dsp/modulation-matrix.md §4.4）。帧数非整除（末块 240 帧）。',
+    inputL: (n, fs) => sineSum(n, fs, [
+      { freqHz: 220, amp: 0.5, phaseRad: 0 },
+      { freqHz: 3300, amp: 0.25, phaseRad: Math.PI / 4 },
+    ]),
+    inputR: (n) => lcgNoise(n, 31337, 0.5),
+  },
+  {
+    module: 'modulation-matrix',
+    caseId: 'case4',
+    sampleRate: 48000,
+    blockSize: 256,
+    params: {
+      routes: [{ source: 'lfo', target: 'stereoWidth', amount: 1.5, offset: 0.5 }],
+      lfo: { shape: 'square', rateHz: 2, depth: 1 },
+      envelope: { attackMs: 10, releaseMs: 200, amount: 0.5 },
+    },
+    notes: '恒等锚点：路由表仅含 stereoWidth 目标路由（amount 1.5/offset 0.5）→ masterGain 恒精确 1，期望输出与输入逐位一致（最强跨实现精度锚点，捕获宽度路由误入增益路径/求和基线偏离 1 的实现）；square LFO 相位照常推进（状态推进与路由无关）但不进音频路径。输入与 case1 相同（成对对照）。帧数非整除（末块 112 帧）。',
+    inputL: (n, fs) => sineSum(n, fs, [
+      { freqHz: 220, amp: 0.5, phaseRad: 0 },
+      { freqHz: 3300, amp: 0.25, phaseRad: Math.PI / 4 },
+    ]),
+    inputR: (n) => lcgNoise(n, 87001, 0.6),
+  },
+
+  // ---------- hse-stretch（块窗映射驱动，specs/dsp/hse-stretch.md §4.6） ----------
+  // 驱动顺序 = 引擎暴露形态：new HseStretch(fs, 2) → setParams（载荷含 initialParams 时
+  // 先以初参 setParams，处理第 switchAtBlock 块之前再以终参 setParams）→ 逐块
+  // processStereo（非就地）→ 块窗映射：取输出的前 len 个样本（超出截断、不足补零）。
+  // 驱动器从不调用 isSignalsmithAvailable()（全部向量恒为自研相位声码器路径）。
+  // 输出依赖 blockSize（每块独立 STFT 分帧），两支线必须按同一块长回放。
+  {
+    module: 'hse-stretch',
+    caseId: 'case1',
+    sampleRate: 48000,
+    blockSize: 6400,
+    params: { semitones: 0, rate: 1 },
+    notes: 'rate=1/semitones=0 恒速 STFT 重构（整段单块，blockSize = frames）：输出既非逐位直通也非 1e-6 内近似恒等——中腹重构区为相位累积噪声级（相对偏差 ~1e-5、实测逐位相等样本 149/5800、rms 误差 ~7.7e-6），两端约 210 样本为 S(t)≤0.01 窗边缘保留区淡入淡出小值（~1e-12..1e-9）；outLen=6656 → 块窗映射截断回填 6400。跨实现对拍以算术调度等价为前提、实践目标逐位一致（specs/dsp/hse-stretch.md §4.7）。',
+    inputL: (n, fs) => sineSum(n, fs, [
+      { freqHz: 220, amp: 0.5, phaseRad: 0 },
+      { freqHz: 1900, amp: 0.25, phaseRad: Math.PI / 5 },
+      { freqHz: 7000, amp: 0.15, phaseRad: Math.PI / 3 },
+    ]),
+    inputR: (n) => lcgNoise(n, 99002, 0.5),
+  },
+  {
+    module: 'hse-stretch',
+    caseId: 'case2',
+    sampleRate: 48000,
+    blockSize: 3000,
+    params: { semitones: 0, rate: 2 },
+    notes: 'rate=2 时间伸缩（与 case1 同输入成对对照，多块分块依赖）：块 3000/3000/400——前两块各含 3 个分析帧（outLen 4096 → 截断回填 3000），末块 < N=2048 为单部分帧形态（outLen 2048 → 截断回填 400）；每块独立伸缩（跨调用无状态，实证），STFT 分帧与驱动块长的交互随载荷固化，两支线须按同一块长回放。',
+    inputL: (n, fs) => sineSum(n, fs, [
+      { freqHz: 220, amp: 0.5, phaseRad: 0 },
+      { freqHz: 1900, amp: 0.25, phaseRad: Math.PI / 5 },
+      { freqHz: 7000, amp: 0.15, phaseRad: Math.PI / 3 },
+    ]),
+    inputR: (n) => lcgNoise(n, 99002, 0.5),
+  },
+  {
+    module: 'hse-stretch',
+    caseId: 'case3',
+    sampleRate: 48000,
+    blockSize: 2048,
+    params: { semitones: 5, rate: 1 },
+    notes: 'semitones=+5 变调（正弦激励，rate=1）：两阶段 = 伸缩 ×2^(5/12)（Hs=round(512·1.335)=683）+ Resampler 按 1/pitchScale 重采样；440Hz 双声道（相位 π/4 去相关）中腹频率 ≈ 587Hz（实证过零估计 584.5Hz）；块 2048/2048/1904 的输出长度 2046/2046/1534 均短于块长 → 块窗映射补零形态入向量（尾部补零为非重构区，保留区语义见规格 §4.4）。',
+    inputL: (n, fs) => sine(n, fs, 440, 0.7),
+    inputR: (n, fs) => sine(n, fs, 440, 0.7, Math.PI / 4),
+  },
+  {
+    module: 'hse-stretch',
+    caseId: 'case4',
+    sampleRate: 48000,
+    blockSize: 2048,
+    params: { semitones: 3, rate: 1.5, initialParams: { semitones: 0, rate: 1 }, switchAtBlock: 2 },
+    notes: '参数突变双 setParams 合法序列：先以 initialParams（恒速）setParams，处理第 switchAtBlock=2 块（0 起）之前以终参 {semitones:3, rate:1.5} setParams（TS 源码在参数变化时内部 reset）——切换前各块 = 全新初参实例逐块输出（outLen 2560）、切换后 = 全新终参实例逐块输出（outLen 2490/2490/1722，均截断回填）；TS 实证跨调用无状态、reset 对输出不可观测，本向量固化「切换后 = 全新终参行为」契约（specs/dsp/hse-stretch.md §4.5）。块 2048×3 + 256 短末块。',
+    inputL: (n, fs) => sineSum(n, fs, [
+      { freqHz: 220, amp: 0.5, phaseRad: 0 },
+      { freqHz: 1900, amp: 0.25, phaseRad: Math.PI / 5 },
+    ]),
+    inputR: (n) => lcgNoise(n, 99004, 0.5),
+  },
 ]
 
 // ==================== 模块实例化与分块处理 ====================
@@ -1338,6 +1485,56 @@ function instantiateProcessor(modules, moduleId, sampleRate, params) {
         return [outL, outR]
       }
     }
+    case 'modulation-matrix': {
+      if (!modules['modulation-matrix'] || !modules['modulation-matrix'].ModulationMatrix) throw new Error('modulation-matrix 模块加载失败')
+      // 控制率 Stage 驱动（specs/dsp/modulation-matrix.md §4.4）：实例化按引擎接线顺序
+      // setRoutes → setLfoParams → setEnvelopeParams；每块先 processBlock 推进矩阵
+      // （包络读取增益前输入，对应引擎「矩阵在块头推进、增益在链尾应用」），再把
+      // masterGain 逐样本乘到 L/R（引擎 mod-master-gain 阶段语义）。stereoWidth 产物
+      // 不入向量。
+      const mm = new modules['modulation-matrix'].ModulationMatrix(sampleRate)
+      mm.setRoutes(params.routes)
+      mm.setLfoParams(params.lfo.shape, params.lfo.rateHz, params.lfo.depth)
+      mm.setEnvelopeParams(params.envelope.attackMs, params.envelope.releaseMs, params.envelope.amount)
+      return (l, r) => {
+        const outL = l.slice()
+        const outR = r.slice()
+        const mod = mm.processBlock(outL, outR, outL.length)
+        const g = mod.masterGain
+        for (let i = 0; i < outL.length; i++) {
+          outL[i] *= g
+          outR[i] *= g
+        }
+        return [outL, outR]
+      }
+    }
+    case 'hse-stretch': {
+      if (!modules['hse-stretch'] || !modules['hse-stretch'].HseStretch) throw new Error('hse-stretch 模块加载失败')
+      // 块窗映射驱动（specs/dsp/hse-stretch.md §4.6）：processStereo 非就地、输出长度随
+      // 参数变化——每块取输出的前 len 个样本（超出截断、不足补零）。载荷含 initialParams
+      // 时先以初参 setParams，处理第 switchAtBlock 块之前以终参 setParams（参数突变序列，
+      // §4.6.3）。驱动器从不调用 isSignalsmithAvailable()（恒为自研相位声码器路径）。
+      const st = new modules['hse-stretch'].HseStretch(sampleRate, 2)
+      const finalParams = { semitones: params.semitones, rate: params.rate }
+      const sequenced = params.initialParams && typeof params.initialParams === 'object'
+      if (sequenced) {
+        st.setParams({ semitones: params.initialParams.semitones, rate: params.initialParams.rate })
+      } else {
+        st.setParams(finalParams)
+      }
+      let blockIndex = 0
+      return (l, r) => {
+        const len = l.length
+        if (sequenced && blockIndex === params.switchAtBlock) st.setParams(finalParams)
+        blockIndex++
+        const out = st.processStereo(l, r)
+        const outL = new Float32Array(len)
+        const outR = new Float32Array(len)
+        outL.set(out.l.subarray(0, Math.min(out.l.length, len)))
+        outR.set(out.r.subarray(0, Math.min(out.r.length, len)))
+        return [outL, outR]
+      }
+    }
     default:
       throw new Error('未知模块 id：' + moduleId)
   }
@@ -1511,6 +1708,15 @@ const FRAME_COUNTS = {
   'convolver.case2': 9800,
   'convolver.case3': 9800,
   'convolver.case4': 6000,
+  'modulation-matrix.case1': 6000,
+  'modulation-matrix.case2': 6000,
+  'modulation-matrix.case3': 6000,
+  'modulation-matrix.case4': 6000,
+  // hse-stretch：case1 为整段单块（blockSize = frames），case2-4 多块（块长见各自 notes）
+  'hse-stretch.case1': 6400,
+  'hse-stretch.case2': 6400,
+  'hse-stretch.case3': 6000,
+  'hse-stretch.case4': 6400,
 }
 
 main().catch((err) => {

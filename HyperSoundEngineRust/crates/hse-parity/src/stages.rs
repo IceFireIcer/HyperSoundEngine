@@ -19,12 +19,16 @@ use hse_core::dynamic_eq::{DynamicEqBandParam, DynamicEqParams, DynamicEqStage};
 use hse_core::eq_chain::{EqBandParam, EqChainStage};
 use hse_core::fdn_reverb::{FdnReverbParams, FdnReverbStage};
 use hse_core::fft::FftStage;
+use hse_core::hse_stretch::{HseStretchParams, HseStretchStage};
 use hse_core::limiter::{LimiterSettings, LimiterStage};
 use hse_core::loudness_comp::{LoudnessBandParam, LoudnessCompSettings, LoudnessCompStage};
 use hse_core::mid_side::MidSideStage;
 use hse_core::mod_effects::{
     ChorusSettings, DelaySettings, FlangerSettings, ModEffectsSettings, ModEffectsStage,
     PhaserSettings, TremoloSettings,
+};
+use hse_core::modulation_matrix::{
+    EnvelopeParams, LfoParams, ModSource, ModTarget, ModulationMatrixStage, ModulationRoute,
 };
 use hse_core::reverb_simple::{ReverbSimpleParams, ReverbSimpleStage};
 use hse_core::Stage;
@@ -322,6 +326,86 @@ pub fn make_stage(case: &VectorCase) -> Result<Box<dyn Stage>, String> {
             stage.set_mix(number_field(obj, "mix")?);
             stage.set_pre_delay_ms(number_field(obj, "preDelayMs")?);
             Ok(Box::new(stage))
+        }
+        "modulation-matrix" => {
+            // 控制率 Stage 驱动（specs/dsp/modulation-matrix.md §4.4）：实例化按
+            // 引擎接线顺序 setRoutes → setLfoParams → setEnvelopeParams；每块先
+            // 推进矩阵（包络读取增益前输入），再把 masterGain 逐样本乘到 L/R
+            // （引擎 mod-master-gain 阶段语义，由 Stage::process 内固定）。
+            // stereoWidth 产物不入向量。参数无 enabled 字段（§一：全仓库无消费）。
+            let routes_val = obj.get("routes").ok_or_else(|| "缺少 params.routes".to_string())?;
+            let arr = routes_val
+                .as_array()
+                .ok_or_else(|| "params.routes 必须是数组".to_string())?;
+            let mut routes = Vec::with_capacity(arr.len());
+            for (i, item) in arr.iter().enumerate() {
+                let o = item
+                    .as_object()
+                    .ok_or_else(|| format!("params.routes[{i}] 必须是对象"))?;
+                routes.push(ModulationRoute {
+                    // TS 求值语义：source === 'lfo' ? lfo : envelope（枚举外值全落
+                    // envelope）；target === 'masterGain' ? masterGain : stereoWidth。
+                    source: ModSource::parse(&string_field(o, "source")?),
+                    target: ModTarget::parse(&string_field(o, "target")?),
+                    // 路由 amount 不钳制（§三注 2，超界值经目标钳制兜底）。
+                    amount: number_field(o, "amount")?,
+                    // TS `route.offset ?? 0`：缺省/null 按 0。
+                    offset: optional_number_field(o, "offset")?.unwrap_or(0.0),
+                });
+            }
+            let lfo = object_field(obj, "lfo")?;
+            let envelope = object_field(obj, "envelope")?;
+            Ok(Box::new(ModulationMatrixStage::from_params(
+                case.sample_rate,
+                routes,
+                LfoParams {
+                    // TS switch default：枚举外形态按 sine。
+                    shape: hse_core::modulation_matrix::LfoShape::parse(&string_field(
+                        lfo, "shape",
+                    )?),
+                    rate_hz: number_field(lfo, "rateHz")?,
+                    depth: number_field(lfo, "depth")?,
+                },
+                EnvelopeParams {
+                    attack_ms: number_field(envelope, "attackMs")?,
+                    release_ms: number_field(envelope, "releaseMs")?,
+                    amount: number_field(envelope, "amount")?,
+                },
+            )?))
+        }
+        "hse-stretch" => {
+            // 块窗映射驱动（specs/dsp/hse-stretch.md §4.6）：每块独立
+            // processStereo（非就地、输出长度随参数变化），取输出的前 len 个
+            // 样本截断回填、不足补零（由 Stage::process 内固定）。载荷含
+            // initialParams 时先以初参 setParams，处理第 switchAtBlock 块之前
+            // 以终参 setParams（§4.6.3 序列，序列状态由 Stage 计数块驱动）。
+            // 驱动器从不调用 isSignalsmithAvailable()——恒为自研相位声码器路径。
+            let params = HseStretchParams {
+                semitones: number_field(obj, "semitones")?,
+                rate: number_field(obj, "rate")?,
+            };
+            // TS 驱动器：`params.initialParams && typeof === 'object'`——
+            // 缺省/null/非对象 → 单次 setParams（标准路径）。
+            let initial_params = match obj.get("initialParams") {
+                Some(Value::Object(o)) => Some(HseStretchParams {
+                    semitones: number_field(o, "semitones")?,
+                    rate: number_field(o, "rate")?,
+                }),
+                _ => None,
+            };
+            // TS：blockIndex === params.switchAtBlock 的整数恒等比较——非整数
+            // 值永不命中（等价 None）。
+            let switch_at_block = match optional_number_field(obj, "switchAtBlock")? {
+                Some(v) if v.is_finite() && v.fract() == 0.0 && v >= 0.0 => Some(v as usize),
+                _ => None,
+            };
+            Ok(Box::new(HseStretchStage::from_params(
+                case.sample_rate,
+                2.0,
+                params,
+                initial_params,
+                switch_at_block,
+            )?))
         }
         // 未落地模块：直通占位（FAIL 属预期，证明比对链路仍在工作）。
         _ => Ok(Box::new(PassthroughStage)),

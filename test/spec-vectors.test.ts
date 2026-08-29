@@ -27,14 +27,16 @@ import { LoudnessComp, type LoudnessCompParams } from '../src/dsp/LoudnessComp'
 import { DynamicEq, type DynamicEqParams } from '../src/dsp/DynamicEq'
 import { DelayEffect, ChorusEffect, FlangerEffect, PhaserEffect, TremoloEffect } from '../src/dsp/ModEffects'
 import { Convolver, type ConvolverOptions } from '../src/dsp/Convolver'
+import { ModulationMatrix } from '../src/dsp/modulation'
+import { HseStretch } from '../src/dsp/HseStretch'
 import { fft } from '../src/dsp/fft'
-import type { LimiterSettings, CompressorSettings, BassEnhancerSettings, DeesserSettings, ModEffectsSettings } from '../src/types'
+import type { LimiterSettings, CompressorSettings, BassEnhancerSettings, DeesserSettings, ModEffectsSettings, ModulationRoute, LfoShape } from '../src/types'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const VECTOR_DIR = resolve(fileURLToPath(import.meta.url), '..', '..', 'specs', 'dsp', 'vectors')
-const SUPPORTED_MODULES = ['biquad', 'limiter', 'reverb-simple', 'compressor', 'bass-enhancer', 'mid-side', 'eq-chain', 'fdn-reverb', 'deesser', 'loudness-comp', 'dynamic-eq', 'mod-effects', 'fft', 'convolver'] as const
+const SUPPORTED_MODULES = ['biquad', 'limiter', 'reverb-simple', 'compressor', 'bass-enhancer', 'mid-side', 'eq-chain', 'fdn-reverb', 'deesser', 'loudness-comp', 'dynamic-eq', 'mod-effects', 'fft', 'convolver', 'modulation-matrix', 'hse-stretch'] as const
 
 /** 向量 JSON 元数据（与 specs/dsp/vectors 契约一致） */
 interface VectorMeta {
@@ -389,6 +391,66 @@ function instantiate(
         const outL = l.slice()
         const outR = r.slice()
         cv.processStereo(outL, outR)
+        return [outL, outR]
+      }
+    }
+    case 'modulation-matrix': {
+      // 控制率 Stage 驱动（specs/dsp/modulation-matrix.md §4.4）：实例化按引擎接线顺序
+      // setRoutes → setLfoParams → setEnvelopeParams；每块先 processBlock 推进矩阵
+      // （包络读取增益前输入，对应引擎「矩阵在块头推进、增益在链尾应用」），再把
+      // masterGain 逐样本乘到 L/R（引擎 mod-master-gain 阶段语义）。stereoWidth 产物
+      // 不入向量。输出依赖 blockSize（LFO 相位按块推进、增益按块常量）。
+      const p = params as unknown as {
+        routes: ModulationRoute[]
+        lfo: { shape: LfoShape; rateHz: number; depth: number }
+        envelope: { attackMs: number; releaseMs: number; amount: number }
+      }
+      const mm = new ModulationMatrix(sampleRate)
+      mm.setRoutes(p.routes)
+      mm.setLfoParams(p.lfo.shape, p.lfo.rateHz, p.lfo.depth)
+      mm.setEnvelopeParams(p.envelope.attackMs, p.envelope.releaseMs, p.envelope.amount)
+      return (l, r) => {
+        const outL = l.slice()
+        const outR = r.slice()
+        const mod = mm.processBlock(outL, outR, outL.length)
+        const g = mod.masterGain
+        for (let i = 0; i < outL.length; i++) {
+          outL[i] *= g
+          outR[i] *= g
+        }
+        return [outL, outR]
+      }
+    }
+    case 'hse-stretch': {
+      // 块窗映射驱动（specs/dsp/hse-stretch.md §4.6）：processStereo 非就地、输出长度随
+      // 参数变化——每块取输出的前 len 个样本（超出截断、不足补零）。载荷含 initialParams
+      // 时先以初参 setParams，处理第 switchAtBlock 块之前以终参 setParams（参数突变序列，
+      // §4.6.3）。驱动器从不调用 isSignalsmithAvailable()（恒为自研相位声码器路径）。
+      // 输出依赖 blockSize（每块独立 STFT 分帧）。
+      const p = params as unknown as {
+        semitones: number
+        rate: number
+        initialParams?: { semitones: number; rate: number }
+        switchAtBlock?: number
+      }
+      const stretch = new HseStretch(sampleRate, 2)
+      const finalParams = { semitones: p.semitones, rate: p.rate }
+      const sequenced = Boolean(p.initialParams)
+      if (p.initialParams) {
+        stretch.setParams({ semitones: p.initialParams.semitones, rate: p.initialParams.rate })
+      } else {
+        stretch.setParams(finalParams)
+      }
+      let blockIndex = 0
+      return (l, r) => {
+        const len = l.length
+        if (sequenced && blockIndex === p.switchAtBlock) stretch.setParams(finalParams)
+        blockIndex++
+        const out = stretch.processStereo(l, r)
+        const outL = new Float32Array(len)
+        const outR = new Float32Array(len)
+        outL.set(out.l.subarray(0, Math.min(out.l.length, len)))
+        outR.set(out.r.subarray(0, Math.min(out.r.length, len)))
         return [outL, outR]
       }
     }

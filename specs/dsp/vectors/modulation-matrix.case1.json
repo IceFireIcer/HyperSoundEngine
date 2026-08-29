@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "module": "modulation-matrix",
+  "case": "case1",
+  "sampleRate": 48000,
+  "blockSize": 256,
+  "channels": 2,
+  "frames": 6000,
+  "params": {
+    "routes": [
+      {
+        "source": "lfo",
+        "target": "masterGain",
+        "amount": 0.5
+      }
+    ],
+    "lfo": {
+      "shape": "sine",
+      "rateHz": 4,
+      "depth": 1
+    },
+    "envelope": {
+      "attackMs": 10,
+      "releaseMs": 200,
+      "amount": 0.5
+    }
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "LFO→masterGain 块率幅度调制：单条路由 amount 0.5、sine 4Hz depth 1——增益 = 1 + 0.5·LFO 的块率阶梯，首块即推进后相位采样 sin(2π·rateHz·块长/fs)（非相位 0 值，实证）；包络有激励（左正弦叠加/右 LCG 噪声）但无路由（状态照常推进、不进输出）。输出依赖 blockSize（相位按块推进），两支线须按同一块长回放。帧数非整除（末块 112 帧）。"
+}
