@@ -15,7 +15,7 @@ HyperSoundEngine 是一个**不依赖任何特定宿主**的独立软件 DSP 音
 
 ```bash
 npm install
-npm test              # 全量测试（40+ 文件 / 400+ 用例）
+npm test              # 全量测试（50 文件 / 570+ 用例，含空间音频 104 项）
 npm run build         # 产出 dist/（核心 ESM + 类型声明 + worklet 单文件包）
 npm run benchmark     # 本地性能基准（48kHz/128 帧默认全链）
 npm run benchmark:scenes  # 场景化基准（卷积/FDN 混响、DynamicEq）
@@ -68,13 +68,18 @@ HyperSoundEngine/
 │   ├── worklet/              # AudioWorkletProcessor 源码
 │   ├── analysis/             # 频谱分析、听力测试
 │   ├── io/                   # WAV 编解码
-│   └── offline/              # 声源分离任务队列
+│   ├── offline/              # 声源分离任务队列
+│   └── spatial/              # 空间音频参考实现（解析 HRTF + 卷积后端 + 房间模拟）
 ├── adapters/
 │   └── waveforge/            # ★ WaveForge 专属接线（独立于引擎核心）
 ├── ui/                       # 可选 React 调音室 UI（不参与核心构建）
 ├── docs/                     # 文档 + adr/（架构决策记录）
 ├── examples/                 # 独立接入示例
 └── test/ + ui/uiSmoke.test.tsx
+
+HyperSoundEngineRust/ —— **Rust 支线**（独立 Cargo workspace，见《原生化双支线与
+Windows 音频接入规划书》）：hse-core（DSP，对拍 23/23 逐位一致）/ hse-parity / hse-wasapi /
+hse-service（引擎服务进程 + 推流协议）/ hse-napi（占位）；与 TS 支线零代码依赖。
 ```
 
 ## 子路径导入
@@ -99,4 +104,4 @@ HyperSoundEngine/
 ## 许可
 
 核心代码自研；算法概念与公式来源见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
-可选依赖（meyda、signalsmith-stretch）均为 MIT；引擎包零 LGPL 依赖。
+可选依赖 signalsmith-stretch 为 MIT；引擎包零 LGPL 依赖。

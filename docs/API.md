@@ -1,6 +1,8 @@
 # HyperSoundEngine —— 对外接口文档（API）
 
-> 适用版本：0.2.0（独立引擎包）
+> 适用版本：0.5.0（独立引擎包）。核心 API 自 0.2.0 稳定；0.4.0 起新增：参数模型
+> 可选 `spatial` 段（空间音频）、`BassEnhancerSettings.lowBoostDb`、`getStages()` 阶段注册表；
+> 0.5.0 起分享串为 v2 紧凑格式（HSE2，兼容导入 v1 旧串，见 `src/engine/ShareCodec.ts`）。
 > 核心原则：**小接口、深实现**。大多数接入方只需要 `createEngine` + `HyperSoundEngineParams`。
 
 ---

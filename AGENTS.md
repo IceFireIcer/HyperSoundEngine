@@ -12,8 +12,8 @@
 - `CONTEXT.md` — 领域术语表（ubiquitous language），改模型前先读
 - `原生化双支线与Windows音频接入规划书.md` — 当前主线执行规划
 - `空间音频实现规划书.md` — 空间音频规格输入（§3.2 契约、§八性能目标有效）
-- `specs/` — 双支线共享规格 + 冻结测试向量（Phase 0 已落地：总纲 `specs/README.md`、向量 JSON Schema `specs/schema/vector-case.schema.json`、试点模块规格 biquad / limiter / reverb-simple、11 组冻结向量；服务层规格 `specs/service/`：control-plane 控制面契约、push-stream 推流协议）；**改动前先读 `specs/README.md`**；基线唯一生成入口是 `scripts/export-vectors.mjs`（重跑逐字节比对，不一致拒写）
-- `HyperSoundEngineRust/` — **Rust 支线**（Phase 1 试点达成：`hse-core` 已实现 biquad / limiter / reverb-simple，与 TS 冻结向量对拍 **11/11 PASS 且逐位一致**；另有 `hse-parity` 对拍 harness 与 `benches/` criterion 基准）：全量原生重写，承接 Windows 引擎服务进程与性能目标，后续模块按 `specs/` 规格逐个落地。服务层：`hse-wasapi` — WASAPI 共享模式渲染 + loopback 捕获（`wasapi` crate 精确锁版 `=0.24.0`）；`hse-service` — 引擎服务进程：捕获→DSP→渲染三线程 + rtrb 双环，控制面 localhost WebSocket JSON-RPC（默认 `ws://127.0.0.1:4780/`），二进制 `hse-service` 与调参客户端 `hse-cli`（详见 `crates/hse-service/README.md`）；`hse-napi` 仍为占位，未入 workspace members
+- `specs/` — 双支线共享规格 + 冻结测试向量（总纲 `specs/README.md`、向量 JSON Schema `specs/schema/vector-case.schema.json`、模块规格 biquad / limiter / reverb-simple / compressor / bass-enhancer / mid-side、**23 组冻结向量**；服务层规格 `specs/service/`：control-plane 控制面契约、push-stream 推流协议）；**改动前先读 `specs/README.md`**；基线唯一生成入口是 `scripts/export-vectors.mjs`（重跑逐字节比对，不一致拒写）
+- `HyperSoundEngineRust/` — **Rust 支线**（Phase 1 试点达成：`hse-core` 已实现 biquad / limiter / reverb-simple，与 TS 冻结向量对拍 **11/11 PASS 且逐位一致**；另有 `hse-parity` 对拍 harness 与 `benches/` criterion 基准）：全量原生重写，承接 Windows 引擎服务进程与性能目标，后续模块按 `specs/` 规格逐个落地。服务层：`hse-wasapi` — WASAPI 共享模式渲染 + loopback 捕获（`wasapi` crate 精确锁版 `=0.24.0`）；`hse-service` — 引擎服务进程：捕获→DSP→渲染三线程 + rtrb 双环，控制面 localhost WebSocket JSON-RPC（默认 `ws://127.0.0.1:4780/`），二进制 `hse-service` 与调参客户端 `hse-cli`（详见 `crates/hse-service/README.md`）。**Phase 3 批次一（0.5.0）**：Compressor/BassEnhancer/MidSide 双绿（对拍 11→**23/23 逐位一致**）、服务链扩为六模块（midSide→biquad→compressor→reverbSimple→bassEnhancer→limiter）、推流协议落地（openSession/closeSession + 二进制 PCM 帧 + 混后处理 + 背压）；`hse-napi` 仍为占位，未入 workspace members
 
 > 规则：README/AGENTS 等仓库文档只描述已跟踪文件，**不得引用 .gitignore 排除的路径**（本地参考资料、草稿目录等不入文档）。
 

@@ -1,16 +1,16 @@
 # HyperSoundEngine 项目总览
 
-> 版本 0.2.0 · 许可 CC BY-NC-ND 4.0 · 纯 TypeScript 音频 DSP 引擎
+> 版本 0.5.0 · 许可 CC BY-NC-ND 4.0 · TS + Rust 双支线音频 DSP 引擎
 
 ## 这是什么
 
-HyperSoundEngine 是一个**纯 TypeScript 实现的实时音频效果引擎**,核心 DSP 内核零 DOM / 零 AudioContext / 零 React 依赖,可在 **Node.js(离线批处理)** 与 **浏览器(实时播放)** 两种环境运行。它不绑定任何特定宿主,可接入任意 Web 应用、Electron 桌面软件、离线转码管线。
+HyperSoundEngine 是一个**双支线实现的实时音频效果引擎**：TS 支线（本包，纯 TypeScript、零 DOM / 零 AudioContext / 零 React 依赖，Node 离线与浏览器实时两用）与 **Rust 支线**（`HyperSoundEngineRust/`，原生引擎服务进程 + WASAPI 回环拦截，规划见《原生化双支线与Windows音频接入规划书》）。两支线由 `specs/` 共享规格与冻结向量约束，行为对拍容差 1e-6。它不绑定任何特定宿主,可接入任意 Web 应用、Electron 桌面软件、离线转码管线或任意语言的原生宿主（经引擎服务进程 WebSocket JSON-RPC）。
 
-设计哲学是 **deep module**:对外只暴露一个极小的 `AudioEngine` 接口(8 个方法),内部封装一条 21 级专业音频处理链,接入方无需理解 DSP 细节。
+设计哲学是 **deep module**:对外只暴露一个极小的 `AudioEngine` 接口(8 个方法),内部封装一条 22 级专业音频处理链（含空间音频内联级，默认旁路）,接入方无需理解 DSP 细节。
 
 ## 能力一览
 
-### 一、21 级专业音频处理链
+### 一、22 级专业音频处理链
 
 引擎内部按固定顺序串联 21 个处理阶段,一次 `process()` 调用即完成全链路处理:
 
@@ -106,7 +106,7 @@ HyperSoundEngine 是一个**纯 TypeScript 实现的实时音频效果引擎**,�
 | **快照语义** | `setParams` 整包替换 + 深拷贝;`getParams` 返回深拷贝 |
 | **零依赖** | 核心 DSP 纯 TS;meyda/signalsmith-stretch 为可选 |
 | **跨环境** | Node 离线 / 浏览器实时 / Electron,同一内核 |
-| **深模块** | 对外 8 方法 `AudioEngine` 接口,内部 21 级链封装 |
+| **深模块** | 对外 8 方法 `AudioEngine` 接口,内部 22 级链封装 |
 
 ## 包结构
 

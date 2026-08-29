@@ -24,7 +24,7 @@
                             │ 调用 AudioEngine
 ┌───────────────────────────┴────────────────────────────────┐
 │ 引擎核心（Core）                                             │
-│  - HyperSoundEngine：21 级处理链编排                                 │
+│  - HyperSoundEngine：22 级处理链编排                                 │
 │  - ScenePresets / ShareCodec                                │
 │  - analysis / offline                                       │
 └───────────────────────────┬────────────────────────────────┘
@@ -63,7 +63,7 @@ interface AudioEngine {
 
 ### 处理链：`ProcessingStage`
 
-`HyperSoundEngine` 内部使用 `ProcessingStage[]` 描述处理链（默认 21 级）：
+`HyperSoundEngine` 内部使用 `ProcessingStage[]` 描述处理链（默认 22 级，含空间音频内联级）：
 
 ```ts
 interface ProcessingStage {
