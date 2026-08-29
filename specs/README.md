@@ -102,6 +102,8 @@ specs/
 | `frames` | number（整数） | ≥ 1 | 是 | 每声道帧数 |
 | `params` | object | — | 是 | 模块 `setParams` 接受的参数快照，**字段名以 TS 源码为准**（各模块规格的参数表给出固定字段集） |
 | `tolerance` | object | 见 §3.5 | 是 | 固定形态 `{kind:"relative", value:1e-6, floor:1e-9}` |
+| `moduleKind` | string | `"stream"` 或 `"meter"` | 否 | 缺省视为 `"stream"`；`"meter"` = 计量型模块（processStereo 就地分析、无音频输出，见 §3.3 计量型布局） |
+| `readings` | object | 读数名 → `{want, tol}`；want 为有限 number 或哨兵字符串 `"NaN"/"+Infinity"/"-Infinity"`；tol ≥ 0 | 否 | **计量型专用**：标量读数期望值与绝对容差（`\|got−want\| ≤ tol`；哨兵走等值判定）。有 readings ⇒ 必为 meter（draft-07 if/then 双向绑定） |
 | `notes` | string | — | 否 | 人类可读备注 |
 
 全部向量 JSON 必须通过 `specs/schema/vector-case.schema.json`（draft-07）校验；
@@ -118,6 +120,14 @@ specs/
         └───────────────────┴───────────────────┴───────────────────┴───────────────────┘
 文件总长 = 16 × frames 字节（4 段 × frames 样本 × 4 字节）
 ```
+
+**计量型（moduleKind="meter"）布局**：无期望输出段，.f32 收窄为两段输入：
+
+```text
+文件总长 = 8 × frames 字节（inL + inR 两段）
+```
+
+计量型模块的判定对象不是音频输出，而是 `readings` 标量（见 §3.2/§3.5）。
 
 读法：依次读入 `inL`、`inR`、`wantL`、`wantR` 四个长度为 `frames` 的 float32 数组。
 

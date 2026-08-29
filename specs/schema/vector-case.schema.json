@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "urn:hse:dsp:vector-case.schema",
   "title": "HSE DSP 测试向量用例描述（vector-case）",
-  "description": "HyperSoundEngine 双支线共享测试向量的 JSON 元数据 Schema。与同名 .f32 数据文件成对出现；字段语义与分块处理语义见 specs/README.md §三。tolerance.value 以 enum 固定为当前唯一合法值 1e-6。",
+  "description": "HyperSoundEngine 双支线共享测试向量的 JSON 元数据 Schema。与同名 .f32 数据文件成对出现；字段语义与分块处理语义见 specs/README.md §三。tolerance.value 以 enum 固定为当前唯一合法值 1e-6。计量型扩展（ADDITIVE，向后兼容）：moduleKind='meter' 的计量模块（如 lufs-meter）无音频输出段，行为契约由可选 readings 标量读数承载，.f32 为两段输入布局；缺省 moduleKind 视为 'stream'，既有向量不受影响。",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -48,7 +48,7 @@
     "frames": {
       "type": "integer",
       "minimum": 1,
-      "description": "每声道帧数；.f32 文件总长必须恰为 16 × frames 字节（由加载器校验）。"
+      "description": "每声道帧数；.f32 文件总长必须恰为 16 × frames 字节（四段布局，moduleKind 缺省/'stream'），或 8 × frames 字节（moduleKind='meter' 两段输入布局，无期望输出段；由加载器校验）。"
     },
     "params": {
       "type": "object",
@@ -75,9 +75,48 @@
         }
       }
     },
+    "moduleKind": {
+      "type": "string",
+      "enum": ["stream", "meter"],
+      "description": "可选模块驱动形态（缺省视为 'stream'）。stream：流式立体声处理器，期望输出为音频段（总纲 §3.3 四段布局）。meter：计量型模块——processStereo 为就地分析、不改写缓冲、无音频输出，行为契约由 readings 标量读数承载；.f32 固定为 [输入左][输入右] 两段（8 × frames 字节，无期望输出段），音频段不作比对。与 readings 双向绑定（见 allOf）。"
+    },
+    "readings": {
+      "type": "object",
+      "minProperties": 1,
+      "description": "计量读数契约（仅 moduleKind='meter'）：读数名 → { want, tol }。want 为有限数时按绝对容差判定 |got − want| ≤ tol（与音频段的相对制公式 §3.5 并立、互不混用）；want 为 NaN/±Infinity 时以字符串哨兵 'NaN'/'+Infinity'/'-Infinity' 冻结（JSON 数值无法表达非有限值），对拍按哨兵等值判定（tol 不参与）。读数名集合与各计量模块规格（首个：specs/dsp/lufs-meter.md §四）逐字一致，未知名由加载器拒绝。",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["want", "tol"],
+        "properties": {
+          "want": {
+            "anyOf": [
+              { "type": "number" },
+              { "enum": ["NaN", "+Infinity", "-Infinity"] }
+            ],
+            "description": "期望读数：有限数值，或非有限哨兵字符串。"
+          },
+          "tol": {
+            "type": "number",
+            "minimum": 0,
+            "description": "绝对容差（want 为有限数时判定 |got − want| ≤ tol；want 为哨兵时不参与）。"
+          }
+        }
+      }
+    },
     "notes": {
       "type": "string",
       "description": "可选的人类可读备注。"
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": { "required": ["readings"] },
+      "then": { "properties": { "moduleKind": { "const": "meter" } } }
+    },
+    {
+      "if": { "properties": { "moduleKind": { "const": "meter" } }, "required": ["moduleKind"] },
+      "then": { "required": ["readings"] }
+    }
+  ]
 }

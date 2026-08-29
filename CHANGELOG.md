@@ -3,6 +3,8 @@
 ## [Unreleased]
 
 ### Added
+- **Phase 3 收官：LufsMeter 双绿 + 向量 schema 计量读数演进（批次八）**：`specs/schema/vector-case.schema.json` 加性演进（moduleKind stream|meter 双向绑定 + readings 标量读数 {want, tol}，哨兵 "NaN"/"±Infinity" 等值判定）；`hse-core/src/lufs_meter.rs` 移植（K 加权两级 TDF2、BS.1770 双门限、LRA 直方图、4×/24 抽头真峰值多相核；f32 滑窗落盘/f64 统计的精度纪律逐字对齐；7 项规格外 TS 事实固化）；parity harness 扩展 meter 类型（两段输入布局 + readings 绝对容差/哨兵等值判定）。对拍门禁 63→**67 case 全 PASS**（LufsMeter 六读数最大偏差 3.55e-15，比最紧容差低 13 个数量级）。**至此 Phase 3 全部完成**（规划书 §五第 1-4 项；仅 8h 压测属 Phase 4）。
+- **Phase 4 启动：基准矩阵 + SIMD 评估 + 指标留档**：
 - **Phase 4 启动：基准矩阵 + SIMD 评估 + 指标留档**：16 个 criterion bench（全 12 已移植模块 × 块长矩阵 + 全链 60s 离线 + fft/convolver/midi/wav/share_codec）+ `docs/audit/phase4-bench-matrix.md`（热点排名：convolver 385 ns/帧断层第一）+ `docs/audit/phase4-simd-eval.md`（逐位对拍约束分析：零期望样本须逐位、非零样本余量仅 8–10 f32 ulp → 仅通道级 SIMD 安全；自动向量化实测 +6–10%）。**§三指标全部达标**：全链离线 0.546% realtime = TS 基线的 9.7–10.2×（目标 ≥3×）；默认链 CPU 0.546%（≤5%）；最重场景 10.7%（≤25%）。SIMD 实施与 8h 压测按评估结论显式缓办（Convolver 1.8–2.0× 潜力为未来 64 对象场景储备；8h 压测需真机长跑）。
 
 ## [0.6.0] - 2026-08

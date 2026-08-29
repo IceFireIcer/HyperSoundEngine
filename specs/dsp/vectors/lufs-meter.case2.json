@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "module": "lufs-meter",
+  "case": "case2",
+  "sampleRate": 48000,
+  "blockSize": 256,
+  "channels": 2,
+  "frames": 24000,
+  "params": {},
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "静音输入（非有限读数哨兵语义）：全零 0.5s（2 个完整分析块）。静音块响度记 NaN（块功率 ≤1e-30 防止 -Infinity 泄漏进门限统计）→ 整合/瞬时/短时/LRA 读数全部 NaN（无块过 -70 LUFS 绝对门限、块数 <30、有效块 <2），样本峰值/真峰值为 -Infinity。六项读数以字符串哨兵 \"NaN\"/\"-Infinity\" 冻结、按哨兵等值判定——移植若以 0/有限值/错号无穷大替代任一哨兵语义必然暴露。",
+  "moduleKind": "meter",
+  "readings": {
+    "integratedLufs": {
+      "want": "NaN",
+      "tol": 0.1
+    },
+    "momentaryLufs": {
+      "want": "NaN",
+      "tol": 0.1
+    },
+    "shortTermLufs": {
+      "want": "NaN",
+      "tol": 0.1
+    },
+    "lra": {
+      "want": "NaN",
+      "tol": 0.5
+    },
+    "peakDb": {
+      "want": "-Infinity",
+      "tol": 0.05
+    },
+    "truePeakDb": {
+      "want": "-Infinity",
+      "tol": 0.1
+    }
+  }
+}

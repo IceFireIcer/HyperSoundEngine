@@ -1,8 +1,14 @@
 //! hse-parity —— HyperSoundEngine 对拍 harness（开发专用命令行工具）。
 //!
-//! 读取仓库根 `specs/dsp/vectors` 下的共享测试向量，用被测实现重放输入，
-//! 按两支线统一的相对容差逐样本比对期望输出，打印每个用例的 PASS/FAIL
-//! 与最大误差汇总。
+//! 读取仓库根 `specs/dsp/vectors` 下的共享测试向量，用被测实现重放输入并比对：
+//!
+//! - 流式用例（moduleKind 缺省/'stream'）：把输入按 blockSize 分块驱动被测阶段，
+//!   与期望输出按两支线统一的相对容差逐样本比对；
+//! - 计量型用例（moduleKind='meter'，specs/dsp/lufs-meter.md §三）：把两段输入
+//!   分块馈入计量模块（就地分析），全部块馈入完成后一次性读取六项读数，与
+//!   readings 逐项判定（绝对容差 + NaN/±Infinity 哨兵等值）。
+//!
+//! 打印每个用例的 PASS/FAIL 与最大误差汇总。
 //!
 //! 用法：
 //!
@@ -16,7 +22,7 @@
 //! - `0`：全部用例通过，或向量目录不存在/为空（Phase 0 允许空跑框架）；
 //! - `1`：存在任一 FAIL（数值失配或夹具缺陷）。
 //!
-//! 说明：当前被测对象是直通假实现（输出=输入），因此有向量时出现成片 FAIL
+//! 说明：未落地的流式模块回退直通假实现（输出=输入），有向量时出现成片 FAIL
 //! 属预期，恰证比对逻辑有效；hse-core 真实模块落地后同一命令应转绿。
 
 mod runner;
@@ -29,7 +35,6 @@ use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-use runner::CaseOutcome;
 use vector::VectorCase;
 
 /// 正常结束（含"无向量可跑"的空跑场景）。
@@ -142,7 +147,7 @@ fn run(explicit_dir: Option<&Path>) -> i32 {
     }
 
     println!(
-        "发现 {} 个向量用例；被测实现：直通假实现（输出=输入）。开始对拍……",
+        "发现 {} 个向量用例；被测实现：hse-core 真实模块（未落地流式模块回退直通占位）。开始对拍……",
         json_files.len()
     );
     println!();
@@ -162,35 +167,85 @@ fn run(explicit_dir: Option<&Path>) -> i32 {
                 if name != label {
                     println!("提示：文件 {label} 内声明的用例名是 {name}（两者不一致，按文件名继续）。");
                 }
+                let frames = match &outcome {
+                    EvaluatedOutcome::Stream(stream) => stream.frames,
+                    EvaluatedOutcome::Meter(meter_outcome) => meter_outcome.frames,
+                };
                 let shape = format!(
                     "module={name} blockSize={} sampleRate={} channels={} frames={}",
-                    case.block_size, case.sample_rate, case.channels, outcome.frames
+                    case.block_size, case.sample_rate, case.channels, frames
                 );
-                if outcome.passed {
-                    pass_count += 1;
-                    println!(
-                        "[PASS] {label}  {shape} blocks={} maxAbsDiff={:.3e}",
-                        outcome.blocks_run, outcome.max_abs_diff
-                    );
-                } else {
-                    fail_count += 1;
-                    let mut line = format!(
-                        "[FAIL] {label}  {shape} 数值失配：失配样本 {} 个，maxAbsDiff={:.3e}",
-                        outcome.mismatch_count, outcome.max_abs_diff
-                    );
-                    if let Some(first) = &outcome.first_mismatch {
-                        line.push_str(&format!(
-                            "；首个失配 @{}[{}] got={:.9e} want={:.9e}",
-                            first.channel.as_label(),
-                            first.frame_index,
-                            first.got,
-                            first.want
-                        ));
+                match outcome {
+                    EvaluatedOutcome::Stream(stream) => {
+                        if stream.passed {
+                            pass_count += 1;
+                            println!(
+                                "[PASS] {label}  {shape} blocks={} maxAbsDiff={:.3e}",
+                                stream.blocks_run, stream.max_abs_diff
+                            );
+                        } else {
+                            fail_count += 1;
+                            let mut line = format!(
+                                "[FAIL] {label}  {shape} 数值失配：失配样本 {} 个，maxAbsDiff={:.3e}",
+                                stream.mismatch_count, stream.max_abs_diff
+                            );
+                            if let Some(first) = &stream.first_mismatch {
+                                line.push_str(&format!(
+                                    "；首个失配 @{}[{}] got={:.9e} want={:.9e}",
+                                    first.channel.as_label(),
+                                    first.frame_index,
+                                    first.got,
+                                    first.want
+                                ));
+                            }
+                            println!("{line}");
+                        }
+                        if stream.max_abs_diff > worst_abs_diff {
+                            worst_abs_diff = stream.max_abs_diff;
+                        }
                     }
-                    println!("{line}");
-                }
-                if outcome.max_abs_diff > worst_abs_diff {
-                    worst_abs_diff = outcome.max_abs_diff;
+                    EvaluatedOutcome::Meter(meter_outcome) => {
+                        let pass_count_readings =
+                            meter_outcome.checked - meter_outcome.failures.len();
+                        if meter_outcome.passed {
+                            pass_count += 1;
+                            println!(
+                                "[PASS] {label}  {shape} meter blocks={} readings={pass_count_readings}/{} maxAbsDev={:.3e}",
+                                meter_outcome.blocks_run, meter_outcome.checked, meter_outcome.max_abs_deviation
+                            );
+                        } else {
+                            fail_count += 1;
+                            let mut line = format!(
+                                "[FAIL] {label}  {shape} meter readings 失配 {}/{}（maxAbsDev={:.3e}）：",
+                                meter_outcome.failures.len(),
+                                meter_outcome.checked,
+                                meter_outcome.max_abs_deviation
+                            );
+                            for failure in &meter_outcome.failures {
+                                let spec = case
+                                    .readings
+                                    .as_ref()
+                                    .and_then(|readings| {
+                                        readings
+                                            .iter()
+                                            .find(|(read_name, _)| read_name == &failure.name)
+                                    })
+                                    .map(|(_, spec)| spec);
+                                line.push_str(&format!(
+                                    " {} got={} want={} tol={}",
+                                    failure.name,
+                                    tolerance::format_reading(failure.got),
+                                    spec.map(|s| s.want.as_label())
+                                        .unwrap_or_else(|| "?".to_string()),
+                                    spec.map(|s| s.tol).unwrap_or(0.0),
+                                ));
+                            }
+                            println!("{line}");
+                        }
+                        if meter_outcome.max_abs_deviation > worst_abs_diff {
+                            worst_abs_diff = meter_outcome.max_abs_deviation;
+                        }
+                    }
                 }
             }
             Err(reason) => {
@@ -206,8 +261,9 @@ fn run(explicit_dir: Option<&Path>) -> i32 {
         "总计 {} 个用例：PASS {pass_count} 个，FAIL {fail_count} 个；全程最大 |got-want| = {worst_abs_diff:.3e}",
         pass_count + fail_count
     );
-    println!("说明：直通假实现下的大面积数值 FAIL 属预期（尚无真实 DSP 实现），用于确认比对逻辑正常工作；");
-    println!("      待 hse-core 模块按 specs/ 规格落地后，同一命令应当转绿（双支线门禁的 Rust 半边）。");
+    println!("说明：流式用例按音频段相对容差逐样本比对；计量型（moduleKind='meter'）用例按 readings");
+    println!("      标量读数判定（绝对容差 + NaN/±Infinity 哨兵等值，specs/dsp/lufs-meter.md §三/§五）；");
+    println!("      全部转绿即双支线门禁的 Rust 半边通过（TS 冻结向量全 PASS = exit 0）。");
 
     if fail_count > 0 {
         EXIT_HAS_FAILURES
@@ -216,8 +272,16 @@ fn run(explicit_dir: Option<&Path>) -> i32 {
     }
 }
 
+/// 单个用例的比对结论（按驱动形态二选一）。
+enum EvaluatedOutcome {
+    /// 流式：音频段逐样本相对容差比对。
+    Stream(runner::CaseOutcome),
+    /// 计量型：readings 标量读数比对（绝对容差 + 哨兵等值）。
+    Meter(runner::MeterCaseOutcome),
+}
+
 /// 单个用例的完整执行产物：解析出的用例描述 + 比对结论。
-type EvaluatedCase = (VectorCase, CaseOutcome);
+type EvaluatedCase = (VectorCase, EvaluatedOutcome);
 
 /// 解析并执行单个用例；Err 为夹具缺陷或运行期结构错误。
 fn evaluate_case(json_path: &Path) -> Result<EvaluatedCase, String> {
@@ -230,7 +294,14 @@ fn evaluate_case(json_path: &Path) -> Result<EvaluatedCase, String> {
         ));
     }
     let planar_data = segments::decode_file(&f32_path)?;
-    let mut stage = stages::make_stage(&case)?;
-    let outcome = runner::run_case(&case, &planar_data, &mut *stage)?;
+    let outcome = if case.is_meter() {
+        // 计量型：两段输入布局（8 × frames 字节，无期望输出段），走 readings 读数
+        // 判定路径（specs/dsp/lufs-meter.md §三.3 驱动语义）。
+        let mut meter = stages::make_meter(&case)?;
+        EvaluatedOutcome::Meter(runner::run_meter_case(&case, &planar_data, &mut meter)?)
+    } else {
+        let mut stage = stages::make_stage(&case)?;
+        EvaluatedOutcome::Stream(runner::run_case(&case, &planar_data, &mut *stage)?)
+    };
     Ok((case, outcome))
 }

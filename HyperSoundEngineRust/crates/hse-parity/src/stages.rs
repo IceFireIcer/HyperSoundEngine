@@ -5,6 +5,10 @@
 //! mod-effects）从 hse-core 构造真实实现；尚未落地的模块一律回退
 //! [`PassthroughStage`]（数值 FAIL 属预期）。
 //! 参数字段名以 TS 源码为准（camelCase），缺失/类型不符即报夹具错误。
+//!
+//! 计量型用例（moduleKind='meter'，specs/dsp/lufs-meter.md §三）走独立构造路径
+//! [`make_meter`]：计量模块无音频输出、无参数快照（params 恒为 {}），行为契约
+//! 由 readings 标量读数承载，由 runner 的计量回放驱动（见 runner.rs）。
 
 use serde_json::{Map, Value};
 
@@ -22,6 +26,7 @@ use hse_core::fft::FftStage;
 use hse_core::hse_stretch::{HseStretchParams, HseStretchStage};
 use hse_core::limiter::{LimiterSettings, LimiterStage};
 use hse_core::loudness_comp::{LoudnessBandParam, LoudnessCompSettings, LoudnessCompStage};
+use hse_core::lufs_meter::LufsMeter;
 use hse_core::mid_side::MidSideStage;
 use hse_core::mod_effects::{
     ChorusSettings, DelaySettings, FlangerSettings, ModEffectsSettings, ModEffectsStage,
@@ -33,7 +38,7 @@ use hse_core::modulation_matrix::{
 use hse_core::reverb_simple::{ReverbSimpleParams, ReverbSimpleStage};
 use hse_core::Stage;
 
-/// 按用例构造被测阶段。
+/// 按用例构造被测阶段（流式四段布局用例）。
 pub fn make_stage(case: &VectorCase) -> Result<Box<dyn Stage>, String> {
     let obj = case
         .params
@@ -409,6 +414,21 @@ pub fn make_stage(case: &VectorCase) -> Result<Box<dyn Stage>, String> {
         }
         // 未落地模块：直通占位（FAIL 属预期，证明比对链路仍在工作）。
         _ => Ok(Box::new(PassthroughStage)),
+    }
+}
+
+/// 按用例构造被测计量模块（计量型 meter 用例，specs/dsp/lufs-meter.md §三.3）。
+///
+/// 驱动语义：以 `sampleRate` 构造全新零初始状态实例（不额外调用 reset）；
+/// 无 `setParams`（无参数模块，`params` 恒为 `{}`，本函数不读取 params）。
+pub fn make_meter(case: &VectorCase) -> Result<LufsMeter, String> {
+    if !case.is_meter() {
+        return Err("make_meter 只接受 moduleKind='meter' 的计量型用例".to_string());
+    }
+    match case.module.as_str() {
+        "lufs-meter" => LufsMeter::new(case.sample_rate)
+            .map_err(|err| format!("lufs-meter 构造失败：{err}")),
+        other => Err(format!("未知计量型模块：{other}")),
     }
 }
 

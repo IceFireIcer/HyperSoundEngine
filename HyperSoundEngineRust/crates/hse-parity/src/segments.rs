@@ -1,7 +1,10 @@
-//! `.f32` 数据文件的解码与四段平面切分。
+//! `.f32` 数据文件的解码与平面切分。
 //!
 //! 布局契约（小端、非交错）：
-//! `[输入左 frames][输入右 frames][期望输出左 frames][期望输出右 frames]`。
+//! - 流式（moduleKind 缺省/'stream'）四段：
+//!   `[输入左 frames][输入右 frames][期望输出左 frames][期望输出右 frames]`；
+//! - 计量型（moduleKind='meter'，specs/dsp/lufs-meter.md §三）两段：
+//!   `[输入左 frames][输入右 frames]`（无期望输出段，文件总长 = 8 × frames 字节）。
 
 use std::fs;
 use std::path::Path;
@@ -51,6 +54,24 @@ pub fn split_planar(data: &[f32], frames: usize) -> Option<PlanarSegments<'_>> {
         input_right: &data[frames..frames * 2],
         expected_left: &data[frames * 2..frames * 3],
         expected_right: &data[frames * 3..frames * 4],
+    })
+}
+
+/// 计量型两段平面布局的一次切分视图（无期望输出段——音频段不参与比对）。
+pub struct MeterSegments<'a> {
+    pub input_left: &'a [f32],
+    pub input_right: &'a [f32],
+}
+
+/// 按每声道帧数把总长 `2 * frames` 的序列切成两段；长度不符返回 `None`。
+pub fn split_meter(data: &[f32], frames: usize) -> Option<MeterSegments<'_>> {
+    let total = frames.checked_mul(2)?;
+    if data.len() != total {
+        return None;
+    }
+    Some(MeterSegments {
+        input_left: &data[0..frames],
+        input_right: &data[frames..total],
     })
 }
 
@@ -105,6 +126,28 @@ mod tests {
     fn 总长与帧数不符时拒绝切分() {
         let decoded = [0.0_f32; 7]; // 两帧需要 8 个样本
         assert!(split_planar(&decoded, 2).is_none());
+    }
+
+    #[test]
+    fn 计量型两段布局按声明顺序切开且长度必须精确() {
+        let frames = 3;
+        let input_left = [0.125_f32, -1.5, 2.25];
+        let input_right = [0.5_f32, -0.75, 3.5];
+
+        let mut all = Vec::new();
+        all.extend_from_slice(&input_left);
+        all.extend_from_slice(&input_right);
+
+        let decoded = decode_f32_le(&encode_f32_le(&all)).expect("合法字节流必须可解码");
+        assert_eq!(decoded.len(), 6);
+
+        let segments = split_meter(&decoded, frames).expect("长度吻合必须可切分");
+        assert_eq!(segments.input_left, input_left);
+        assert_eq!(segments.input_right, input_right);
+
+        // 四段布局长度（12 个样本）对两段切分（需要 6 个）不符，必须拒绝。
+        assert!(split_meter(&[0.0_f32; 12], frames).is_none());
+        assert!(split_meter(&decoded, 2).is_none());
     }
 
     #[test]

@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "module": "lufs-meter",
+  "case": "case1",
+  "sampleRate": 48000,
+  "blockSize": 512,
+  "channels": 2,
+  "frames": 160000,
+  "params": {},
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "EBU 合成基准信号（计量读数锚点）：双声道同相 997Hz 正弦、幅度 0.05/声道（约 -26 dBFS/声道）——幅度按整合响度实测约 -23 LUFS 标定（EBU R128 目标响度附近）。160000 帧（3.33s）恰产生 30 个分析块，短时读数越过 30 块门槛为有限值；稳态节目六项读数全部有限（LRA≈0.003 LU 近恒定、peak/truePeak≈-26.02 dBFS=20·log10(0.05)）。读数为绝对容差契约（±0.1 LU 等，specs/dsp/lufs-meter.md §五），非逐位对拍。",
+  "moduleKind": "meter",
+  "readings": {
+    "integratedLufs": {
+      "want": -23.053606272675896,
+      "tol": 0.1
+    },
+    "momentaryLufs": {
+      "want": -23.05524444580078,
+      "tol": 0.1
+    },
+    "shortTermLufs": {
+      "want": -23.053606272675896,
+      "tol": 0.1
+    },
+    "lra": {
+      "want": 0.003063201904296875,
+      "tol": 0.5
+    },
+    "peakDb": {
+      "want": -26.020599783849786,
+      "tol": 0.05
+    },
+    "truePeakDb": {
+      "want": -26.023194433293583,
+      "tol": 0.1
+    }
+  }
+}

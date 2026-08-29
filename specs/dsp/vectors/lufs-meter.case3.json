@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "module": "lufs-meter",
+  "case": "case3",
+  "sampleRate": 44100,
+  "blockSize": 500,
+  "channels": 2,
+  "frames": 52920,
+  "params": {},
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "突强突发（momentary/峰值路径 + 44100 精确系数路径）：头 8820 帧（0.2s）静音，其后响信号直达结尾（0.88 正弦 1kHz + 0.1 固定种子 LCG 噪声，左右 π/3 去相关）——momentary 取末块响度（实测约 +0.66 LUFS 的热区值）、peakDb ≈ -0.18 dBFS（含噪声尖峰）、truePeakDb 为 4× 过采样 24 抽头多相内插的确定性指纹（全带宽噪声下内插峰值低于样本峰值，跨实现须复刻同一内核调度）。分析块仅 9 个 → shortTerm NaN（<30 块门槛）。采样率 44100 走构造器精确系数分支（RLB/搁架系数与 48k 不同，GWT-LUFSMETER-07）。",
+  "moduleKind": "meter",
+  "readings": {
+    "integratedLufs": {
+      "want": 0.6602324812586883,
+      "tol": 0.1
+    },
+    "momentaryLufs": {
+      "want": 0.6559750437736511,
+      "tol": 0.1
+    },
+    "shortTermLufs": {
+      "want": "NaN",
+      "tol": 0.1
+    },
+    "lra": {
+      "want": 0.01787810325622563,
+      "tol": 0.5
+    },
+    "peakDb": {
+      "want": -0.1777729621775159,
+      "tol": 0.05
+    },
+    "truePeakDb": {
+      "want": -0.29050496205710497,
+      "tol": 0.1
+    }
+  }
+}

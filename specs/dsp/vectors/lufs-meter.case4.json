@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "module": "lufs-meter",
+  "case": "case4",
+  "sampleRate": 48000,
+  "blockSize": 1024,
+  "channels": 2,
+  "frames": 480000,
+  "params": {},
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "10s 两电平节目（读数稳定性 + LRA 全路径）：0–4s 响段（0.5 正弦 1kHz + 0.1 LCG 噪声）、4–10s 静段（同形信号 ×0.1，实测约 -23.6 LUFS），左右 π/4 去相关——LRA = 门限后块响度 10/95 百分位差实测约 20 LU（EBU Tech 3342 绝对 -70 + 相对 -20 双门限 + 线性插值百分位全路径）、integrated 不被静段拉低（相对门限剔除）、shortTerm（30 块功率环形）与 momentary 取自尾部静段电平。blockSize=1024 非整除（末块 768 帧）；读数与分块无关（GWT-LUFSMETER-05：逐样本状态推进次序恒定，任意 blockSize 逐位同读数，实证）。",
+  "moduleKind": "meter",
+  "readings": {
+    "integratedLufs": {
+      "want": -7.544671687324687,
+      "tol": 0.1
+    },
+    "momentaryLufs": {
+      "want": -23.59621238708496,
+      "tol": 0.1
+    },
+    "shortTermLufs": {
+      "want": -23.596422853894236,
+      "tol": 0.1
+    },
+    "lra": {
+      "want": 20.015249252319336,
+      "tol": 0.5
+    },
+    "peakDb": {
+      "want": -4.4370126133492285,
+      "tol": 0.05
+    },
+    "truePeakDb": {
+      "want": -4.5428060912187265,
+      "tol": 0.1
+    }
+  }
+}
