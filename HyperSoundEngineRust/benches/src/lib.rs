@@ -22,8 +22,12 @@ pub const SAMPLE_RATE_HZ: f64 = 48_000.0;
 pub const MAIN_BLOCK_FRAMES: usize = 128;
 
 /// 每次 criterion 迭代处理的总帧数（= 128×256 ≈ 0.68 s @48kHz）。
-/// 被 128/256/512 整除，供块长矩阵组复用。
+/// 被 128/256/512/1024 整除，供块长矩阵组复用。
 pub const FRAMES_PER_ITER: usize = 32_768;
+
+/// Phase 4 块长矩阵（规划书 §五：128/256/512，另加 1024 覆盖大分块）。
+/// 全部为 [`FRAMES_PER_ITER`] 的约数，保证每迭代总帧数恒定。
+pub const BLOCK_MATRIX: [usize; 4] = [128, 256, 512, 1024];
 
 /// 一对 planar（非交错）立体声缓冲。
 pub struct StereoBuffer {
@@ -42,6 +46,19 @@ impl StereoBuffer {
         let mut buf = Self::zeroed(frames);
         fill_synthesized(&mut buf.left, &mut buf.right);
         buf
+    }
+
+    /// 分配并填充固定种子 LCG 伪噪声对（母带缓冲用，确定性）。
+    pub fn lcg_noise(frames: usize, seed_l: u32, seed_r: u32, amp: f64) -> Self {
+        let mut buf = Self::zeroed(frames);
+        fill_lcg_noise(&mut buf.left, &mut buf.right, seed_l, seed_r, amp);
+        buf
+    }
+
+    /// 分配并填充常数值（对齐 TS `scripts/benchmark.mjs` 的 0.1 恒定激励，
+    /// 供全链基准与 TS 基线同口径对比）。
+    pub fn constant(frames: usize, value: f32) -> Self {
+        Self { left: vec![value; frames], right: vec![value; frames] }
     }
 }
 
@@ -66,6 +83,23 @@ pub fn fill_synthesized(left: &mut [f32], right: &mut [f32]) {
             + 0.08 * (TAU * 2793.0 * t + 1.3).sin();
         *l = (DRIVE * env * l_sig) as f32;
         *r = (DRIVE * env * r_sig) as f32;
+    }
+}
+
+/// 固定种子 LCG 伪噪声对（确定性、无随机源；镜像 hse-service dsp_chain 测试与
+/// convolver expNoise 配方的推进序：先 `u = u·1664525 + 1013904223` 再取值）。
+///
+/// 与 [`fill_synthesized`] 的"宽带正弦叠加"互补：宽谱噪声让卷积/FDN 的分区
+/// 累加与动态均衡的分析器处于持续非平凡工况。
+pub fn fill_lcg_noise(left: &mut [f32], right: &mut [f32], seed_l: u32, seed_r: u32, amp: f64) {
+    assert_eq!(left.len(), right.len(), "左右声道必须等长");
+    let mut ul = seed_l;
+    let mut ur = seed_r;
+    for (l, r) in left.iter_mut().zip(right.iter_mut()) {
+        ul = ul.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        ur = ur.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        *l = ((f64::from(ul) / 4294967296.0 * 2.0 - 1.0) * amp) as f32;
+        *r = ((f64::from(ur) / 4294967296.0 * 2.0 - 1.0) * amp) as f32;
     }
 }
 
@@ -100,6 +134,18 @@ pub fn push_blocks(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 固化 v2 分享串（bench_share_codec 基准输入）的防腐蚀锚点：TS 编码器
+    /// 产物必须被 Rust 解码器接受，且解码出 sceneId=jazz 的参数对象
+    /// （生成快照未被改动；harness=false 的 bench 目标不运行 #[test]，故放本 lib）。
+    #[test]
+    fn 固化v2分享串可解码且场景标记一致() {
+        let code = "HSE2-68X6C-CHM60-T3GDV-579XJ-4SBH4-8X7P8-KGE9Q-M4RBE-CHSJ4-EJVFC-H6CWK-5E5TP-AVK3F-4H3MD-1G5GH-6ERB9-DRH3M-CSE6M-P24W9-278R2-WE3X5-HXJ4S-KJCNR-QASBE-CDWJ4-EHP6C-P24SV-1D5Q2-4EHG5-GH728-HT64Q-32Z9C-FCH6C-WK5E5-TPAVK-3F4H3-MC9J6-MP24S-V1D5Q-24EHG-5GH72-8HT64-Q32Z9-CFCH6-CWK5E-5TPAV-K3F4H-3MCHN-60P24-SV1D5-Q24EH-G5GH7-28HT6-4Q32Z-9CFCH-6CWK5-E5TPA-VK3F4-H3MD9-G60P2-4SV1D-5Q24E-HG5GH-728HT-64Q32-Z9CFC-H6CWK-5E5TP-AVK3F-4H3MC-9G60R-2R8K7-C5MPW-8HT60-P24W9-278RJ-WCBX5-HXJ4S-KJCNR-QASBE-CDWJ4-EHJ60-R30B1-2CXGP-JVH27-8R2R8-KH48X-32BHH-FMP7P-8K6E9-JQ2XB-5DSHQ-J8HT6-GR30C-1C49K-P2TBE-48X30-B12E4-H3MC9-E65YJ-RYS2C-SS6AW-BNCNQ-66Y92-78W30-C1G5G-H6ERB-9DRH3-MC1C4-9RJ4E-HH5RR-QTB3V-49K74-SBHEN-JPWRV-S48X3-2DHG6-0R2R8-K7C5M-PW8HT-60P24-W9278-RJWCB-XBNYJ-R8KKC-DJPWS-A9CGH-3M8KA-C5X7M-8HC49-HQAWV-MDXPP-JYK5C-GH3MX-3JENJ-JR8KK-C5PQ0-V35A9-GQ8S9-278T3-GC1G6-1YG";
+        let params = hse_core::share_codec::decode_share_code(code).expect("固化 v2 串应可解码");
+        assert_eq!(params.get("sceneId").and_then(|v| v.as_str()), Some("jazz"));
+        assert_eq!(params.get("customized").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(params.get("sampleRate").and_then(|v| v.as_f64()), Some(48000.0));
+    }
 
     #[test]
     fn 合成信号确定且逐位可复现() {

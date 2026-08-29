@@ -19,6 +19,9 @@ publish = false
 
 [dependencies]
 hse-core = { path = "../crates/hse-core" }
+# Phase 4 全链基准：驱动引擎服务实际装配的 PilotSubchain（纯 DSP 结构体，
+# 不触碰 WASAPI 后端 / 音频设备）。
+hse-service = { path = "../crates/hse-service" }
 
 [dev-dependencies]
 criterion = "0.5"
@@ -33,4 +36,74 @@ harness = false
 
 [[bench]]
 name = "parity_reverb_simple"
+harness = false
+
+# ---- Phase 4 基准矩阵：核心模块 × 块长 ----
+
+[[bench]]
+name = "bench_eq_chain"
+harness = false
+
+[[bench]]
+name = "bench_compressor"
+harness = false
+
+[[bench]]
+name = "bench_bass_enhancer"
+harness = false
+
+[[bench]]
+name = "bench_deesser"
+harness = false
+
+[[bench]]
+name = "bench_dynamic_eq"
+harness = false
+
+[[bench]]
+name = "bench_mod_effects"
+harness = false
+
+[[bench]]
+name = "bench_loudness_comp"
+harness = false
+
+[[bench]]
+name = "bench_mid_side"
+harness = false
+
+[[bench]]
+name = "bench_modulation_matrix"
+harness = false
+
+[[bench]]
+name = "bench_fdn_reverb"
+harness = false
+
+[[bench]]
+name = "bench_convolver"
+harness = false
+
+[[bench]]
+name = "bench_fft"
+harness = false
+
+# ---- Phase 4 基准矩阵：I/O 工具路径 ----
+
+[[bench]]
+name = "bench_midi"
+harness = false
+
+[[bench]]
+name = "bench_share_codec"
+harness = false
+
+[[bench]]
+name = "bench_wav"
+harness = false
+
+# ---- Phase 4 §三指标：全链离线吞吐（60s 音频，PilotSubchain）----
+
+[[bench]]
+name = "bench_chain_full"
 harness = false

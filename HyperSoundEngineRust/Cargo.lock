@@ -296,6 +296,7 @@ version = "0.5.0"
 dependencies = [
  "criterion",
  "hse-core",
+ "hse-service",
 ]
 
 [[package]]
