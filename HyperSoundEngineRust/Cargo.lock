@@ -301,6 +301,9 @@ dependencies = [
 [[package]]
 name = "hse-core"
 version = "0.5.0"
+dependencies = [
+ "serde_json",
+]
 
 [[package]]
 name = "hse-parity"
