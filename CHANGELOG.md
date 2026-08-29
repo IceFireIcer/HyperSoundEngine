@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+- **Phase 3 批次二：EqChain 双绿（规划书 §五）**：规格（12 GWT）+ 4 组冻结向量 + hse-core 移植（含级联 Q 补偿 Gauss-Seidel 精确语义：0.8 阻尼/至多 5 轮/单轮 maxErrDb<0.05 提前终止）；对拍门禁 23→**27 case 全 PASS、maxAbsDiff=0.000e0**。规格实证并固化关键行为事实：`processStereo` 立体声共享滤波器状态 → 输出依赖 blockSize（分块不变性仅对单声道 processBlock 成立，GWT-EQ-07/08）；gain=0 全直通为逐位锚点。
+- **维护轮**：src/ 全量 57 文件注释质量审计（结论：绝大多数为 A 级）；3 个 B 级文件（modulation/HseAudioBus/ModEffects）补齐出处/许可/确定性声明，纯注释零行为变更。
+- 阶段对照与全量验证记录 `docs/audit/phase-status.md`（规划书 §五 逐阶段对照 + 全量门禁证据 + 基准 5.59% realtime）。
+
 ## [0.5.0] - 2026-08
 
 ### Added
