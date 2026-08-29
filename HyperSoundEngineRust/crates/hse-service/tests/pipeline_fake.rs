@@ -177,3 +177,111 @@ fn configure_非idle拒绝优先于结构校验() {
     assert_eq!(err.code, -32001);
     engine.stop().unwrap();
 }
+
+// ---------- Phase 3 全序链：新增 setParams 键的运行态集成（假后端） ----------
+
+#[test]
+fn 新键快照热更换_运行态继续处理且无警告_三路混响路由切换() {
+    let (engine, _factory) = setup(Duration::ZERO, Duration::ZERO);
+    configure_default(&engine);
+    engine.start().unwrap();
+    wait_until(|| engine.frames_processed() > 0, Duration::from_secs(10), "开始处理帧");
+    let before = engine.frames_processed();
+
+    // 一次性下发全部新键（各自非直通形态）：必须 accepted 且零 warnings。
+    let five_bands: Vec<serde_json::Value> =
+        (0..5).map(|_| json!({"enabled": true, "targetGainDb": 0})).collect();
+    let resp = engine
+        .set_params(&json!({
+            "eqChain": {"bands": [{"frequency": 1000, "gain": 3.0, "q": 1.0}], "bandCount": 10, "qCompensation": true},
+            "deesser": {"enabled": true, "centerHz": 6000, "q": 0.7, "thresholdDb": -30,
+                        "ratio": 8, "attackMs": 1, "releaseMs": 80, "splitBand": true, "mix": 1},
+            "modEffects": {"delay": {"enabled": true, "delayMs": 120, "feedback": 0.2, "mix": 0.3}},
+            "reverbRoute": "fdn",
+            "fdnReverb": {"roomSize": 0.6, "damping": 0.4, "wet": 0.25, "dry": 0.75,
+                          "preDelayMs": 10, "width": 1, "type": "hall", "lines": 8},
+            "loudnessComp": {"mode": "auto", "volumePercent": 60, "maxBoostDb": 12, "smoothingSeconds": 0.2},
+            "dynamicEq": {"enabled": true, "strength": 0.5, "thresholdDb": -20, "ratio": 2,
+                          "attackMs": 20, "releaseMs": 200, "bands": five_bands},
+            "modMatrix": {"routes": [{"source": "lfo", "target": "masterGain", "amount": 0.2, "offset": 0}],
+                          "lfo": {"shape": "sine", "rateHz": 2, "depth": 0.5},
+                          "envelope": {"attackMs": 10, "releaseMs": 200, "amount": 0.5}}
+        }))
+        .unwrap();
+    assert_eq!(resp["accepted"], true);
+    assert_eq!(resp["warnings"], json!([]), "全部新键可识别，不得产生 warnings");
+
+    wait_until(
+        || engine.frames_processed() > before + 300,
+        Duration::from_secs(15),
+        "全序链热更换后继续处理",
+    );
+
+    // 运行态切换 convolver 路（delta IR 配方）→ 继续处理。
+    let mid = engine.frames_processed();
+    let resp = engine
+        .set_params(&json!({
+            "reverbRoute": "convolver",
+            "convolver": {"irRecipe": {"kind": "delta", "delay": 0}, "mix": 0.4, "preDelayMs": 0}
+        }))
+        .unwrap();
+    assert_eq!(resp["accepted"], true);
+    wait_until(
+        || engine.frames_processed() > mid + 300,
+        Duration::from_secs(15),
+        "convolver 路由热更换后继续处理",
+    );
+
+    // 切 off（整级直通）→ 继续处理。
+    let mid = engine.frames_processed();
+    let resp = engine.set_params(&json!({"reverbRoute": "off"})).unwrap();
+    assert_eq!(resp["accepted"], true);
+    wait_until(
+        || engine.frames_processed() > mid + 300,
+        Duration::from_secs(15),
+        "off 路由热更换后继续处理",
+    );
+
+    let stopped = engine.stop().unwrap();
+    assert_eq!(stopped["stopped"], true);
+    // lastParams 为最后一条快照（整体替换语义）：只剩 reverbRoute 键。
+    assert_eq!(engine.get_state()["lastParams"]["reverbRoute"], "off");
+}
+
+#[test]
+fn 新键结构违规与构建失败路径() {
+    let (engine, _factory) = setup(Duration::ZERO, Duration::ZERO);
+    configure_default(&engine);
+    engine.start().unwrap();
+    wait_until(|| engine.frames_processed() > 0, Duration::from_secs(10), "开始处理帧");
+
+    // 子键类型不符 → -32602（既有纪律在新增键上同样生效）。
+    for bad in [
+        json!({"dynamicEq": {"strength": "x"}}),
+        json!({"deesser": {"enabled": 1}}),
+        json!({"eqChain": {"bands": [42]}}),
+        json!({"modEffects": {"delay": "x"}}),
+        json!({"convolver": {"mix": true}}),
+        json!({"modMatrix": {"routes": {}}}),
+        json!({"loudnessComp": {"bands": [3]}}),
+        json!({"reverbRoute": 3}),
+        // IR 配方判别值未知：结构违规（无模块内回退形态）。
+        json!({"convolver": {"irRecipe": {"kind": "sine"}}}),
+        // fdnReverb.lines 非 2/4/8/16：构建失败 → -32602（参数无法应用）。
+        json!({"reverbRoute": "fdn", "fdnReverb": {"lines": 3}}),
+        // route=convolver 但缺 IR 配方：构建失败 → -32602。
+        json!({"reverbRoute": "convolver"}),
+    ] {
+        let err = engine.set_params(&bad).unwrap_err();
+        assert_eq!(err.code, -32602, "应拒绝：{bad}");
+    }
+
+    // 未知顶层键/子键照旧走 warnings + accepted。
+    let resp = engine
+        .set_params(&json!({"dynamicEq": {"enabled": false, "mystery": 1}, "reverbRoute": "off"}))
+        .unwrap();
+    assert_eq!(resp["accepted"], true);
+    assert_eq!(resp["warnings"], json!(["dynamicEq.mystery"]));
+
+    engine.stop().unwrap();
+}

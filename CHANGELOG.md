@@ -2,7 +2,10 @@
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08
+
 ### Added
+- **服务链全模块插入（Phase 3 服务层集成）**：hse-service 引擎子链重建为全序 12 级（midSide → biquad → eqChain → deesser → compressor → modEffects 五效果 → 混响三路路由 simple|fdn|convolver|off → bassEnhancer → loudnessComp → dynamicEq → modMatrix 控制率 → limiter，镜像 TS 22 级引擎相对顺序；NightMode/IEQ/分析级为引擎内部组合跳过并注释，HseStretch 保持链外 getStretch 语义）；控制面 setParams 新增 9 个可选键（eqChain/deesser/modEffects/reverbRoute/fdnReverb/convolver{irRecipe}/loudnessComp/dynamicEq/modMatrix，全部向后兼容 §十.2）；21 个新测试（全默认链逐位直通回归/逐级激活/三路路由切换/delta IR 延迟/热更换零 warnings）。`specs/service/control-plane.md` §一/§5.6/§八 向后兼容修订（§十.5 记录）。
 - **Phase 3 批次六：ModulationMatrix/HseStretch 两模块双绿（规划书 §五）**：2 份规格（modulation-matrix 控制率 Stage——LFO 每块推进后采样/包络逐样本联合峰值/masterGain 钳 [0,4]/无路由逐位恒等锚点/输出依赖块长；hse-stretch 块窗映射——变长输出截断补零回填定长网格、rate=1 非逐位（相位声码器重构噪声）按算术调度等价前提实践逐位、跨调用无状态、参数突变=全新实例契约）+ 8 组冻结向量 + hse-core 移植（含 Resampler 逐行移植）；对拍门禁 55→**63 case 全 PASS、maxAbsDiff=0.000e0**。**22 级链的模块对拍主体至此全部双绿**（仅 LufsMeter 因需标量读数向量演进而推迟）。
 - **Phase 3 批次五：FFT/Convolver 两模块双绿（规划书 §五）**：2 份规格（fft：非流式变换驱动模型——(L,R)=(Re,Im) 平面单块原位变换，向量覆盖纯基-4 与基-2 尾两条调度路径；convolver：非均匀分区/滑动窗口/冻结窗口尾语义）+ 8 组冻结向量 + hse-core 移植（radix-4 逐级 f32 落点、V8 fdlibm ts_trig 位级复刻、IR 配方 LCG 逐字重建、twiddle 角构造性上界 <3π/2 的边界证明）；对拍门禁 47→**55 case 全 PASS、maxAbsDiff=0.000e0**（Convolver 输出与驱动块长无关六种切分逐位实证）。已知边界记录：3π/2 精确值的 cos 位型未复刻（运行时不可达，#[ignore] 待办测试）。
 - **Phase 3 批次四：DynamicEq/ModEffects 两模块双绿（规划书 §五）**：2 份规格（GWT-DY-01..11 / GWT-ME-01..12）+ 8 组冻结向量 + hse-core 移植（全通交叉树 sumsq 不跨调用累积、五效果引擎顺序级联 + enabled 链路门控、chorus/flanger LFO 整块步进、phaser 并级全通 f32 状态落点）；对拍门禁 39→**47 case 全 PASS、maxAbsDiff=0.000e0**。规格实证：DynamicEq 输出依赖驱动分块（任意多余调用边界提前触发控制更新）、chorus/flanger 输出依赖 blockSize、Phaser stages 7≡8 逐位一致（并级非级联）、tremolo rateHz 上界 30 与其他效果 20 不同。

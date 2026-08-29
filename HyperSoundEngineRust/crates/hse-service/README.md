@@ -1,6 +1,6 @@
 # hse-service —— 引擎服务进程
 
-**一句话职责**（《原生化双支线与Windows音频接入规划书》§2.2）：回环拦截端到端——WASAPI loopback 捕获 → rtrb 双环 → DSP 线程（引擎子链 midSide → biquad → compressor → reverb-simple → bassEnhancer → limiter）→ rtrb → WASAPI 渲染；控制面为 localhost WebSocket JSON-RPC；Phase 3 起同一连接上的二进制帧承载**推流入口**（specs/service/push-stream.md）。
+**一句话职责**（《原生化双支线与Windows音频接入规划书》§2.2）：回环拦截端到端——WASAPI loopback 捕获 → rtrb 双环 → DSP 线程（引擎子链全序装配 midSide → biquad → eqChain → deesser → compressor → modEffects → reverb 三路路由(simple|fdn|convolver|off) → bassEnhancer → loudnessComp → dynamicEq → modMatrix(控制率) → limiter）→ rtrb → WASAPI 渲染；控制面为 localhost WebSocket JSON-RPC；Phase 3 起同一连接上的二进制帧承载**推流入口**（specs/service/push-stream.md）。
 
 ## 线程编排（§2.2 架构 + push-stream 混后处理）
 
@@ -27,9 +27,17 @@
 错误码 -32700/-32600/-32601/-32602/-32000/-32001；事件通知 `event.phase`、`event.xrun`。
 **推流二进制帧**（同连接，音频只进不出）：`sessionId u32 LE + seq u64 LE + 交错 f32LE 立体声载荷`（载荷为 8 的倍数、≥8、≤1 MiB），
 违规帧与未知会话帧静默丢弃；每会话有界环（容量按帧计）drop-oldest 背压；连接断开自动关闭其打开的全部会话。
-`setParams.params` 当前可识别键：`biquad{type,f0,q,gainDb}`、`reverbSimple{roomSize,damping,wet,dry,preDelayMs,width,type}`、
-`limiter{enabled,thresholdDb,lookaheadMs,attackMs,releaseMs,truePeak}`；其余顶层键忽略并入 warnings。缺省值对齐 TS 支线
-`createDefaultParams` 与各模块构造默认（biquad 未配置即直通）。
+`setParams.params` 当前可识别键（Phase 3 全序链，完整子键域见 `specs/service/control-plane.md` §5.6）：
+`midSide{width,voiceBalance}`、`biquad{type,f0,q,gainDb}`（键缺省=级不装配）、
+`eqChain{bands,bandCount,qCompensation}`（键缺省=级不装配）、`deesser{enabled,centerHz,q,thresholdDb,ratio,attackMs,releaseMs,splitBand,mix,sidechainEnabled}`、
+`compressor{…}`、`modEffects{delay,chorus,flanger,phaser,tremolo}`、`reverbSimple{…}`、
+`reverbRoute`（simple 缺省 | fdn | convolver | off）、`fdnReverb{roomSize,damping,wet,dry,preDelayMs,width,type,lines}`、
+`convolver{irRecipe(delta|expNoise 配方),mix,preDelayMs}`、`bassEnhancer{…}`、
+`loudnessComp{mode,preset,bands,volumePercent,maxBoostDb,smoothingSeconds}`（缺省 custom+空带=逐位直通）、
+`dynamicEq{enabled,strength,thresholdDb,ratio,attackMs,releaseMs,bands[5]}`（crossover 由服务侧固定注入 [200,800,2500,8000]）、
+`modMatrix{routes,lfo,envelope}`（控制率，缺省无路由=恒等）、`limiter{…}`；
+其余顶层键忽略并入 warnings。缺省值对齐 TS 支线 `createDefaultParams` 与各模块构造默认；
+全键缺省 + reverbSimple 全干 + limiter 禁用 ⇒ 整链逐位直通（回归锚）。
 
 ## 用法
 
@@ -51,8 +59,8 @@ cargo run -p hse-cli -- stop
 |------|------|
 | `backend.rs` | CaptureSource/RenderSink/opener 抽象 + WasapiFactory 生产适配 |
 | `fake_backend.rs` | 内存假后端（测试支撑；含静音回环捕获模式） |
-| `dsp_chain.rs` | 引擎子链装配与 planar/交错转换 |
-| `params.rs` | setParams 快照解析（识别键/警告/TS 缺省） |
+| `dsp_chain.rs` | 引擎子链全序装配（13 级 + reverb 三路路由 + 控制率 modMatrix）与 planar/交错转换 |
+| `params.rs` | setParams 快照解析（识别键/警告/TS 缺省/类型分层校验） |
 | `pipeline.rs` | 三条数据面线程与双环/命令环（捕获线程含混后处理前级） |
 | `sessions.rs` | 推流会话表：二进制帧解析、每会话有界环（drop-oldest）、混合前级 |
 | `engine.rs` | 相位机、openSession/closeSession、热更换、兜底停机 |

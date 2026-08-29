@@ -16,8 +16,10 @@
   仅以状态机相位与统计计数器的形式在结果中显影。
 - **控制面与数据面分离**（规划书 §2.2）：控制面连接可以随时断开重连，不影响已建立的音频流；
   数据面异常通过事件通知与统计计数器上报，不要求控制面在线。
-- **当前阶段范围声明**（Phase 2 起，Phase 3 批次一修订）：单客户端假设（§九）、应用层心跳暂缓（§九）、
-  处理链为引擎子链 midSide → biquad → compressor → reverb-simple → bassEnhancer → limiter（§八）、
+- **当前阶段范围声明**（Phase 2 起，Phase 3 批次二修订）：单客户端假设（§九）、应用层心跳暂缓（§九）、
+  处理链为引擎子链全序装配 midSide → biquad → eqChain → deesser → compressor → modEffects →
+  reverb（simple | fdn | convolver | off 三路路由）→ bassEnhancer → loudnessComp → dynamicEq →
+  modMatrix（控制率）→ limiter（§八）、
   音频入口为回环拦截 + 推流（Phase 3 起，见 push-stream.md）。
   推流入口的同端口复用分流规则见 [`push-stream.md`](push-stream.md)。
 
@@ -320,6 +322,8 @@ DeviceInfo 字段表：
 
 - **快照语义**：params.params 是**全量快照**，整体替换上一次快照（对齐两支线既有的
   "setParams 整体替换"约定）；省略的顶层键视为回落内置缺省，**不是增量合并**；
+  - `biquad` 与 `eqChain` 两键的「缺省」形态为**级不装配**（逐位直通）——与 TS
+    `createDefaultParams().eq` 的 enabled:true+10×0dB 形态的差异见 §八注 4；
 - params.params 缺失或不是对象 → -32602；
 - 可识别顶层键内部的子键域与 clamp 行为以对应模块规格为准
   （[`biquad`](../dsp/biquad.md) §三、[`reverb-simple`](../dsp/reverb-simple.md)、[`limiter`](../dsp/limiter.md)），
@@ -328,7 +332,7 @@ DeviceInfo 字段表：
   正在处理的块不受影响；控制面线程不得持任何 DSP 内部锁、不得在音频回调路径分配（架构铁律）；
 - 非 running 时快照仅存入状态（lastParams），待下次 start 生效。
 
-#### 可识别键表（引擎子链六模块；随模块落地扩展，属向后兼容变更）
+#### 可识别键表（引擎子链全序装配；随模块落地扩展，属向后兼容变更）
 
 | 顶层键 | 子键 | 类型 | 说明 |
 |---|---|---|---|
@@ -338,28 +342,73 @@ DeviceInfo 字段表：
 | | `f0` | number（Hz） | 中心/转折频率 |
 | | `q` | number | Q 值 |
 | | `gainDb` | number（dB） | 仅 peaking/shelf 类生效 |
+| `eqChain` | `bands` | array | 元素 `{frequency:number(Hz), gain:number(dB), q:number}`；越界钳制按 [eq-chain](../dsp/eq-chain.md) 规格；短于 bandCount 尾部填充、长于截断 |
+| | `bandCount` | number | 级联段数（生效值 = max(1, floor)） |
+| | `qCompensation` | bool | 级联 Q 补偿开关 |
+| `deesser` | `enabled` | bool | 旁路开关（false=恒等） |
+| | `centerHz` / `q` | number | 侧链带通形状 |
+| | `thresholdDb` / `ratio` | number | 齿音压缩曲线 |
+| | `attackMs` / `releaseMs` | number（ms） | 包络时间常数 |
+| | `splitBand` | bool | 分带（LR-4 交叉）处理开关 |
+| | `mix` | number | 干湿混合 |
+| | `sidechainEnabled` | bool | 语义位（本链无外部 sidechain 源，不改变 DSP 状态） |
 | `compressor` | `enabled` | bool | 旁路开关（false=恒等） |
 | | `thresholdDb` / `ratio` / `kneeDb` | number | 压缩曲线 |
 | | `attackMs` / `releaseMs` | number（ms） | 包络时间常数 |
 | | `makeupDb` | number（dB） | 补偿增益 |
 | | `outputGain` | number | 输出线性增益 |
 | | `sidechainEnabled` | bool | 按规格 §4.5 从输入派生单声道和 sidechain |
+| `modEffects` | `delay` | object | `{enabled:bool, delayMs:number, feedback:number, mix:number}`（五效果按引擎接线顺序级联） |
+| | `chorus` | object | `{enabled:bool, rateHz:number, depthMs:number, mix:number}` |
+| | `flanger` | object | `{enabled:bool, rateHz:number, depthMs:number, feedback:number, mix:number}` |
+| | `phaser` | object | `{enabled:bool, rateHz:number, depth:number, feedback:number, mix:number, stages:number}` |
+| | `tremolo` | object | `{enabled:bool, rateHz:number, depth:number, mix:number}` |
 | `reverbSimple` | `roomSize` | number | 房间尺寸 |
 | | `damping` | number | 高频阻尼 |
 | | `wet` / `dry` | number | 湿/干信号比例 |
 | | `preDelayMs` | number（ms） | 预延迟 |
 | | `width` | number | 立体声宽度 |
 | | `type` | string | 混响算法变体（枚举见 reverb-simple 规格） |
+| `reverbRoute` | （键值本身） | string | reverb 级三路路由：`"simple"`（缺省，算法混响）/ `"fdn"` / `"convolver"` / `"off"`（整级直通）；枚举外值回退 simple（无 warnings）；类型不符 → -32602 |
+| `fdnReverb` | `roomSize` / `damping` | number | FDN 反馈/阻尼（以 type 表为基准 ±0.25 微调） |
+| | `wet` / `dry` / `preDelayMs` / `width` | number | 混合与预延迟 |
+| | `type` | string | hall / room / plate / spring / stage（枚举外回退 hall） |
+| | `lines` | number | 延迟线数，仅 2/4/8/16 合法（缺省 8；其余值 → -32602） |
+| `convolver` | `irRecipe` | object | 确定性 IR 配方（specs/dsp/convolver.md §4.2）：`{kind:"delta", delay:number}` 或 `{kind:"expNoise", length:number, seed:u32, decay:number, amp:number}`；kind 枚举外 → -32602（无模块内回退形态）；`reverbRoute:"convolver"` 时必填，缺失 → -32602 |
+| | `mix` | number | 干湿混合（0=纯干逐位直通，1=纯湿） |
+| | `preDelayMs` | number（ms） | 湿路预延迟（clamp [0,1000]） |
 | `bassEnhancer` | `enabled` | bool | 旁路开关 |
 | | `cutoffHz` / `q` | number | 低通提取 |
 | | `harmonicType` | string | odd / even / atan / soft |
 | | `harmonicGain` / `mix` / `levelDb` | number | 谐波路径 |
 | | `lowBoostDb` | number（dB） | 低音下潜（-6..12，缺省 0=关闭） |
+| `loudnessComp` | `mode` | string | auto / preset / custom（枚举外回退 auto） |
+| | `preset` | string | preset 模式预设 id：flat / bass / vocal / warm / bright / night（未知 id 回退 flat 曲线） |
+| | `bands` | array | custom 模式目标曲线控制点 `{frequency:number(Hz), gain:number(dB)}` |
+| | `volumePercent` / `maxBoostDb` / `smoothingSeconds` | number | auto 曲线音量、增益上界、逐块平滑 |
+| `dynamicEq` | `enabled` | bool | 旁路开关（false=硬直通） |
+| | `strength` / `thresholdDb` / `ratio` | number | 动态压缩量 |
+| | `attackMs` / `releaseMs` | number（ms） | 增益平滑时间常数 |
+| | `bands` | array | 固定 5 带元素 `{enabled:bool, targetGainDb?:number(dB)}`；**crossover 频率不暴露协议键**，由服务侧按引擎常量 [200,800,2500,8000] 固定注入（第 5 带无下交叉）；短于 5 项缺项带保持默认 |
+| `modMatrix` | `routes` | array | 元素 `{source:string("lfo"\|"envelope"), target:string("masterGain"\|"stereoWidth"), amount:number, offset?:number}`；source/target 枚举外按 TS 求值语义回退（envelope / stereoWidth）；offset 缺省 0 |
+| | `lfo` | object | `{shape:string(sine\|triangle\|square\|saw), rateHz:number, depth:number}`（shape 枚举外按 sine） |
+| | `envelope` | object | `{attackMs:number, releaseMs:number, amount:number}` |
 | `limiter` | `enabled` | bool | 限幅级旁路开关 |
 | | `thresholdDb` | number（dB） | 门限 |
 | | `lookaheadMs` | number（ms） | 前瞻 |
 | | `attackMs` / `releaseMs` | number（ms） | 包络时间常数 |
 | | `truePeak` | bool | 真峰超采样检测开关 |
+
+注：
+1. 各模块的数值钳制与枚举回退以对应模块规格为准，协议层只做键存在性与 JSON 类型匹配；
+2. `biquad` 与 `eqChain` 缺省形态为**级不装配**（逐位直通），见 §八注 4；
+3. `loudnessComp` 无 `enabled` 键——核心模块无旁路门控（TS 引擎由 loudnessCompensation.enabled
+   在引擎层门控）；本链以参数形态表达等价「关闭」：缺省 `mode:"custom"` + 空 `bands` =
+   目标曲线全 0 → 平滑增益恒 0 → 构造期恒等系数不参与重算 → 逐位直通；
+4. `modMatrix` 的 stereoWidth 调制产物在本链不回灌 midSide（引擎把 modStereoWidth 回读进
+   mid-side 级 width 快照；本链 midSide.width 只来自 `midSide` 键，保持既有键语义不变）；
+   modMatrix 缺省（routes 空）masterGain 基线 1 → 逐位恒等；
+5. HseStretch（变速/变调）不入链——引擎语义为 `getStretch()` 外置调用，无 setParams 键。
 
 #### warnings 语义
 
@@ -367,6 +416,8 @@ DeviceInfo 字段表：
 2. **不可识别的顶层键**：整体忽略并记入 warnings，元素为该键名原文（如 "myPluginKey"）；
    这是有意的向前兼容机制——客户端可安全携带为后续版本准备的扩展键而不破坏互操作；
 3. 可识别顶层键内**不可识别的子键**：忽略并记入 warnings，元素形如 "<顶层键>.<子键>"（如 "biquad.order"）；
+   嵌套子对象（`modEffects.*`、`convolver.irRecipe`、`eqChain.bands`、`loudnessComp.bands`、
+   `dynamicEq.bands`、`modMatrix.*`）内同理，元素形如 "<顶层键>.<子对象>.<子键>"（如 "modEffects.delay.foo"）；
 4. warnings 元素按字典序升序排列（确定性输出，便于机械断言）；
 5. 只要结构校验通过，warnings 不影响 accepted:true 与快照存储。
 
@@ -440,33 +491,55 @@ DeviceInfo 字段表：
 
 ## 八、引擎子链及其与全链的对应关系
 
-Phase 3 批次一起，管线内实际运行的链为**六模块引擎子链**，顺序固定：
+Phase 3 批次二起，管线内实际运行的链为**全序引擎子链**（对齐 TS 全链 22 级的引擎
+相对顺序），顺序固定：
 
 ```text
-交错 f32 进（L,R,L,R,…） → [拆包 planar] → midSide → biquad → compressor
-  → reverb-simple → bass-enhancer → limiter → [打包交错] → 交错 f32 出
+交错 f32 进（L,R,L,R,…） → [拆包 planar] → midSide → biquad → eqChain → deesser
+  → compressor → modEffects（Delay→Chorus→Flanger→Phaser→Tremolo）→ reverb 三路路由
+  （simple | fdn | convolver | off）→ bassEnhancer → loudnessComp → dynamicEq
+  → modMatrix（控制率：推进矩阵 + masterGain 乘 L/R）→ limiter → [打包交错] → 交错 f32 出
 ```
 
 与 TS 支线全链（文档口径 22 级，`src/engine/HyperSoundEngine.ts` 的 buildStages 固定数组）
-的对应关系：六者选取的是全链中 M/S → Pre-EQ → Compressor → Reverb → BassEnhancer → Limiter 的
-**相对出现顺序**（全链第 3、4、6、13、14、21 级），其余各级在本阶段不参与管线（未移植，而非激活旁路）：
+的对应关系（全链级号以 buildStages 数组序为准）：
 
 | 子链级 | 对应模块规格 | 全链位置 | 全链实现形态 |
 |---|---|---|---|
 | midSide | [`specs/dsp/mid-side.md`](../dsp/mid-side.md) | 第 3 级 M/S | MidSide 本体（width + voiceBalance） |
-| biquad | [`specs/dsp/biquad.md`](../dsp/biquad.md) | 第 4 级 pre-eq | EqChain（biquad 级联）——以单节 biquad 代表该级 |
+| biquad | [`specs/dsp/biquad.md`](../dsp/biquad.md) | 第 4 级 pre-eq | EqChain（biquad 级联）——既有单节 biquad 键保留为该级**前置单节** |
+| eqChain | [`specs/dsp/eq-chain.md`](../dsp/eq-chain.md) | 第 4 级 pre-eq | EqChain 本体（多段级联 + 级联 Q 补偿），`eqChain` 键独立成级 |
+| deesser | [`specs/dsp/deesser.md`](../dsp/deesser.md) | 第 5 级 deesser | Deesser 本体（本链无外部 sidechain 源，内部单声道和检测） |
 | compressor | [`specs/dsp/compressor.md`](../dsp/compressor.md) | 第 6 级 compressor | Compressor 本体（sidechain 派生见其 §4.5） |
-| reverb-simple | [`specs/dsp/reverb-simple.md`](../dsp/reverb-simple.md) | 第 13 级 reverb | 三路路由（卷积/算法/off），子链取其中**算法路** ReverbSimple |
-| bass-enhancer | [`specs/dsp/bass-enhancer.md`](../dsp/bass-enhancer.md) | 第 14 级 bass | BassEnhancer 本体（含 lowBoostDb） |
+| modEffects | [`specs/dsp/mod-effects.md`](../dsp/mod-effects.md) | 第 8–12 级 delay/chorus/flanger/phaser/tremolo | ModEffectsStage 五效果按引擎接线顺序级联，禁用级整级跳过 |
+| reverb 路由 | [reverb-simple](../dsp/reverb-simple.md) ｜ [fdn-reverb](../dsp/fdn-reverb.md) ｜ [convolver](../dsp/convolver.md) | 第 13 级 reverb | 三路路由（`reverbRoute` 键）：simple=ReverbSimple / fdn=FDN 网络 / convolver=分区卷积（IR 由确定性配方给出）/ off=整级直通 |
+| bassEnhancer | [`specs/dsp/bass-enhancer.md`](../dsp/bass-enhancer.md) | 第 14 级 bass | BassEnhancer 本体（含 lowBoostDb） |
+| loudnessComp | [`specs/dsp/loudness-comp.md`](../dsp/loudness-comp.md) | 第 15 级 loudness-compensation | LoudnessComp 本体（无 enabled 门控，「关闭」形态见 §5.6 键表注 3） |
+| dynamicEq | [`specs/dsp/dynamic-eq.md`](../dsp/dynamic-eq.md) | 第 18 级 dynamic-eq | DynamicEq 本体，crossover 由服务侧按引擎常量 [200,800,2500,8000] 固定注入 |
+| modMatrix | [`specs/dsp/modulation-matrix.md`](../dsp/modulation-matrix.md) | 第 20 级 mod-master-gain | 控制率级：每块推进矩阵（包络读取增益前输入）→ masterGain 逐样本乘 L/R（stereoWidth 产物不回灌 midSide，见 §5.6 键表注 4） |
 | limiter | [`specs/dsp/limiter.md`](../dsp/limiter.md) | 第 21 级（末级）limiter | Limiter 本体 |
+
+不参与本子链的全链级（未移植或引擎内部组合，而非激活旁路）：
+loudness-normalization / surround3d（第 1–2 级）、NightMode（第 7 级，压缩增强 + shelf 的
+引擎内部组合）、IEQ 与分析取样（第 16–17、19 级 lufs，引擎内部闭环组合）、spatial（第 22 级，
+空间音频内联级）；HseStretch 按引擎语义为 `getStretch()` 外置调用，不入链。
 
 约束：
 
-1. 试点级的行为以冻结向量 + 各模块规格为准（双绿门禁），控制面协议不重复定义 DSP 行为；
+1. 各级行为以冻结向量 + 各模块规格为准（双绿门禁），控制面协议不重复定义 DSP 行为；
 2. 数据布局契约（`hse-wasapi/src/lib.rs`）：进程内统一交错立体声 f32；planar 转换只发生在
    DSP 线程边界——交错进、planar 过链、交错出；
 3. Phase 3 起新模块按规格逐级插入链中，插入动作只改变服务进程内部拓扑；
-   本契约的方法表与状态机不受影响（setParams 可识别键随模块落地同步扩展，属向后兼容变更）。
+   本契约的方法表与状态机不受影响（setParams 可识别键随模块落地同步扩展，属向后兼容变更）；
+4. **缺省直通形态**（回归锚）：全键缺省 + reverbSimple 全干（wet=0, dry=1, preDelayMs=0）+
+   limiter 禁用 ⇒ 整链**逐位直通**。达成方式：`biquad`/`eqChain` 键缺省不装配级
+   （级不存在，而非 0dB 级联——design_biquad 以 `b0×(1/a0)` 归一化，部分 (f,q) 组合下
+   0dB peaking 并非逐位恒等，故 TS 的 enabled:true+10×0dB 缺省形态在服务链中收窄为
+   「键缺省=级不装配」，显式配置时子键回落 TS 缺省）；deesser/modEffects/dynamicEq 缺省
+   disabled 硬旁路；loudnessComp 缺省 custom+空带（目标全 0 → 恒等系数）；modMatrix
+   缺省无路由（masterGain 基线 1，×1.0 逐位还原）；reverbRoute 缺省 simple（既有行为）。
+   reverb 路由为 convolver 时湿路引入 partitionSize 样本延迟（模块规格 §4.5），属该路
+   路由的固有语义。
 
 ## 九、并发约束
 

@@ -1,11 +1,14 @@
 //! setParams 参数快照解析（specs/service/control-plane.md §5.6）。
 //!
 //! 校验分层：协议层只做「键存在性 + JSON 类型匹配」的结构检查——
-//! - 可识别顶层键内**未知的子键**：忽略并记 warnings，元素形如 "顶层键.子键"；
+//! - 可识别顶层键内**未知的子键**：忽略并记 warnings，元素形如 "顶层键.子键"
+//!   （嵌套子对象内为 "顶层键.子对象.子键"，如 "modEffects.delay.foo"）；
 //! - **未知的顶层键**：整体忽略并记 warnings，元素为该键名原文；
 //! - 子键**类型不符**属结构违规 → 整体拒绝（调用方映射 -32602），不做静默回退；
 //! - 数值越界/枚举外取值不在此层判定，交由模块自身 clamp/回退（如 reverbSimple.type
-//!   未知值按模块规格回退 hall），不产生 warnings、不算错误。
+//!   未知值按模块规格回退 hall），不产生 warnings、不算错误。唯一例外是
+//!   `convolver.irRecipe.kind`：IR 配方无「模块内回退形态」，判别值未知时无法
+//!   成形对象，按结构违规拒绝（与 hse-parity 驱动器行为一致）。
 //! warnings 最终按字典序升序排列（确定性输出）。
 //! 缺省值对齐 TS 支线 createDefaultParams 与各模块构造默认（快照整体替换语义：
 //! 省略的顶层键回落内置缺省，不是增量合并）。
@@ -15,7 +18,15 @@ use std::collections::HashSet;
 use serde_json::{Map, Value};
 use hse_core::bass_enhancer::BassEnhancerSettings;
 use hse_core::compressor::CompressorSettings;
+use hse_core::convolver::IrRecipe;
+use hse_core::deesser::DeesserSettings;
+use hse_core::fdn_reverb::FdnReverbParams;
 use hse_core::limiter::LimiterSettings;
+use hse_core::loudness_comp::LoudnessCompSettings;
+use hse_core::mod_effects::{
+    ChorusSettings, DelaySettings, FlangerSettings, ModEffectsSettings, PhaserSettings,
+    TremoloSettings,
+};
 use hse_core::reverb_simple::ReverbSimpleParams;
 
 /// 单只 biquad 的显式规格（来自 setParams.biquad）。
@@ -34,18 +45,133 @@ pub struct MidSideParams {
     pub voice_balance: f64,
 }
 
-/// 引擎子链的参数快照（控制面可识别键：midSide / biquad / compressor /
-/// reverbSimple / bassEnhancer / limiter——按全链相对顺序入链）。
+/// eqChain 单段参数（对齐 TS EqBandParam；越界钳制由 EqChainStage.set_bands 完成）。
+#[derive(Debug, Clone, Copy)]
+pub struct EqBandSpec {
+    pub frequency: f64,
+    pub gain: f64,
+    pub q: f64,
+}
+
+/// eqChain 键快照（对齐 TS createDefaultParams().eq 的处理相关子集；
+/// 缺省 = 10 段全 0 增益 peaking + 级联 Q 补偿开启——0 增益级联为逐位直通）。
+#[derive(Debug, Clone)]
+pub struct EqChainSpec {
+    pub bands: Vec<EqBandSpec>,
+    pub band_count: f64,
+    pub q_compensation: bool,
+}
+
+/// dynamicEq 单带协议形态：crossover 频率由服务侧按引擎常量 [200,800,2500,8000]
+/// 固定注入（不暴露协议键，镜像 TS 引擎 DYNAMIC_EQ_CROSSOVERS 行为）。
+#[derive(Debug, Clone, Copy)]
+pub struct DynamicEqBandSpec {
+    pub enabled: bool,
+    /// None = 保持该带当前/默认静态偏移（TS 可选 targetGainDb 语义）。
+    pub target_gain_db: Option<f64>,
+}
+
+/// dynamicEq 键快照（对齐 TS createDefaultParams().dynamicEq；
+/// 缺省 enabled=false → DynamicEqStage 硬直通）。
+#[derive(Debug, Clone)]
+pub struct DynamicEqSpec {
+    pub enabled: bool,
+    pub strength: f64,
+    pub threshold_db: f64,
+    pub ratio: f64,
+    pub attack_ms: f64,
+    pub release_ms: f64,
+    pub bands: Vec<DynamicEqBandSpec>,
+}
+
+/// convolver 键快照：IR 由确定性配方描述（specs/dsp/convolver.md §4.2 的
+/// delta / expNoise 两形态，与 hse-parity 冻结向量同源）；分区尺寸等卷积
+/// 规划选项使用模块默认（512/4096/100ms/去周期化），不暴露协议键。
+#[derive(Debug, Clone)]
+pub struct ConvolverSpec {
+    /// None = 未配置 IR；route=convolver 时构建失败（-32602）。
+    pub ir_recipe: Option<IrRecipe>,
+    pub mix: f64,
+    pub pre_delay_ms: f64,
+}
+
+/// modMatrix 单条路由（source/target 原样下发，枚举外回退由
+/// ModSource::parse/ModTarget::parse 完成，镜像 TS 求值语义）。
+#[derive(Debug, Clone)]
+pub struct ModMatrixRouteSpec {
+    pub source: String,
+    pub target: String,
+    pub amount: f64,
+    /// TS `route.offset ?? 0`：缺省 0。
+    pub offset: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ModMatrixLfoSpec {
+    pub shape: String,
+    pub rate_hz: f64,
+    pub depth: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ModMatrixEnvelopeSpec {
+    pub attack_ms: f64,
+    pub release_ms: f64,
+    pub amount: f64,
+}
+
+/// modMatrix 键快照（对齐 TS createDefaultParams().modulation 的处理相关子集；
+/// 缺省 routes 空 → masterGain 基线 1 → 逐位恒等）。
+#[derive(Debug, Clone)]
+pub struct ModMatrixSpec {
+    pub routes: Vec<ModMatrixRouteSpec>,
+    pub lfo: ModMatrixLfoSpec,
+    pub envelope: ModMatrixEnvelopeSpec,
+}
+
+/// reverb 级三路路由（对齐 TS ReverbMode 的处理语义：
+/// simple=算法混响、fdn=FDN 网络、convolver=分区卷积、off=整级直通）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReverbRouteKind {
+    Simple,
+    Fdn,
+    Convolver,
+    Off,
+}
+
+/// 引擎子链的参数快照（控制面可识别键：midSide / biquad / eqChain / deesser /
+/// compressor / modEffects / reverbSimple / reverbRoute / fdnReverb / convolver /
+/// bassEnhancer / loudnessComp / dynamicEq / modMatrix / limiter——按全链相对顺序入链）。
 #[derive(Debug, Clone)]
 pub struct PilotParams {
     pub mid_side: MidSideParams,
     /// None = 未配置滤波器，按 TS 构造默认直通。
     pub biquad: Option<BiquadSpec>,
+    /// None = 未配置 Pre-EQ 级联 → **不装配该级（逐位直通）**。
+    ///
+    /// 与 `biquad` 键同一先例（None = 级不存在）。这是对「缺省链逐位直通」
+    /// 回归锚的让步：TS createDefaultParams().eq（enabled=true + 10×0dB + Q 补偿）
+    /// 在浮点上只是 ~1e-15 级恒等而非逐位——design_biquad 以 `b0 × (1/a0)` 归一化，
+    /// 部分 (f, q) 组合下 `b0·inv ≠ 1.0`（±1 ulp），0dB peaking 级联因此不保证逐位
+    /// 还原。显式给出 `eqChain` 键时，省略的子键回落 TS 形态（10 段 0dB / Q 补偿开）。
+    pub eq_chain: Option<EqChainSpec>,
+    pub deesser: DeesserSettings,
     pub compressor: CompressorSettings,
+    pub mod_effects: ModEffectsSettings,
     pub reverb_simple: ReverbSimpleParams,
+    pub reverb_route: ReverbRouteKind,
+    pub fdn_reverb: FdnReverbParams,
+    pub convolver: ConvolverSpec,
     pub bass_enhancer: BassEnhancerSettings,
+    pub loudness_comp: LoudnessCompSettings,
+    pub dynamic_eq: DynamicEqSpec,
+    pub mod_matrix: ModMatrixSpec,
     pub limiter: LimiterSettings,
 }
+
+/// TS PRO_EQ_DEFAULT_BANDS：专业 10 段（octave）中心频率。
+const PRO_EQ_DEFAULT_BANDS: [f64; 10] =
+    [31.5, 63.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0];
 
 impl Default for PilotParams {
     fn default() -> Self {
@@ -53,6 +179,23 @@ impl Default for PilotParams {
             // 对齐 TS createDefaultParams().stereoWidth（M/S 恒活跃，width=1 恒等）。
             mid_side: MidSideParams { width: 1.0, voice_balance: 0.0 },
             biquad: None,
+            // 对齐 TS createDefaultParams().eq 的处理形态（10 段全 0 增益 + qComp），
+            // 但**仅在显式下发 eqChain 键时生效**；缺省 None = 级不装配（逐位直通），
+            // 理由见 PilotParams.eq_chain 字段文档。
+            eq_chain: None,
+            // 对齐 TS createDefaultParams().deesser（enabled=false → 恒等直通）。
+            deesser: DeesserSettings {
+                enabled: false,
+                center_hz: 6000.0,
+                q: 0.7,
+                threshold_db: -30.0,
+                ratio: 8.0,
+                attack_ms: 1.0,
+                release_ms: 80.0,
+                split_band: true,
+                mix: 1.0,
+                sidechain_enabled: false,
+            },
             // 对齐 TS createDefaultParams().compressor。
             compressor: CompressorSettings {
                 enabled: false,
@@ -65,6 +208,27 @@ impl Default for PilotParams {
                 output_gain: 1.0,
                 sidechain_enabled: false,
             },
+            // 对齐 TS createDefaultParams().modEffects（五级全部 disabled → 逐位直通）。
+            mod_effects: ModEffectsSettings {
+                delay: DelaySettings { enabled: false, delay_ms: 250.0, feedback: 0.3, mix: 0.3 },
+                chorus: ChorusSettings { enabled: false, rate_hz: 1.0, depth_ms: 3.0, mix: 0.4 },
+                flanger: FlangerSettings {
+                    enabled: false,
+                    rate_hz: 0.5,
+                    depth_ms: 2.0,
+                    feedback: 0.4,
+                    mix: 0.5,
+                },
+                phaser: PhaserSettings {
+                    enabled: false,
+                    rate_hz: 0.5,
+                    depth: 0.5,
+                    feedback: 0.4,
+                    mix: 0.5,
+                    stages: 4.0,
+                },
+                tremolo: TremoloSettings { enabled: false, rate_hz: 5.0, depth: 0.5, mix: 1.0 },
+            },
             // 对齐 TS createDefaultParams().reverb.algorithmic。
             reverb_simple: ReverbSimpleParams {
                 room_size: 0.5,
@@ -75,6 +239,23 @@ impl Default for PilotParams {
                 width: 1.0,
                 reverb_type: "hall".to_string(),
             },
+            // 路由键为服务链自有形态（TS 由 reverb.enabled+mode 组合表达）；
+            // 缺省 simple = 既有六模块链行为。
+            reverb_route: ReverbRouteKind::Simple,
+            // 对齐 TS createDefaultParams().reverb.algorithmic 同源字段（FDN 以其
+            // 为基准参数；lines 缺省 8 由 FdnReverbParams.lines=None 表达）。
+            fdn_reverb: FdnReverbParams {
+                room_size: 0.5,
+                damping: 0.5,
+                wet: 0.3,
+                dry: 0.7,
+                pre_delay_ms: 0.0,
+                width: 1.0,
+                reverb_type: "hall".to_string(),
+                lines: None,
+            },
+            // 对齐 TS createDefaultParams().reverb.convolution（ir=null → 配方 None）。
+            convolver: ConvolverSpec { ir_recipe: None, mix: 0.3, pre_delay_ms: 0.0 },
             // 对齐 TS createDefaultParams().bassEnhancer。
             bass_enhancer: BassEnhancerSettings {
                 enabled: false,
@@ -85,6 +266,47 @@ impl Default for PilotParams {
                 mix: 0.5,
                 level_db: 0.0,
                 low_boost_db: Some(0.0),
+            },
+            // TS createDefaultParams().loudnessCompensation = {enabled:false, mode:'auto',
+            // preset:'flat', bands:[], volumePercent:80, maxBoostDb:12, smoothingSeconds:0.2}。
+            // LoudnessCompSettings 无 enabled 字段（引擎层门控在 TS 由
+            // loudnessCompensation.enabled 承担；本链以参数形态表达等价「关闭」）：
+            // 缺省 mode 取 **custom + 空 bands**——目标曲线全 0、平滑增益恒 0，
+            // 构造期恒等系数不参与重算 → 逐位直通（custom+[] 是 LoudnessCompStage
+            // 唯一的确定性零目标形态；TS 缺省 mode='auto' 在 volumePercent=80 下
+            // 会产生 +2.4dB 低频架的目标，非直通，故不能照抄）。
+            loudness_comp: LoudnessCompSettings {
+                volume_percent: 80.0,
+                max_boost_db: 12.0,
+                preset: "flat".to_string(),
+                bands: Vec::new(),
+                mode: "custom".to_string(),
+                smoothing_seconds: 0.2,
+            },
+            // 对齐 TS createDefaultParams().dynamicEq（enabled=false → 硬直通）。
+            // kneeDb/blockSize 不暴露协议键，保持模块构造默认（6/128）。
+            dynamic_eq: DynamicEqSpec {
+                enabled: false,
+                strength: 0.5,
+                threshold_db: -20.0,
+                ratio: 2.0,
+                attack_ms: 20.0,
+                release_ms: 200.0,
+                bands: (0..5)
+                    .map(|_| DynamicEqBandSpec { enabled: true, target_gain_db: Some(0.0) })
+                    .collect(),
+            },
+            // 对齐 TS createDefaultParams().modulation 处理子集（enabled=false 的
+            // 等价形态即 routes=[]：masterGain 基线 1 → 逐位恒等；lfo/envelope 的
+            // enabled 标志核心模块不读取，仅快照形状对齐 TS 字段值）。
+            mod_matrix: ModMatrixSpec {
+                routes: Vec::new(),
+                lfo: ModMatrixLfoSpec { shape: "sine".to_string(), rate_hz: 1.0, depth: 0.5 },
+                envelope: ModMatrixEnvelopeSpec {
+                    attack_ms: 10.0,
+                    release_ms: 200.0,
+                    amount: 0.5,
+                },
             },
             // 对齐 TS createDefaultParams().limiter（与 LimiterStage::new 一致）。
             limiter: LimiterSettings {
@@ -118,17 +340,54 @@ pub fn parse_pilot_params(value: &Value) -> Result<(PilotParams, Vec<String>), S
                 collect_unknown(o, &seen, "biquad", &mut warnings);
                 p.biquad = Some(BiquadSpec { filter_type, f0, q, gain_db });
             }
-            "reverbSimple" => {
-                let o = v.as_object().ok_or("reverbSimple 必须是 JSON 对象")?;
+            "eqChain" => {
+                let o = v.as_object().ok_or("eqChain 必须是 JSON 对象")?;
                 let mut seen = HashSet::new();
-                if let Some(x) = opt_num(o, "roomSize", "reverbSimple", &mut seen)? { p.reverb_simple.room_size = x; }
-                if let Some(x) = opt_num(o, "damping", "reverbSimple", &mut seen)? { p.reverb_simple.damping = x; }
-                if let Some(x) = opt_num(o, "wet", "reverbSimple", &mut seen)? { p.reverb_simple.wet = x; }
-                if let Some(x) = opt_num(o, "dry", "reverbSimple", &mut seen)? { p.reverb_simple.dry = x; }
-                if let Some(x) = opt_num(o, "preDelayMs", "reverbSimple", &mut seen)? { p.reverb_simple.pre_delay_ms = x; }
-                if let Some(x) = opt_num(o, "width", "reverbSimple", &mut seen)? { p.reverb_simple.width = x; }
-                if let Some(x) = opt_str(o, "type", "reverbSimple", &mut seen)? { p.reverb_simple.reverb_type = x; }
-                collect_unknown(o, &seen, "reverbSimple", &mut warnings);
+                // 显式配置即装配该级；省略的子键回落 TS createDefaultParams().eq
+                // （10 段 PRO 0dB peaking、bandCount 10、Q 补偿开）。
+                let mut spec = EqChainSpec {
+                    bands: PRO_EQ_DEFAULT_BANDS
+                        .iter()
+                        .map(|&f| EqBandSpec { frequency: f, gain: 0.0, q: 1.1 })
+                        .collect(),
+                    band_count: 10.0,
+                    q_compensation: true,
+                };
+                if let Some(arr) = opt_arr(o, "bands", "eqChain", &mut seen)? {
+                    let mut bands = Vec::with_capacity(arr.len());
+                    for (i, item) in arr.iter().enumerate() {
+                        let bo = item
+                            .as_object()
+                            .ok_or(format!("eqChain.bands[{i}] 必须是 JSON 对象"))?;
+                        let mut bseen = HashSet::new();
+                        let frequency = opt_num(bo, "frequency", "eqChain.bands", &mut bseen)?.unwrap_or(1000.0);
+                        let gain = opt_num(bo, "gain", "eqChain.bands", &mut bseen)?.unwrap_or(0.0);
+                        let q = opt_num(bo, "q", "eqChain.bands", &mut bseen)?.unwrap_or(1.0);
+                        collect_unknown(bo, &bseen, "eqChain.bands", &mut warnings);
+                        bands.push(EqBandSpec { frequency, gain, q });
+                    }
+                    spec.bands = bands;
+                }
+                if let Some(x) = opt_num(o, "bandCount", "eqChain", &mut seen)? { spec.band_count = x; }
+                if let Some(x) = opt_bool(o, "qCompensation", "eqChain", &mut seen)? { spec.q_compensation = x; }
+                collect_unknown(o, &seen, "eqChain", &mut warnings);
+                p.eq_chain = Some(spec);
+            }
+            "deesser" => {
+                let o = v.as_object().ok_or("deesser 必须是 JSON 对象")?;
+                let mut seen = HashSet::new();
+                if let Some(x) = opt_bool(o, "enabled", "deesser", &mut seen)? { p.deesser.enabled = x; }
+                if let Some(x) = opt_num(o, "centerHz", "deesser", &mut seen)? { p.deesser.center_hz = x; }
+                if let Some(x) = opt_num(o, "q", "deesser", &mut seen)? { p.deesser.q = x; }
+                if let Some(x) = opt_num(o, "thresholdDb", "deesser", &mut seen)? { p.deesser.threshold_db = x; }
+                if let Some(x) = opt_num(o, "ratio", "deesser", &mut seen)? { p.deesser.ratio = x; }
+                if let Some(x) = opt_num(o, "attackMs", "deesser", &mut seen)? { p.deesser.attack_ms = x; }
+                if let Some(x) = opt_num(o, "releaseMs", "deesser", &mut seen)? { p.deesser.release_ms = x; }
+                if let Some(x) = opt_bool(o, "splitBand", "deesser", &mut seen)? { p.deesser.split_band = x; }
+                if let Some(x) = opt_num(o, "mix", "deesser", &mut seen)? { p.deesser.mix = x; }
+                // TS 可选字段；核心模块不读取（仅快照形状对齐），缺省保留 false。
+                if let Some(x) = opt_bool(o, "sidechainEnabled", "deesser", &mut seen)? { p.deesser.sidechain_enabled = x; }
+                collect_unknown(o, &seen, "deesser", &mut warnings);
             }
             "compressor" => {
                 let o = v.as_object().ok_or("compressor 必须是 JSON 对象")?;
@@ -144,6 +403,127 @@ pub fn parse_pilot_params(value: &Value) -> Result<(PilotParams, Vec<String>), S
                 if let Some(x) = opt_bool(o, "sidechainEnabled", "compressor", &mut seen)? { p.compressor.sidechain_enabled = x; }
                 collect_unknown(o, &seen, "compressor", &mut warnings);
             }
+            "modEffects" => {
+                let o = v.as_object().ok_or("modEffects 必须是 JSON 对象")?;
+                let mut seen = HashSet::new();
+                if let Some(so) = opt_obj(o, "delay", "modEffects", &mut seen)? {
+                    let mut sseen = HashSet::new();
+                    if let Some(x) = opt_bool(so, "enabled", "modEffects.delay", &mut sseen)? { p.mod_effects.delay.enabled = x; }
+                    if let Some(x) = opt_num(so, "delayMs", "modEffects.delay", &mut sseen)? { p.mod_effects.delay.delay_ms = x; }
+                    if let Some(x) = opt_num(so, "feedback", "modEffects.delay", &mut sseen)? { p.mod_effects.delay.feedback = x; }
+                    if let Some(x) = opt_num(so, "mix", "modEffects.delay", &mut sseen)? { p.mod_effects.delay.mix = x; }
+                    collect_unknown(so, &sseen, "modEffects.delay", &mut warnings);
+                }
+                if let Some(so) = opt_obj(o, "chorus", "modEffects", &mut seen)? {
+                    let mut sseen = HashSet::new();
+                    if let Some(x) = opt_bool(so, "enabled", "modEffects.chorus", &mut sseen)? { p.mod_effects.chorus.enabled = x; }
+                    if let Some(x) = opt_num(so, "rateHz", "modEffects.chorus", &mut sseen)? { p.mod_effects.chorus.rate_hz = x; }
+                    if let Some(x) = opt_num(so, "depthMs", "modEffects.chorus", &mut sseen)? { p.mod_effects.chorus.depth_ms = x; }
+                    if let Some(x) = opt_num(so, "mix", "modEffects.chorus", &mut sseen)? { p.mod_effects.chorus.mix = x; }
+                    collect_unknown(so, &sseen, "modEffects.chorus", &mut warnings);
+                }
+                if let Some(so) = opt_obj(o, "flanger", "modEffects", &mut seen)? {
+                    let mut sseen = HashSet::new();
+                    if let Some(x) = opt_bool(so, "enabled", "modEffects.flanger", &mut sseen)? { p.mod_effects.flanger.enabled = x; }
+                    if let Some(x) = opt_num(so, "rateHz", "modEffects.flanger", &mut sseen)? { p.mod_effects.flanger.rate_hz = x; }
+                    if let Some(x) = opt_num(so, "depthMs", "modEffects.flanger", &mut sseen)? { p.mod_effects.flanger.depth_ms = x; }
+                    if let Some(x) = opt_num(so, "feedback", "modEffects.flanger", &mut sseen)? { p.mod_effects.flanger.feedback = x; }
+                    if let Some(x) = opt_num(so, "mix", "modEffects.flanger", &mut sseen)? { p.mod_effects.flanger.mix = x; }
+                    collect_unknown(so, &sseen, "modEffects.flanger", &mut warnings);
+                }
+                if let Some(so) = opt_obj(o, "phaser", "modEffects", &mut seen)? {
+                    let mut sseen = HashSet::new();
+                    if let Some(x) = opt_bool(so, "enabled", "modEffects.phaser", &mut sseen)? { p.mod_effects.phaser.enabled = x; }
+                    if let Some(x) = opt_num(so, "rateHz", "modEffects.phaser", &mut sseen)? { p.mod_effects.phaser.rate_hz = x; }
+                    if let Some(x) = opt_num(so, "depth", "modEffects.phaser", &mut sseen)? { p.mod_effects.phaser.depth = x; }
+                    if let Some(x) = opt_num(so, "feedback", "modEffects.phaser", &mut sseen)? { p.mod_effects.phaser.feedback = x; }
+                    if let Some(x) = opt_num(so, "mix", "modEffects.phaser", &mut sseen)? { p.mod_effects.phaser.mix = x; }
+                    if let Some(x) = opt_num(so, "stages", "modEffects.phaser", &mut sseen)? { p.mod_effects.phaser.stages = x; }
+                    collect_unknown(so, &sseen, "modEffects.phaser", &mut warnings);
+                }
+                if let Some(so) = opt_obj(o, "tremolo", "modEffects", &mut seen)? {
+                    let mut sseen = HashSet::new();
+                    if let Some(x) = opt_bool(so, "enabled", "modEffects.tremolo", &mut sseen)? { p.mod_effects.tremolo.enabled = x; }
+                    if let Some(x) = opt_num(so, "rateHz", "modEffects.tremolo", &mut sseen)? { p.mod_effects.tremolo.rate_hz = x; }
+                    if let Some(x) = opt_num(so, "depth", "modEffects.tremolo", &mut sseen)? { p.mod_effects.tremolo.depth = x; }
+                    if let Some(x) = opt_num(so, "mix", "modEffects.tremolo", &mut sseen)? { p.mod_effects.tremolo.mix = x; }
+                    collect_unknown(so, &sseen, "modEffects.tremolo", &mut warnings);
+                }
+                collect_unknown(o, &seen, "modEffects", &mut warnings);
+            }
+            "reverbSimple" => {
+                let o = v.as_object().ok_or("reverbSimple 必须是 JSON 对象")?;
+                let mut seen = HashSet::new();
+                if let Some(x) = opt_num(o, "roomSize", "reverbSimple", &mut seen)? { p.reverb_simple.room_size = x; }
+                if let Some(x) = opt_num(o, "damping", "reverbSimple", &mut seen)? { p.reverb_simple.damping = x; }
+                if let Some(x) = opt_num(o, "wet", "reverbSimple", &mut seen)? { p.reverb_simple.wet = x; }
+                if let Some(x) = opt_num(o, "dry", "reverbSimple", &mut seen)? { p.reverb_simple.dry = x; }
+                if let Some(x) = opt_num(o, "preDelayMs", "reverbSimple", &mut seen)? { p.reverb_simple.pre_delay_ms = x; }
+                if let Some(x) = opt_num(o, "width", "reverbSimple", &mut seen)? { p.reverb_simple.width = x; }
+                if let Some(x) = opt_str(o, "type", "reverbSimple", &mut seen)? { p.reverb_simple.reverb_type = x; }
+                collect_unknown(o, &seen, "reverbSimple", &mut warnings);
+            }
+            "reverbRoute" => match v {
+                Value::Null => {}
+                Value::String(s) => {
+                    p.reverb_route = match s.as_str() {
+                        "fdn" => ReverbRouteKind::Fdn,
+                        "convolver" => ReverbRouteKind::Convolver,
+                        "off" => ReverbRouteKind::Off,
+                        // "simple" 与一切枚举外值：回退缺省路（镜像 reverbSimple.type
+                        // 的「枚举外交由模块回退、无 warnings」惯例）。
+                        _ => ReverbRouteKind::Simple,
+                    };
+                }
+                _ => return Err("reverbRoute 必须是字符串（simple | fdn | convolver | off）".to_string()),
+            },
+            "fdnReverb" => {
+                let o = v.as_object().ok_or("fdnReverb 必须是 JSON 对象")?;
+                let mut seen = HashSet::new();
+                if let Some(x) = opt_num(o, "roomSize", "fdnReverb", &mut seen)? { p.fdn_reverb.room_size = x; }
+                if let Some(x) = opt_num(o, "damping", "fdnReverb", &mut seen)? { p.fdn_reverb.damping = x; }
+                if let Some(x) = opt_num(o, "wet", "fdnReverb", &mut seen)? { p.fdn_reverb.wet = x; }
+                if let Some(x) = opt_num(o, "dry", "fdnReverb", &mut seen)? { p.fdn_reverb.dry = x; }
+                if let Some(x) = opt_num(o, "preDelayMs", "fdnReverb", &mut seen)? { p.fdn_reverb.pre_delay_ms = x; }
+                if let Some(x) = opt_num(o, "width", "fdnReverb", &mut seen)? { p.fdn_reverb.width = x; }
+                if let Some(x) = opt_str(o, "type", "fdnReverb", &mut seen)? { p.fdn_reverb.reverb_type = x; }
+                // 缺省/null 保留 None（= 线数 8；2/4/8/16 之外的值由模块校验报错）。
+                if let Some(x) = opt_num(o, "lines", "fdnReverb", &mut seen)? { p.fdn_reverb.lines = Some(x); }
+                collect_unknown(o, &seen, "fdnReverb", &mut warnings);
+            }
+            "convolver" => {
+                let o = v.as_object().ok_or("convolver 必须是 JSON 对象")?;
+                let mut seen = HashSet::new();
+                if let Some(io) = opt_obj(o, "irRecipe", "convolver", &mut seen)? {
+                    let mut iseen = HashSet::new();
+                    let kind = opt_str(io, "kind", "convolver.irRecipe", &mut iseen)?
+                        .ok_or("convolver.irRecipe.kind 必须为 \"delta\" 或 \"expNoise\"")?;
+                    let recipe = match kind.as_str() {
+                        "delta" => {
+                            let delay = opt_num(io, "delay", "convolver.irRecipe", &mut iseen)?.unwrap_or(0.0);
+                            IrRecipe::Delta { delay }
+                        }
+                        "expNoise" => {
+                            let length = opt_num(io, "length", "convolver.irRecipe", &mut iseen)?.unwrap_or(4096.0);
+                            let seed = opt_num(io, "seed", "convolver.irRecipe", &mut iseen)?.unwrap_or(1.0);
+                            let decay = opt_num(io, "decay", "convolver.irRecipe", &mut iseen)?.unwrap_or(3.0);
+                            let amp = opt_num(io, "amp", "convolver.irRecipe", &mut iseen)?.unwrap_or(0.5);
+                            IrRecipe::ExpNoise { length, seed: seed_to_u32(seed)?, decay, amp }
+                        }
+                        // IR 配方无模块内回退形态（与 hse-parity 驱动器一致：未知判别值报错）。
+                        other => {
+                            return Err(format!(
+                                "convolver.irRecipe.kind 必须为 \"delta\" 或 \"expNoise\"，收到 \"{other}\""
+                            ))
+                        }
+                    };
+                    collect_unknown(io, &iseen, "convolver.irRecipe", &mut warnings);
+                    p.convolver.ir_recipe = Some(recipe);
+                }
+                if let Some(x) = opt_num(o, "mix", "convolver", &mut seen)? { p.convolver.mix = x; }
+                if let Some(x) = opt_num(o, "preDelayMs", "convolver", &mut seen)? { p.convolver.pre_delay_ms = x; }
+                collect_unknown(o, &seen, "convolver", &mut warnings);
+            }
             "bassEnhancer" => {
                 let o = v.as_object().ok_or("bassEnhancer 必须是 JSON 对象")?;
                 let mut seen = HashSet::new();
@@ -158,12 +538,90 @@ pub fn parse_pilot_params(value: &Value) -> Result<(PilotParams, Vec<String>), S
                 if let Some(x) = opt_num(o, "lowBoostDb", "bassEnhancer", &mut seen)? { p.bass_enhancer.low_boost_db = Some(x); }
                 collect_unknown(o, &seen, "bassEnhancer", &mut warnings);
             }
-            "midSide" => {
-                let o = v.as_object().ok_or("midSide 必须是 JSON 对象")?;
+            "loudnessComp" => {
+                let o = v.as_object().ok_or("loudnessComp 必须是 JSON 对象")?;
                 let mut seen = HashSet::new();
-                if let Some(x) = opt_num(o, "width", "midSide", &mut seen)? { p.mid_side.width = x; }
-                if let Some(x) = opt_num(o, "voiceBalance", "midSide", &mut seen)? { p.mid_side.voice_balance = x; }
-                collect_unknown(o, &seen, "midSide", &mut warnings);
+                if let Some(x) = opt_str(o, "mode", "loudnessComp", &mut seen)? { p.loudness_comp.mode = x; }
+                if let Some(x) = opt_str(o, "preset", "loudnessComp", &mut seen)? { p.loudness_comp.preset = x; }
+                if let Some(arr) = opt_arr(o, "bands", "loudnessComp", &mut seen)? {
+                    let mut bands = Vec::with_capacity(arr.len());
+                    for (i, item) in arr.iter().enumerate() {
+                        let bo = item
+                            .as_object()
+                            .ok_or(format!("loudnessComp.bands[{i}] 必须是 JSON 对象"))?;
+                        let mut bseen = HashSet::new();
+                        let frequency = opt_num(bo, "frequency", "loudnessComp.bands", &mut bseen)?.unwrap_or(1000.0);
+                        let gain = opt_num(bo, "gain", "loudnessComp.bands", &mut bseen)?.unwrap_or(0.0);
+                        collect_unknown(bo, &bseen, "loudnessComp.bands", &mut warnings);
+                        bands.push(hse_core::loudness_comp::LoudnessBandParam { frequency, gain });
+                    }
+                    p.loudness_comp.bands = bands;
+                }
+                if let Some(x) = opt_num(o, "volumePercent", "loudnessComp", &mut seen)? { p.loudness_comp.volume_percent = x; }
+                if let Some(x) = opt_num(o, "maxBoostDb", "loudnessComp", &mut seen)? { p.loudness_comp.max_boost_db = x; }
+                if let Some(x) = opt_num(o, "smoothingSeconds", "loudnessComp", &mut seen)? { p.loudness_comp.smoothing_seconds = x; }
+                collect_unknown(o, &seen, "loudnessComp", &mut warnings);
+            }
+            "dynamicEq" => {
+                let o = v.as_object().ok_or("dynamicEq 必须是 JSON 对象")?;
+                let mut seen = HashSet::new();
+                if let Some(x) = opt_bool(o, "enabled", "dynamicEq", &mut seen)? { p.dynamic_eq.enabled = x; }
+                if let Some(x) = opt_num(o, "strength", "dynamicEq", &mut seen)? { p.dynamic_eq.strength = x; }
+                if let Some(x) = opt_num(o, "thresholdDb", "dynamicEq", &mut seen)? { p.dynamic_eq.threshold_db = x; }
+                if let Some(x) = opt_num(o, "ratio", "dynamicEq", &mut seen)? { p.dynamic_eq.ratio = x; }
+                if let Some(x) = opt_num(o, "attackMs", "dynamicEq", &mut seen)? { p.dynamic_eq.attack_ms = x; }
+                if let Some(x) = opt_num(o, "releaseMs", "dynamicEq", &mut seen)? { p.dynamic_eq.release_ms = x; }
+                if let Some(arr) = opt_arr(o, "bands", "dynamicEq", &mut seen)? {
+                    let mut bands = Vec::with_capacity(arr.len());
+                    for (i, item) in arr.iter().enumerate() {
+                        let bo = item
+                            .as_object()
+                            .ok_or(format!("dynamicEq.bands[{i}] 必须是 JSON 对象"))?;
+                        let mut bseen = HashSet::new();
+                        let enabled = opt_bool(bo, "enabled", "dynamicEq.bands", &mut bseen)?.unwrap_or(true);
+                        // 缺省/null = 保持该带当前/默认静态偏移（TS targetGainDb 可选）。
+                        let target_gain_db = opt_num(bo, "targetGainDb", "dynamicEq.bands", &mut bseen)?;
+                        collect_unknown(bo, &bseen, "dynamicEq.bands", &mut warnings);
+                        bands.push(DynamicEqBandSpec { enabled, target_gain_db });
+                    }
+                    p.dynamic_eq.bands = bands;
+                }
+                collect_unknown(o, &seen, "dynamicEq", &mut warnings);
+            }
+            "modMatrix" => {
+                let o = v.as_object().ok_or("modMatrix 必须是 JSON 对象")?;
+                let mut seen = HashSet::new();
+                if let Some(arr) = opt_arr(o, "routes", "modMatrix", &mut seen)? {
+                    let mut routes = Vec::with_capacity(arr.len());
+                    for (i, item) in arr.iter().enumerate() {
+                        let ro = item
+                            .as_object()
+                            .ok_or(format!("modMatrix.routes[{i}] 必须是 JSON 对象"))?;
+                        let mut rseen = HashSet::new();
+                        let source = opt_str(ro, "source", "modMatrix.routes", &mut rseen)?.unwrap_or_else(|| "lfo".into());
+                        let target = opt_str(ro, "target", "modMatrix.routes", &mut rseen)?.unwrap_or_else(|| "masterGain".into());
+                        let amount = opt_num(ro, "amount", "modMatrix.routes", &mut rseen)?.unwrap_or(0.0);
+                        let offset = opt_num(ro, "offset", "modMatrix.routes", &mut rseen)?.unwrap_or(0.0);
+                        collect_unknown(ro, &rseen, "modMatrix.routes", &mut warnings);
+                        routes.push(ModMatrixRouteSpec { source, target, amount, offset });
+                    }
+                    p.mod_matrix.routes = routes;
+                }
+                if let Some(lo) = opt_obj(o, "lfo", "modMatrix", &mut seen)? {
+                    let mut lseen = HashSet::new();
+                    if let Some(x) = opt_str(lo, "shape", "modMatrix.lfo", &mut lseen)? { p.mod_matrix.lfo.shape = x; }
+                    if let Some(x) = opt_num(lo, "rateHz", "modMatrix.lfo", &mut lseen)? { p.mod_matrix.lfo.rate_hz = x; }
+                    if let Some(x) = opt_num(lo, "depth", "modMatrix.lfo", &mut lseen)? { p.mod_matrix.lfo.depth = x; }
+                    collect_unknown(lo, &lseen, "modMatrix.lfo", &mut warnings);
+                }
+                if let Some(eo) = opt_obj(o, "envelope", "modMatrix", &mut seen)? {
+                    let mut eseen = HashSet::new();
+                    if let Some(x) = opt_num(eo, "attackMs", "modMatrix.envelope", &mut eseen)? { p.mod_matrix.envelope.attack_ms = x; }
+                    if let Some(x) = opt_num(eo, "releaseMs", "modMatrix.envelope", &mut eseen)? { p.mod_matrix.envelope.release_ms = x; }
+                    if let Some(x) = opt_num(eo, "amount", "modMatrix.envelope", &mut eseen)? { p.mod_matrix.envelope.amount = x; }
+                    collect_unknown(eo, &eseen, "modMatrix.envelope", &mut warnings);
+                }
+                collect_unknown(o, &seen, "modMatrix", &mut warnings);
             }
             "limiter" => {
                 let o = v.as_object().ok_or("limiter 必须是 JSON 对象")?;
@@ -181,6 +639,14 @@ pub fn parse_pilot_params(value: &Value) -> Result<(PilotParams, Vec<String>), S
     }
     warnings.sort(); // 字典序升序（确定性输出）
     Ok((p, warnings))
+}
+
+/// IR 配方 seed：0..=u32::MAX 的整数（对齐 parity 的 to_uint32 值域）。
+fn seed_to_u32(v: f64) -> Result<u32, String> {
+    if !v.is_finite() || v < 0.0 || v.fract() != 0.0 || v > u32::MAX as f64 {
+        return Err("convolver.irRecipe.seed 必须为 0..=4294967295 的整数".to_string());
+    }
+    Ok(v as u32)
 }
 
 /// 把对象中未出现在 seen 集合里的子键记为 "顶层键.子键" warnings。
@@ -228,7 +694,32 @@ fn opt_str<'a>(o: &Map<String, Value>, key: &'a str, top: &str, seen: &mut HashS
     }
 }
 
+/// 可选子对象：存在且为对象 → 记键并返回借用；缺失/null → None；其他类型 → 结构违规。
+fn opt_obj<'a>(o: &'a Map<String, Value>, key: &'a str, top: &str, seen: &mut HashSet<&'a str>) -> Result<Option<&'a Map<String, Value>>, String> {
+    match o.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Object(m)) => {
+            seen.insert(key);
+            Ok(Some(m))
+        }
+        Some(_) => Err(format!("{}.{} 必须是 JSON 对象", top, key)),
+    }
+}
+
+/// 可选数组：存在且为数组 → 记键并返回借用；缺失/null → None；其他类型 → 结构违规。
+fn opt_arr<'a>(o: &'a Map<String, Value>, key: &'a str, top: &str, seen: &mut HashSet<&'a str>) -> Result<Option<&'a Vec<Value>>, String> {
+    match o.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Array(a)) => {
+            seen.insert(key);
+            Ok(Some(a))
+        }
+        Some(_) => Err(format!("{}.{} 必须是数组", top, key)),
+    }
+}
+
 #[cfg(test)]
+#[allow(non_snake_case)] // 测试名引用协议键原文（eqChain/irRecipe 等 camelCase）
 mod tests {
     use super::*;
 
@@ -241,6 +732,18 @@ mod tests {
         assert_eq!(p.reverb_simple.reverb_type, "hall");
         assert_eq!(p.limiter.threshold_db, -1.0);
         assert!(p.limiter.true_peak);
+        // 新增键缺省形态全部为直通/关闭。
+        assert_eq!(p.reverb_route, ReverbRouteKind::Simple);
+        assert!(!p.deesser.enabled);
+        assert!(!p.dynamic_eq.enabled);
+        assert!(p.mod_matrix.routes.is_empty());
+        assert!(p.convolver.ir_recipe.is_none());
+        // eqChain 缺省 = 级不装配（逐位直通锚，见字段文档）。
+        assert!(p.eq_chain.is_none());
+        assert_eq!(p.loudness_comp.mode, "custom");
+        assert!(p.loudness_comp.bands.is_empty());
+        assert!(!p.mod_effects.delay.enabled);
+        assert!(!p.mod_effects.tremolo.enabled);
     }
 
     #[test]
@@ -267,6 +770,17 @@ mod tests {
         let (p, w) = parse_pilot_params(&v).unwrap();
         assert!(w.is_empty());
         assert_eq!(p.reverb_simple.reverb_type, "cathedral"); // 原样下发，clamp/回退归模块
+        // reverbRoute 枚举外：同样回退缺省路且无 warnings。
+        let v = serde_json::json!({"reverbRoute": "cavern"});
+        let (p, w) = parse_pilot_params(&v).unwrap();
+        assert!(w.is_empty());
+        assert_eq!(p.reverb_route, ReverbRouteKind::Simple);
+        let v = serde_json::json!({"reverbRoute": "fdn"});
+        let (p, _) = parse_pilot_params(&v).unwrap();
+        assert_eq!(p.reverb_route, ReverbRouteKind::Fdn);
+        let v = serde_json::json!({"reverbRoute": "off"});
+        let (p, _) = parse_pilot_params(&v).unwrap();
+        assert_eq!(p.reverb_route, ReverbRouteKind::Off);
     }
 
     #[test]
@@ -275,6 +789,15 @@ mod tests {
         assert!(parse_pilot_params(&v).is_err());
         let v = serde_json::json!({"biquad": {"f0": "x"}});
         assert!(parse_pilot_params(&v).is_err());
+        // 新增键同款纪律
+        assert!(parse_pilot_params(&serde_json::json!({"reverbRoute": 3})).is_err());
+        assert!(parse_pilot_params(&serde_json::json!({"dynamicEq": {"strength": "x"}})).is_err());
+        assert!(parse_pilot_params(&serde_json::json!({"deesser": {"enabled": 1}})).is_err());
+        assert!(parse_pilot_params(&serde_json::json!({"eqChain": {"bands": "x"}})).is_err());
+        assert!(parse_pilot_params(&serde_json::json!({"eqChain": {"bands": [42]}})).is_err());
+        assert!(parse_pilot_params(&serde_json::json!({"modEffects": {"delay": "x"}})).is_err());
+        assert!(parse_pilot_params(&serde_json::json!({"convolver": {"mix": true}})).is_err());
+        assert!(parse_pilot_params(&serde_json::json!({"modMatrix": {"routes": {}}})).is_err());
     }
 
     #[test]
@@ -290,5 +813,164 @@ mod tests {
     fn 非对象整体报错() {
         assert!(parse_pilot_params(&serde_json::json!(42)).is_err());
         assert!(parse_pilot_params(&serde_json::json!("x")).is_err());
+    }
+
+    #[test]
+    fn eqChain_段参数与开关解析_未知子键入警告() {
+        let v = serde_json::json!({
+            "eqChain": {
+                "bands": [
+                    {"frequency": 100, "gain": 3.5, "q": 0.9, "mystery": 1},
+                    {"frequency": 8000, "gain": -2, "q": 2.0}
+                ],
+                "bandCount": 6,
+                "qCompensation": false,
+                "extra": 1
+            }
+        });
+        let (p, w) = parse_pilot_params(&v).unwrap();
+        let eq = p.eq_chain.as_ref().unwrap();
+        assert_eq!(eq.bands.len(), 2);
+        assert_eq!((eq.bands[0].frequency, eq.bands[0].gain, eq.bands[0].q), (100.0, 3.5, 0.9));
+        assert_eq!(eq.band_count, 6.0);
+        assert!(!eq.q_compensation);
+        assert_eq!(w, vec!["eqChain.bands.mystery".to_string(), "eqChain.extra".to_string()]);
+        // bands 缺省：整段回落 TS createDefaultParams().eq（10 段 0 增益）。
+        let (p, _) = parse_pilot_params(&serde_json::json!({"eqChain": {}})).unwrap();
+        let eq = p.eq_chain.as_ref().unwrap();
+        assert_eq!(eq.bands.len(), 10);
+        assert_eq!(eq.band_count, 10.0);
+        assert!(eq.q_compensation);
+        assert!(eq.bands.iter().all(|b| b.gain == 0.0));
+    }
+
+    #[test]
+    fn modEffects_五子对象解析_嵌套未知子键警告() {
+        let v = serde_json::json!({
+            "modEffects": {
+                "delay": {"enabled": true, "delayMs": 120},
+                "chorus": {"enabled": true, "rateHz": 2, "depthMs": 5, "mix": 0.6},
+                "flanger": {"enabled": true, "rateHz": 0.3, "depthMs": 1, "feedback": 0.2, "mix": 0.4},
+                "phaser": {"enabled": true, "rateHz": 0.8, "depth": 0.7, "feedback": 0.5, "mix": 1, "stages": 6},
+                "tremolo": {"enabled": true, "rateHz": 4, "depth": 0.8, "mix": 1, "wobble": 1}
+            }
+        });
+        let (p, w) = parse_pilot_params(&v).unwrap();
+        assert!(p.mod_effects.delay.enabled);
+        assert_eq!(p.mod_effects.delay.delay_ms, 120.0);
+        assert_eq!(p.mod_effects.delay.feedback, 0.3); // 缺省回落
+        assert!(p.mod_effects.chorus.enabled && p.mod_effects.flanger.enabled);
+        assert_eq!(p.mod_effects.phaser.stages, 6.0);
+        assert!(p.mod_effects.tremolo.enabled);
+        assert_eq!(w, vec!["modEffects.tremolo.wobble".to_string()]);
+    }
+
+    #[test]
+    fn convolver_irRecipe_两配方解析_kind枚举外与seed域违规拒绝() {
+        let v = serde_json::json!({"convolver": {"irRecipe": {"kind": "delta", "delay": 0}, "mix": 0.4}});
+        let (p, w) = parse_pilot_params(&v).unwrap();
+        assert_eq!(p.convolver.ir_recipe, Some(IrRecipe::Delta { delay: 0.0 }));
+        assert_eq!(p.convolver.mix, 0.4);
+        assert!(w.is_empty());
+
+        let v = serde_json::json!({
+            "convolver": {"irRecipe": {"kind": "expNoise", "length": 8192, "seed": 424242, "decay": 4.0, "amp": 0.4}, "preDelayMs": 12}
+        });
+        let (p, w) = parse_pilot_params(&v).unwrap();
+        assert_eq!(
+            p.convolver.ir_recipe,
+            Some(IrRecipe::ExpNoise { length: 8192.0, seed: 424242, decay: 4.0, amp: 0.4 })
+        );
+        assert_eq!(p.convolver.pre_delay_ms, 12.0);
+        assert!(w.is_empty());
+
+        // kind 枚举外 → 结构违规（IR 配方无模块内回退形态）
+        assert!(parse_pilot_params(&serde_json::json!({"convolver": {"irRecipe": {"kind": "sine"}}})).is_err());
+        // seed 越域 → 结构违规
+        assert!(parse_pilot_params(&serde_json::json!({"convolver": {"irRecipe": {"kind": "expNoise", "seed": -1}}})).is_err());
+        assert!(parse_pilot_params(
+            &serde_json::json!({"convolver": {"irRecipe": {"kind": "expNoise", "seed": 4294967296.0}}})
+        )
+        .is_err());
+        // irRecipe 缺失保留 None；缺省子键回落
+        let (p, _) = parse_pilot_params(&serde_json::json!({"convolver": {}})).unwrap();
+        assert!(p.convolver.ir_recipe.is_none());
+        assert_eq!(p.convolver.mix, 0.3);
+    }
+
+    #[test]
+    fn dynamicEq_带数组解析_交叉频率由服务侧注入不暴露协议键() {
+        let v = serde_json::json!({
+            "dynamicEq": {
+                "enabled": true, "strength": 0.7, "thresholdDb": -30, "ratio": 3,
+                "attackMs": 10, "releaseMs": 300,
+                "bands": [
+                    {"enabled": true, "targetGainDb": 2},
+                    {"enabled": false},
+                    {"enabled": true}
+                ]
+            }
+        });
+        let (p, w) = parse_pilot_params(&v).unwrap();
+        assert!(p.dynamic_eq.enabled);
+        assert_eq!(p.dynamic_eq.strength, 0.7);
+        assert_eq!(p.dynamic_eq.bands.len(), 3);
+        assert_eq!(p.dynamic_eq.bands[0].target_gain_db, Some(2.0));
+        // 缺省（省略 targetGainDb）= 保持该带当前/默认静态偏移（TS 可选语义；
+        // 显式 null 按既有全库约定视同未提供并产生未知子键警告，此处不展开）。
+        assert_eq!(p.dynamic_eq.bands[1].target_gain_db, None);
+        assert!(!p.dynamic_eq.bands[1].enabled, "显式 false 透传");
+        assert_eq!(p.dynamic_eq.bands[2].target_gain_db, None);
+        assert!(w.is_empty());
+    }
+
+    #[test]
+    fn loudnessComp_解析_custom空带缺省为直通形态() {
+        let (p, w) = parse_pilot_params(&serde_json::json!({"loudnessComp": {"mode": "auto", "volumePercent": 60}})).unwrap();
+        assert_eq!(p.loudness_comp.mode, "auto");
+        assert_eq!(p.loudness_comp.volume_percent, 60.0);
+        assert_eq!(p.loudness_comp.max_boost_db, 12.0, "缺省回落 TS 值");
+        assert!(w.is_empty());
+        // 显式 custom 曲线
+        let v = serde_json::json!({"loudnessComp": {"mode": "custom", "bands": [{"frequency": 100, "gain": 4}], "preset": "warm"}});
+        let (p, w) = parse_pilot_params(&v).unwrap();
+        assert_eq!(p.loudness_comp.bands.len(), 1);
+        assert_eq!(p.loudness_comp.bands[0].gain, 4.0);
+        assert_eq!(p.loudness_comp.preset, "warm");
+        assert!(w.is_empty());
+    }
+
+    #[test]
+    fn modMatrix_路由_lfo_envelope解析_offset缺省0() {
+        let v = serde_json::json!({
+            "modMatrix": {
+                "routes": [
+                    {"source": "lfo", "target": "masterGain", "amount": 0.4},
+                    {"source": "envelope", "target": "stereoWidth", "amount": 0.2, "offset": 0.1}
+                ],
+                "lfo": {"shape": "triangle", "rateHz": 2, "depth": 1},
+                "envelope": {"attackMs": 5, "releaseMs": 100, "amount": 0.8}
+            }
+        });
+        let (p, w) = parse_pilot_params(&v).unwrap();
+        assert_eq!(p.mod_matrix.routes.len(), 2);
+        assert_eq!(p.mod_matrix.routes[0].offset, 0.0, "TS offset ?? 0");
+        assert_eq!(p.mod_matrix.routes[1].offset, 0.1);
+        assert_eq!(p.mod_matrix.lfo.shape, "triangle");
+        assert_eq!(p.mod_matrix.envelope.amount, 0.8);
+        assert!(w.is_empty());
+    }
+
+    #[test]
+    fn fdnReverb_解析_lines保留原值校验归模块() {
+        let v = serde_json::json!({"fdnReverb": {"type": "plate", "lines": 16, "wet": 0.4, "dry": 0.6}});
+        let (p, w) = parse_pilot_params(&v).unwrap();
+        assert_eq!(p.fdn_reverb.reverb_type, "plate");
+        assert_eq!(p.fdn_reverb.lines, Some(16.0));
+        assert_eq!(p.fdn_reverb.wet, 0.4);
+        assert!(w.is_empty());
+        // lines 缺省 = None（模块 normalizeLines 回退 8）
+        let (p, _) = parse_pilot_params(&serde_json::json!({"fdnReverb": {}})).unwrap();
+        assert_eq!(p.fdn_reverb.lines, None);
     }
 }
