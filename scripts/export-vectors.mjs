@@ -7,7 +7,9 @@
  * 职责：
  *  - 以 TS 支线（src/）为行为事实标准，为 biquad / limiter / reverb-simple /
  *    compressor / bass-enhancer / mid-side / eq-chain / fdn-reverb / deesser /
- *    loudness-comp / dynamic-eq / mod-effects 十二个模块
+ *    loudness-comp / dynamic-eq / mod-effects 十二个流式立体声模块，以及两个特殊
+ *    驱动形态的模块——fft（非流式变换，(L,R)=(Re,Im) 平面，specs/dsp/fft.md §三）与
+ *    convolver（IR 配方驱动，specs/dsp/convolver.md §4.2）——
  *    导出确定性对拍向量到 specs/dsp/vectors/<module>.<case>.json 与同名 .f32；
  *  - 向量格式契约（两支线共享，见 specs/ 目录规划文档）：
  *      JSON：schemaVersion=1 / module / case / sampleRate / blockSize / channels=2 /
@@ -61,6 +63,9 @@ const MODULE_SOURCES = [
   { id: 'loudness-comp', file: 'LoudnessComp.ts' },
   { id: 'dynamic-eq', file: 'DynamicEq.ts' },
   { id: 'mod-effects', file: 'ModEffects.ts' },
+  // 特殊驱动形态（非 StereoProcessor 流式模块，见各自规格的驱动模型章节）：
+  { id: 'fft', file: 'fft.ts' },               // 非流式变换：(L,R)=(Re,Im) 平面（specs/dsp/fft.md §三）
+  { id: 'convolver', file: 'Convolver.ts' },   // IR 配方驱动（specs/dsp/convolver.md §4.2）
 ]
 
 /**
@@ -167,6 +172,40 @@ function bandNoise(frames, sampleRate, ampPerComp, seed) {
     comps.push({ freqHz: 4000 + k * 500, amp: ampPerComp, phaseRad: (s / 4294967296) * 2 * Math.PI })
   }
   return sineSum(frames, sampleRate, comps)
+}
+
+/**
+ * IR 配方 → 确定性冲激响应（specs/dsp/convolver.md §4.2，两支线逐字一致）。
+ * 双精度求值、存入 Float32Array 时一次量化为 f32；LCG 与 lcgNoise 同族（禁 Math.random）。
+ * delta    ：length = delay+1，ir[delay] = 1，其余全 0（单点冲激，逐位锚点用）。
+ * expNoise ：ir[i] = ((u*2-1)*amp) * exp((-decay*i)/(length-1))，u 为固定种子 LCG
+ *            推进后的状态（先推进再取值）；表达式结合序逐字固化，不得重排。
+ */
+function buildIrRecipe(recipe) {
+  if (!recipe || typeof recipe !== 'object') throw new Error('convolver 向量缺少 ir 配方')
+  if (recipe.kind === 'delta') {
+    const delay = Math.round(recipe.delay)
+    if (!(delay >= 0)) throw new Error('delta IR 配方 delay 非法')
+    const ir = new Float32Array(delay + 1)
+    ir[delay] = 1
+    return ir
+  }
+  if (recipe.kind === 'expNoise') {
+    const length = Math.round(recipe.length)
+    const seed = recipe.seed >>> 0
+    const decay = recipe.decay
+    const amp = recipe.amp
+    if (!(length >= 2) || !(decay > 0)) throw new Error('expNoise IR 配方 length/decay 非法')
+    const ir = new Float32Array(length)
+    let s = seed
+    for (let i = 0; i < length; i++) {
+      s = (Math.imul(s, 1664525) + 1013904223) >>> 0
+      const u = s / 4294967296
+      ir[i] = ((u * 2 - 1) * amp) * Math.exp((-decay * i) / (length - 1))
+    }
+    return ir
+  }
+  throw new Error('未知 IR 配方 kind：' + recipe.kind)
 }
 
 // ==================== case 定义（冻结基线的唯一来源） ====================
@@ -945,6 +984,133 @@ const CASES = [
     ]),
     inputR: (n) => lcgNoise(n, 86004, 0.5),
   },
+
+  // ---------- fft（非流式变换特例，specs/dsp/fft.md §三） ----------
+  // 驱动模型：(L,R) = 复数平面 (Re,Im)；blockSize = frames = N = fftSize（单块）；
+  // 每块独立做原位复 FFT（无跨块状态），输出 = 变换后的两个平面。
+  // 四条 case 覆盖 4 个块长，log2(N) 奇偶两类蝶形调度各两次（基-4 主路径 / 基-2 尾路径）。
+  {
+    module: 'fft',
+    caseId: 'case1',
+    sampleRate: 48000,
+    blockSize: 4096,
+    params: { inverse: false },
+    notes: '脉冲平坦谱逐位锚点（GWT-FFT-01）：Re 平面=δ 脉冲（首样本 1）、Im 平面全零；N=4096（log2=12 偶数，纯基-4 蝶形路径）。期望输出：Re 谱逐位全 1、Im 谱逐位全 +0——蝶形只触碰精确零与 1 的加减，任何正确 DFT 实现均应逐位一致（最强跨实现精度锚点）。正变换不缩放（X[0]=Σx 尺度）。',
+    inputL: (n) => {
+      const x = silence(n)
+      x[0] = 1
+      return x
+    },
+    inputR: (n) => silence(n),
+  },
+  {
+    module: 'fft',
+    caseId: 'case2',
+    sampleRate: 48000,
+    blockSize: 2048,
+    params: { inverse: false },
+    notes: '整 bin 单频正弦 → 共轭对称双谱线（GWT-FFT-02）：Re 平面=单位幅度正弦、频率恰为整数 bin k0（f=k0·fs/N）；N=2048（log2=11 奇数，基-4 + 基-2 尾路径）。期望 Im 谱在 k0 与 N−k0 出现 ∓N/2·amp 谱线（∓1024，实证逐位精确）、Re 谱该两 bin 近零；其余 bin 的微小取值是逐级 f32 舍入的实现噪声（冻结值即 TS 噪声实现，移植须算术调度等价，specs/dsp/fft.md §四）。无窗变换：不整 bin 时呈矩形窗泄漏（case3/case4 覆盖）。',
+    inputL: (n, fs) => sine(n, fs, (137 * fs) / n, 1.0),
+    inputR: (n) => silence(n),
+  },
+  {
+    module: 'fft',
+    caseId: 'case3',
+    sampleRate: 48000,
+    blockSize: 1024,
+    params: { inverse: false },
+    notes: '双平面复输入（GWT-FFT-03）：Re 平面=440Hz/0.5 + 2900Hz/0.3(π/6)，Im 平面=700Hz/0.4(π/4) + 1800Hz/0.35(π/2)——两平面都有能量、频点互不相同且均非整数 bin（全谱泄漏形态）。N=1024（log2=10 偶数，纯基-4 路径）。复输入不具实信号共轭对称性，输出 Re/Im 两谱均有全谱能量；驱动器若把 Im 平面置零或拆成两次实变换必然超差。',
+    inputL: (n, fs) => sineSum(n, fs, [
+      { freqHz: 440, amp: 0.5, phaseRad: 0 },
+      { freqHz: 2900, amp: 0.3, phaseRad: Math.PI / 6 },
+    ]),
+    inputR: (n, fs) => sineSum(n, fs, [
+      { freqHz: 700, amp: 0.4, phaseRad: Math.PI / 4 },
+      { freqHz: 1800, amp: 0.35, phaseRad: Math.PI / 2 },
+    ]),
+  },
+  {
+    module: 'fft',
+    caseId: 'case4',
+    sampleRate: 48000,
+    blockSize: 8192,
+    params: { inverse: false },
+    notes: '直流分量 + 非整周期泄漏（GWT-FFT-04）：Re 平面=0.4 直流常量 + 777Hz/0.3 正弦（777Hz 非整数 bin，矩形窗泄漏裙摆连续分布——本变换不加窗）；Im 平面全零。N=8192（log2=13 奇数，基-2 尾路径的最大块长）。期望 X[0] 承载全部直流（解析尺度 DC·N），其余呈泄漏裙摆；全程无 NaN、有界。',
+    inputL: (n, fs) => {
+      const x = sine(n, fs, 777, 0.3)
+      for (let i = 0; i < n; i++) x[i] = 0.4 + x[i]
+      return x
+    },
+    inputR: (n) => silence(n),
+  },
+
+  // ---------- convolver（IR 配方驱动，specs/dsp/convolver.md §4.2） ----------
+  // 驱动顺序 = 引擎接线顺序：new Convolver(fs, opts) → loadIR(buildIrRecipe) →
+  // setMix → setPreDelayMs → 逐块 processStereo。
+  {
+    module: 'convolver',
+    caseId: 'case1',
+    sampleRate: 48000,
+    blockSize: 512,
+    params: { partitionSize: 512, longPartitionSize: 4096, shortRegionMs: 100, dePeriodize: true, mix: 1, preDelayMs: 0, ir: { kind: 'delta', delay: 0 } },
+    notes: 'δ IR 延迟直通锚点（GWT-CV-01）：IR=单点冲激（delay=0，长度 1）→ 均匀单短分区（IR 短于短区段，Ps 收敛为 1、Pl=0）。mix=1 纯湿：首 Ls=512 个输出样本逐位 +0（湿路放行控制流锚点），其后湿路=输入延迟 Ls 的直通（偏差为分区卷积 FFT 往返舍入 1e-7 量级——输入带直流偏置使输出幅值远离零，非逐位一致语义以冻结向量界定）。dePeriodize=true 对 δ IR 为精确无操作（−60dB 后缀判定防误衰减，实证逐位一致）。getLatencySamples()=512，与 IR 长度解耦。帧数恰整除（12 块）。',
+    inputL: (n, fs) => {
+      const x = sine(n, fs, 220, 0.25)
+      for (let i = 0; i < n; i++) x[i] = 0.6 + x[i]
+      return x
+    },
+    inputR: (n, fs) => {
+      const x = sine(n, fs, 330, 0.2, Math.PI / 6)
+      for (let i = 0; i < n; i++) x[i] = 0.55 + x[i]
+      return x
+    },
+  },
+  {
+    module: 'convolver',
+    caseId: 'case2',
+    sampleRate: 48000,
+    blockSize: 384,
+    params: { partitionSize: 512, longPartitionSize: 4096, shortRegionMs: 100, dePeriodize: false, mix: 1, preDelayMs: 0, ir: { kind: 'expNoise', length: 6000, seed: 12345, decay: 12, amp: 0.5 } },
+    notes: 'expNoise 真实卷积尾 + 非均匀分区（GWT-CV-02）：IR=固定种子 LCG 指数衰减噪声（length=6000 超短区段 4800 → Ps=10、longStart=5120、Pl=1 长分区参与，每 k=8 个短块做一次 Nl=8192 长 FFT），dePeriodize=false（配方 IR 原样载入）、mix=1 纯湿。湿路=输入与 IR 的完整线性卷积延迟 Ls 对齐后的流式窗口（分区卷积数学等价线性卷积）；驱动器漏做长分区累加或错置写入偏移必然超差。左=三频正弦叠加，右=固定种子 LCG 噪声（宽频激励）。blockSize=384 非整除（末块 104 帧）。',
+    inputL: (n, fs) => sineSum(n, fs, [
+      { freqHz: 120, amp: 0.4, phaseRad: 0 },
+      { freqHz: 1900, amp: 0.25, phaseRad: Math.PI / 5 },
+      { freqHz: 7000, amp: 0.15, phaseRad: Math.PI / 3 },
+    ]),
+    inputR: (n) => lcgNoise(n, 99002, 0.5),
+  },
+  {
+    module: 'convolver',
+    caseId: 'case3',
+    sampleRate: 48000,
+    blockSize: 384,
+    params: { partitionSize: 512, longPartitionSize: 4096, shortRegionMs: 100, dePeriodize: true, mix: 1, preDelayMs: 0, ir: { kind: 'expNoise', length: 6000, seed: 12345, decay: 12, amp: 0.5 } },
+    notes: '与 case2 完全成对的去周期化开启对照（GWT-CV-03）：IR 配方、输入、块长全同，仅 dePeriodize=true——IR 尾部包络（−12 e-fold 衰减至 −104dB）跌破峰值 −60dB 触发尾部指数衰减（τ≈50ms），触发点之后尾段与 case2 显著可区分（实证差异样本近六成、最大相对差 1e-2 量级）；触发点之前逐样本一致。去周期化的包络窗（10ms RMS）、−60dB 后缀判定、τ 常数任何偏差都会造成可测差异。IR 长度不因去周期化改变（分区规划不变）。',
+    inputL: (n, fs) => sineSum(n, fs, [
+      { freqHz: 120, amp: 0.4, phaseRad: 0 },
+      { freqHz: 1900, amp: 0.25, phaseRad: Math.PI / 5 },
+      { freqHz: 7000, amp: 0.15, phaseRad: Math.PI / 3 },
+    ]),
+    inputR: (n) => lcgNoise(n, 99002, 0.5),
+  },
+  {
+    module: 'convolver',
+    caseId: 'case4',
+    sampleRate: 48000,
+    blockSize: 700,
+    params: { partitionSize: 256, longPartitionSize: 2048, shortRegionMs: 100, dePeriodize: false, mix: 0.8, preDelayMs: 0, ir: { kind: 'expNoise', length: 1024, seed: 777, decay: 5, amp: 0.5 } },
+    notes: '非整除块长 + mix 干湿混合 + 非默认分区（GWT-CV-04）：partitionSize=256（非默认；湿路延迟 Ls=256 随之变化）、longPartitionSize=2048（k=8，但 IR 短于短区段 → 均匀 4 短分区，Pl=0）、mix=0.8 → out=(1−mix)·dry+mix·wet（dryGain=1−mix 的 f64 语义，干路不延迟）。blockSize=700 > Ls：单次调用生产多个湿块（逐样本放行 + 突发扩容语义），帧数非整除（末块 400 帧）——任意块长无丢块/无 NaN（GWT-CV-05：本模块输出与驱动 blockSize 无关，实证逐位一致）。短 expNoise IR（均匀多短分区）、dePeriodize=false。',
+    inputL: (n, fs) => {
+      const x = sine(n, fs, 220, 0.3)
+      for (let i = 0; i < n; i++) x[i] = 0.5 + x[i]
+      return x
+    },
+    inputR: (n, fs) => {
+      const x = sine(n, fs, 330, 0.25, Math.PI / 4)
+      for (let i = 0; i < n; i++) x[i] = 0.4 + x[i]
+      return x
+    },
+  },
 ]
 
 // ==================== 模块实例化与分块处理 ====================
@@ -1138,6 +1304,40 @@ function instantiateProcessor(modules, moduleId, sampleRate, params) {
         return [outL, outR]
       }
     }
+    case 'fft': {
+      // FFT 非流式变换特例（specs/dsp/fft.md §三）：输入 (L,R) = 复数平面 (Re,Im)，
+      // 每块独立做原位复 FFT（无跨块状态），输出 = 变换后的两个平面。
+      // 块长必须为 2 的幂；本批向量固定 blockSize = frames = N（单块驱动）。
+      if (!modules.fft || !modules.fft.fft) throw new Error('fft 模块加载失败')
+      const inverse = params.inverse === true
+      return (l, r) => {
+        const re = l.slice()
+        const im = r.slice()
+        modules.fft.fft(re, im, inverse)
+        return [re, im]
+      }
+    }
+    case 'convolver': {
+      if (!modules.convolver || !modules.convolver.Convolver) throw new Error('convolver 模块加载失败')
+      // 驱动顺序采用引擎接线顺序（HyperSoundEngine.ts 卷积混响阶段：构造(dePeriodize 选项)
+      // → loadIR → setMix → setPreDelayMs → 逐块 processStereo）。
+      // IR 由确定性配方生成（buildIrRecipe，specs/dsp/convolver.md §4.2）。
+      const cv = new modules.convolver.Convolver(sampleRate, {
+        partitionSize: params.partitionSize,
+        longPartitionSize: params.longPartitionSize,
+        shortRegionMs: params.shortRegionMs,
+        dePeriodize: params.dePeriodize,
+      })
+      cv.loadIR(buildIrRecipe(params.ir), 'vector-ir')
+      cv.setMix(params.mix)
+      cv.setPreDelayMs(params.preDelayMs)
+      return (l, r) => {
+        const outL = l.slice()
+        const outR = r.slice()
+        cv.processStereo(outL, outR)
+        return [outL, outR]
+      }
+    }
     default:
       throw new Error('未知模块 id：' + moduleId)
   }
@@ -1301,6 +1501,16 @@ const FRAME_COUNTS = {
   'mod-effects.case2': 6000,
   'mod-effects.case3': 12000,
   'mod-effects.case4': 6000,
+  // fft：frames = blockSize = N = fftSize（2 的幂，单块驱动，specs/dsp/fft.md §三）；
+  // 四条 case 覆盖 log2(N) 奇偶两类蝶形调度。
+  'fft.case1': 4096,
+  'fft.case2': 2048,
+  'fft.case3': 1024,
+  'fft.case4': 8192,
+  'convolver.case1': 6144,
+  'convolver.case2': 9800,
+  'convolver.case3': 9800,
+  'convolver.case4': 6000,
 }
 
 main().catch((err) => {

@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- **Phase 3 批次五：FFT/Convolver 两模块双绿（规划书 §五）**：2 份规格（fft：非流式变换驱动模型——(L,R)=(Re,Im) 平面单块原位变换，向量覆盖纯基-4 与基-2 尾两条调度路径；convolver：非均匀分区/滑动窗口/冻结窗口尾语义）+ 8 组冻结向量 + hse-core 移植（radix-4 逐级 f32 落点、V8 fdlibm ts_trig 位级复刻、IR 配方 LCG 逐字重建、twiddle 角构造性上界 <3π/2 的边界证明）；对拍门禁 47→**55 case 全 PASS、maxAbsDiff=0.000e0**（Convolver 输出与驱动块长无关六种切分逐位实证）。已知边界记录：3π/2 精确值的 cos 位型未复刻（运行时不可达，#[ignore] 待办测试）。
 - **Phase 3 批次四：DynamicEq/ModEffects 两模块双绿（规划书 §五）**：2 份规格（GWT-DY-01..11 / GWT-ME-01..12）+ 8 组冻结向量 + hse-core 移植（全通交叉树 sumsq 不跨调用累积、五效果引擎顺序级联 + enabled 链路门控、chorus/flanger LFO 整块步进、phaser 并级全通 f32 状态落点）；对拍门禁 39→**47 case 全 PASS、maxAbsDiff=0.000e0**。规格实证：DynamicEq 输出依赖驱动分块（任意多余调用边界提前触发控制更新）、chorus/flanger 输出依赖 blockSize、Phaser stages 7≡8 逐位一致（并级非级联）、tremolo rateHz 上界 30 与其他效果 20 不同。
 - **Phase 3 批次三：FdnReverb/Deesser/LoudnessComp 三模块双绿（规划书 §五）**：3 份规格（GWT，含实证行为事实：FdnReverb width=0 为 1 ulp 级一致而非逐位、Deesser 内部 Biquad 恒 48000 设计率、LoudnessComp 输出依赖块长且 reset 为钉扎语义、Deesser 阈下为 LR-4 全通重构幅度不变）+ 12 组冻结向量 + hse-core 移植（FDN Householder 混合/素数表、LR-4 交叉、BS.1770 之外的等响度 shelf/peaking 设计）；对拍门禁 27→**39 case 全 PASS、maxAbsDiff=0.000e0**。LufsMeter 显式推迟（仪表类标量读数需向量 schema 演进）。
 - **Phase 3 批次二：EqChain 双绿（规划书 §五）**：规格（12 GWT）+ 4 组冻结向量 + hse-core 移植（含级联 Q 补偿 Gauss-Seidel 精确语义：0.8 阻尼/至多 5 轮/单轮 maxErrDb<0.05 提前终止）；对拍门禁 23→**27 case 全 PASS、maxAbsDiff=0.000e0**。规格实证并固化关键行为事实：`processStereo` 立体声共享滤波器状态 → 输出依赖 blockSize（分块不变性仅对单声道 processBlock 成立，GWT-EQ-07/08）；gain=0 全直通为逐位锚点。

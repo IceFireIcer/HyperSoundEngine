@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "module": "fft",
+  "case": "case1",
+  "sampleRate": 48000,
+  "blockSize": 4096,
+  "channels": 2,
+  "frames": 4096,
+  "params": {
+    "inverse": false
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "脉冲平坦谱逐位锚点（GWT-FFT-01）：Re 平面=δ 脉冲（首样本 1）、Im 平面全零；N=4096（log2=12 偶数，纯基-4 蝶形路径）。期望输出：Re 谱逐位全 1、Im 谱逐位全 +0——蝶形只触碰精确零与 1 的加减，任何正确 DFT 实现均应逐位一致（最强跨实现精度锚点）。正变换不缩放（X[0]=Σx 尺度）。"
+}

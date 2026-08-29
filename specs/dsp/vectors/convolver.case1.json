@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "module": "convolver",
+  "case": "case1",
+  "sampleRate": 48000,
+  "blockSize": 512,
+  "channels": 2,
+  "frames": 6144,
+  "params": {
+    "partitionSize": 512,
+    "longPartitionSize": 4096,
+    "shortRegionMs": 100,
+    "dePeriodize": true,
+    "mix": 1,
+    "preDelayMs": 0,
+    "ir": {
+      "kind": "delta",
+      "delay": 0
+    }
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "δ IR 延迟直通锚点（GWT-CV-01）：IR=单点冲激（delay=0，长度 1）→ 均匀单短分区（IR 短于短区段，Ps 收敛为 1、Pl=0）。mix=1 纯湿：首 Ls=512 个输出样本逐位 +0（湿路放行控制流锚点），其后湿路=输入延迟 Ls 的直通（偏差为分区卷积 FFT 往返舍入 1e-7 量级——输入带直流偏置使输出幅值远离零，非逐位一致语义以冻结向量界定）。dePeriodize=true 对 δ IR 为精确无操作（−60dB 后缀判定防误衰减，实证逐位一致）。getLatencySamples()=512，与 IR 长度解耦。帧数恰整除（12 块）。"
+}

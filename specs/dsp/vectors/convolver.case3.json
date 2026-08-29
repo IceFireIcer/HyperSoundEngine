@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "module": "convolver",
+  "case": "case3",
+  "sampleRate": 48000,
+  "blockSize": 384,
+  "channels": 2,
+  "frames": 9800,
+  "params": {
+    "partitionSize": 512,
+    "longPartitionSize": 4096,
+    "shortRegionMs": 100,
+    "dePeriodize": true,
+    "mix": 1,
+    "preDelayMs": 0,
+    "ir": {
+      "kind": "expNoise",
+      "length": 6000,
+      "seed": 12345,
+      "decay": 12,
+      "amp": 0.5
+    }
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "与 case2 完全成对的去周期化开启对照（GWT-CV-03）：IR 配方、输入、块长全同，仅 dePeriodize=true——IR 尾部包络（−12 e-fold 衰减至 −104dB）跌破峰值 −60dB 触发尾部指数衰减（τ≈50ms），触发点之后尾段与 case2 显著可区分（实证差异样本近六成、最大相对差 1e-2 量级）；触发点之前逐样本一致。去周期化的包络窗（10ms RMS）、−60dB 后缀判定、τ 常数任何偏差都会造成可测差异。IR 长度不因去周期化改变（分区规划不变）。"
+}

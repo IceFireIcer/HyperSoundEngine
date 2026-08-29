@@ -26,13 +26,15 @@ import { Deesser } from '../src/dsp/Deesser'
 import { LoudnessComp, type LoudnessCompParams } from '../src/dsp/LoudnessComp'
 import { DynamicEq, type DynamicEqParams } from '../src/dsp/DynamicEq'
 import { DelayEffect, ChorusEffect, FlangerEffect, PhaserEffect, TremoloEffect } from '../src/dsp/ModEffects'
+import { Convolver, type ConvolverOptions } from '../src/dsp/Convolver'
+import { fft } from '../src/dsp/fft'
 import type { LimiterSettings, CompressorSettings, BassEnhancerSettings, DeesserSettings, ModEffectsSettings } from '../src/types'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const VECTOR_DIR = resolve(fileURLToPath(import.meta.url), '..', '..', 'specs', 'dsp', 'vectors')
-const SUPPORTED_MODULES = ['biquad', 'limiter', 'reverb-simple', 'compressor', 'bass-enhancer', 'mid-side', 'eq-chain', 'fdn-reverb', 'deesser', 'loudness-comp', 'dynamic-eq', 'mod-effects'] as const
+const SUPPORTED_MODULES = ['biquad', 'limiter', 'reverb-simple', 'compressor', 'bass-enhancer', 'mid-side', 'eq-chain', 'fdn-reverb', 'deesser', 'loudness-comp', 'dynamic-eq', 'mod-effects', 'fft', 'convolver'] as const
 
 /** 向量 JSON 元数据（与 specs/dsp/vectors 契约一致） */
 interface VectorMeta {
@@ -118,6 +120,58 @@ function readSegments(bytes: Uint8Array, frames: number): {
     wantL: all.slice(frames * 2, frames * 3),
     wantR: all.slice(frames * 3, frames * 4),
   }
+}
+
+/** IR 配方（specs/dsp/convolver.md §4.2；与导出脚本 buildIrRecipe 逐字一致） */
+interface IrRecipe {
+  kind: 'delta' | 'expNoise'
+  delay?: number
+  length?: number
+  seed?: number
+  decay?: number
+  amp?: number
+}
+
+/** convolver 向量 params 形状（specs/dsp/convolver.md §三） */
+interface ConvolverVectorParams {
+  partitionSize: number
+  longPartitionSize: number
+  shortRegionMs: number
+  dePeriodize: boolean
+  mix: number
+  preDelayMs: number
+  ir: IrRecipe
+}
+
+/**
+ * IR 配方 → 确定性冲激响应（specs/dsp/convolver.md §4.2，两支线逐字一致）。
+ * 双精度求值、存入 Float32Array 时一次量化为 f32；LCG 与导出工具 lcgNoise 同族。
+ * 表达式结合序逐字固化（f64 乘法不可交换结合），不得重排。
+ */
+function buildIrRecipe(recipe: IrRecipe): Float32Array {
+  if (recipe.kind === 'delta') {
+    const delay = Math.round(recipe.delay as number)
+    if (!(delay >= 0)) throw new Error('delta IR 配方 delay 非法')
+    const ir = new Float32Array(delay + 1)
+    ir[delay] = 1
+    return ir
+  }
+  if (recipe.kind === 'expNoise') {
+    const length = Math.round(recipe.length as number)
+    const seed = (recipe.seed as number) >>> 0
+    const decay = recipe.decay as number
+    const amp = recipe.amp as number
+    if (!(length >= 2) || !(decay > 0)) throw new Error('expNoise IR 配方 length/decay 非法')
+    const ir = new Float32Array(length)
+    let s = seed
+    for (let i = 0; i < length; i++) {
+      s = (Math.imul(s, 1664525) + 1013904223) >>> 0
+      const u = s / 4294967296
+      ir[i] = ((u * 2 - 1) * amp) * Math.exp((-decay * i) / (length - 1))
+    }
+    return ir
+  }
+  throw new Error('未知 IR 配方 kind：' + recipe.kind)
 }
 
 /** 按 module id 用 TS 支线实现构造分块处理器（状态在闭包实例上跨块保持） */
@@ -301,6 +355,40 @@ function instantiate(
         for (const stage of chain) {
           if (stage.enabled) stage.run(outL, outR)
         }
+        return [outL, outR]
+      }
+    }
+    case 'fft': {
+      // FFT 非流式变换特例（specs/dsp/fft.md §三）：输入 (L,R) = 复数平面 (Re,Im)，
+      // 每块独立做原位复 FFT（无跨块状态），输出 = 变换后的两个平面。
+      // 与导出脚本同构；块长必须为 2 的幂，本批向量固定 blockSize = frames = N（单块驱动）。
+      const inverse = params.inverse === true
+      return (l, r) => {
+        const re = l.slice()
+        const im = r.slice()
+        fft(re, im, inverse)
+        return [re, im]
+      }
+    }
+    case 'convolver': {
+      // 驱动顺序采用引擎接线顺序（HyperSoundEngine.ts 卷积混响阶段：构造(dePeriodize 选项)
+      // → loadIR → setMix → setPreDelayMs → 逐块 processStereo）。
+      // IR 配方与导出脚本逐字一致（specs/dsp/convolver.md §4.2）。
+      const p = params as unknown as ConvolverVectorParams
+      const opts: ConvolverOptions = {
+        partitionSize: p.partitionSize,
+        longPartitionSize: p.longPartitionSize,
+        shortRegionMs: p.shortRegionMs,
+        dePeriodize: p.dePeriodize,
+      }
+      const cv = new Convolver(sampleRate, opts)
+      cv.loadIR(buildIrRecipe(p.ir), 'vector-ir')
+      cv.setMix(p.mix)
+      cv.setPreDelayMs(p.preDelayMs)
+      return (l, r) => {
+        const outL = l.slice()
+        const outR = r.slice()
+        cv.processStereo(outL, outR)
         return [outL, outR]
       }
     }

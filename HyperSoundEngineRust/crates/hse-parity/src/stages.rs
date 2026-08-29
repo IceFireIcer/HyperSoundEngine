@@ -13,10 +13,12 @@ use crate::vector::VectorCase;
 use hse_core::bass_enhancer::{BassEnhancerSettings, BassEnhancerStage};
 use hse_core::biquad::BiquadStage;
 use hse_core::compressor::{CompressorSettings, CompressorStage};
+use hse_core::convolver::{build_ir_recipe, ConvolverOptions, ConvolverStage, IrRecipe};
 use hse_core::deesser::{DeesserSettings, DeesserStage};
 use hse_core::dynamic_eq::{DynamicEqBandParam, DynamicEqParams, DynamicEqStage};
 use hse_core::eq_chain::{EqBandParam, EqChainStage};
 use hse_core::fdn_reverb::{FdnReverbParams, FdnReverbStage};
+use hse_core::fft::FftStage;
 use hse_core::limiter::{LimiterSettings, LimiterStage};
 use hse_core::loudness_comp::{LoudnessBandParam, LoudnessCompSettings, LoudnessCompStage};
 use hse_core::mid_side::MidSideStage;
@@ -279,6 +281,48 @@ pub fn make_stage(case: &VectorCase) -> Result<Box<dyn Stage>, String> {
                 },
             )?))
         }
+        "fft" => {
+            // FFT 非流式变换（specs/dsp/fft.md §三）：输入 (L, R) = 复数平面
+            // (Re, Im)，FftStage 对收到的每一块做一次原位复 FFT（无跨块状态，
+            // 输出 = 变换后的两个平面）。向量域固定 blockSize = frames = N
+            // （单块驱动），runner 的 blockSize 切块恰好整块送达。
+            let inverse = bool_field(obj, "inverse")?;
+            Ok(Box::new(FftStage::new(inverse)))
+        }
+        "convolver" => {
+            // 驱动顺序采用引擎接线顺序（HyperSoundEngine.ts 卷积混响阶段）：
+            // 构造(dePeriodize 选项) → loadIR(buildIrRecipe) → setMix →
+            // setPreDelayMs → 逐块 processStereo（specs/dsp/convolver.md §三）。
+            // IR 由确定性配方重建（buildIrRecipe，§4.2 两支线逐字一致）。
+            let ir_obj = object_field(obj, "ir")?;
+            let kind = string_field(ir_obj, "kind")?;
+            let recipe = match kind.as_str() {
+                "delta" => IrRecipe::Delta {
+                    delay: number_field(ir_obj, "delay")?,
+                },
+                "expNoise" => IrRecipe::ExpNoise {
+                    length: number_field(ir_obj, "length")?,
+                    seed: to_uint32(number_field(ir_obj, "seed")?),
+                    decay: number_field(ir_obj, "decay")?,
+                    amp: number_field(ir_obj, "amp")?,
+                },
+                other => return Err(format!("未知 IR 配方 kind：{other}")),
+            };
+            let ir = build_ir_recipe(&recipe)?;
+            let mut stage = ConvolverStage::new(
+                case.sample_rate,
+                ConvolverOptions {
+                    partition_size: number_field(obj, "partitionSize")?,
+                    long_partition_size: number_field(obj, "longPartitionSize")?,
+                    short_region_ms: number_field(obj, "shortRegionMs")?,
+                    de_periodize: bool_field(obj, "dePeriodize")?,
+                },
+            )?;
+            stage.load_ir(&ir, Some("vector-ir"))?;
+            stage.set_mix(number_field(obj, "mix")?);
+            stage.set_pre_delay_ms(number_field(obj, "preDelayMs")?);
+            Ok(Box::new(stage))
+        }
         // 未落地模块：直通占位（FAIL 属预期，证明比对链路仍在工作）。
         _ => Ok(Box::new(PassthroughStage)),
     }
@@ -338,4 +382,12 @@ fn optional_number_field(obj: &Map<String, Value>, key: &str) -> Result<Option<f
             .ok_or_else(|| format!("params.{key} 不是可表示为 f64 的数字")),
         Some(other) => Err(format!("params.{key} 必须是数字，实际 {other}")),
     }
+}
+
+/// JS `>>> 0`（ToUint32）：截断取整后 mod 2^32（convolver IR 配方 seed 语义）。
+fn to_uint32(v: f64) -> u32 {
+    if !v.is_finite() {
+        return 0;
+    }
+    (v.trunc().rem_euclid(4294967296.0)) as u32
 }

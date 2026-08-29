@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "module": "convolver",
+  "case": "case4",
+  "sampleRate": 48000,
+  "blockSize": 700,
+  "channels": 2,
+  "frames": 6000,
+  "params": {
+    "partitionSize": 256,
+    "longPartitionSize": 2048,
+    "shortRegionMs": 100,
+    "dePeriodize": false,
+    "mix": 0.8,
+    "preDelayMs": 0,
+    "ir": {
+      "kind": "expNoise",
+      "length": 1024,
+      "seed": 777,
+      "decay": 5,
+      "amp": 0.5
+    }
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "非整除块长 + mix 干湿混合 + 非默认分区（GWT-CV-04）：partitionSize=256（非默认；湿路延迟 Ls=256 随之变化）、longPartitionSize=2048（k=8，但 IR 短于短区段 → 均匀 4 短分区，Pl=0）、mix=0.8 → out=(1−mix)·dry+mix·wet（dryGain=1−mix 的 f64 语义，干路不延迟）。blockSize=700 > Ls：单次调用生产多个湿块（逐样本放行 + 突发扩容语义），帧数非整除（末块 400 帧）——任意块长无丢块/无 NaN（GWT-CV-05：本模块输出与驱动 blockSize 无关，实证逐位一致）。短 expNoise IR（均匀多短分区）、dePeriodize=false。"
+}

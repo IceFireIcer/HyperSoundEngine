@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "module": "fft",
+  "case": "case2",
+  "sampleRate": 48000,
+  "blockSize": 2048,
+  "channels": 2,
+  "frames": 2048,
+  "params": {
+    "inverse": false
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "整 bin 单频正弦 → 共轭对称双谱线（GWT-FFT-02）：Re 平面=单位幅度正弦、频率恰为整数 bin k0（f=k0·fs/N）；N=2048（log2=11 奇数，基-4 + 基-2 尾路径）。期望 Im 谱在 k0 与 N−k0 出现 ∓N/2·amp 谱线（∓1024，实证逐位精确）、Re 谱该两 bin 近零；其余 bin 的微小取值是逐级 f32 舍入的实现噪声（冻结值即 TS 噪声实现，移植须算术调度等价，specs/dsp/fft.md §四）。无窗变换：不整 bin 时呈矩形窗泄漏（case3/case4 覆盖）。"
+}

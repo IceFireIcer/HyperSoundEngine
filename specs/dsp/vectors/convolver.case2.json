@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "module": "convolver",
+  "case": "case2",
+  "sampleRate": 48000,
+  "blockSize": 384,
+  "channels": 2,
+  "frames": 9800,
+  "params": {
+    "partitionSize": 512,
+    "longPartitionSize": 4096,
+    "shortRegionMs": 100,
+    "dePeriodize": false,
+    "mix": 1,
+    "preDelayMs": 0,
+    "ir": {
+      "kind": "expNoise",
+      "length": 6000,
+      "seed": 12345,
+      "decay": 12,
+      "amp": 0.5
+    }
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "expNoise 真实卷积尾 + 非均匀分区（GWT-CV-02）：IR=固定种子 LCG 指数衰减噪声（length=6000 超短区段 4800 → Ps=10、longStart=5120、Pl=1 长分区参与，每 k=8 个短块做一次 Nl=8192 长 FFT），dePeriodize=false（配方 IR 原样载入）、mix=1 纯湿。湿路=输入与 IR 的完整线性卷积延迟 Ls 对齐后的流式窗口（分区卷积数学等价线性卷积）；驱动器漏做长分区累加或错置写入偏移必然超差。左=三频正弦叠加，右=固定种子 LCG 噪声（宽频激励）。blockSize=384 非整除（末块 104 帧）。"
+}

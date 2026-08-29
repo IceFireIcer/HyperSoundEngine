@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "module": "fft",
+  "case": "case4",
+  "sampleRate": 48000,
+  "blockSize": 8192,
+  "channels": 2,
+  "frames": 8192,
+  "params": {
+    "inverse": false
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "直流分量 + 非整周期泄漏（GWT-FFT-04）：Re 平面=0.4 直流常量 + 777Hz/0.3 正弦（777Hz 非整数 bin，矩形窗泄漏裙摆连续分布——本变换不加窗）；Im 平面全零。N=8192（log2=13 奇数，基-2 尾路径的最大块长）。期望 X[0] 承载全部直流（解析尺度 DC·N），其余呈泄漏裙摆；全程无 NaN、有界。"
+}

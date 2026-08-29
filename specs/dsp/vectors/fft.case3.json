@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "module": "fft",
+  "case": "case3",
+  "sampleRate": 48000,
+  "blockSize": 1024,
+  "channels": 2,
+  "frames": 1024,
+  "params": {
+    "inverse": false
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "双平面复输入（GWT-FFT-03）：Re 平面=440Hz/0.5 + 2900Hz/0.3(π/6)，Im 平面=700Hz/0.4(π/4) + 1800Hz/0.35(π/2)——两平面都有能量、频点互不相同且均非整数 bin（全谱泄漏形态）。N=1024（log2=10 偶数，纯基-4 路径）。复输入不具实信号共轭对称性，输出 Re/Im 两谱均有全谱能量；驱动器若把 Im 平面置零或拆成两次实变换必然超差。"
+}
