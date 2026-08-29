@@ -1,6 +1,9 @@
 /**
  * modulation.ts —— 参数调制矩阵（LFO / Envelope Follower）
  *
+ * 出处/许可：自研基础件。LFO 波形（sine/triangle/square/saw）与包络跟随
+ * （峰值检测 + 一阶平滑）为音频处理公有知识，无第三方代码。
+ *
  * 设计：
  * - `Lfo`：产生双极性归一化 LFO 波形（sine/triangle/square/saw）；
  * - `EnvelopeFollower`：跟踪输入信号包络（0..1）；

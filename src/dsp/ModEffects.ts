@@ -8,6 +8,7 @@
  * - Tremolo：LFO 幅度调制。
  *
  * 约定：processStereo 就地处理；构造时预分配缓冲，process 内零分配。
+ * 确定性：无随机、无 Date、无 console；同输入同参数同输出。
  */
 
 import type {
