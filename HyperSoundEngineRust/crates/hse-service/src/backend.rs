@@ -48,6 +48,7 @@ pub trait RenderOpener: Send {
 pub trait BackendFactory: Send + Sync {
     fn list_devices(&self) -> Result<Vec<DeviceInfo>, BackendError>;
     fn loopback_opener(&self, opts: &OpenOptions) -> Box<dyn CaptureOpener>;
+    fn capture_opener(&self, opts: &OpenOptions) -> Box<dyn CaptureOpener>;
     fn render_opener(&self, opts: &OpenOptions) -> Box<dyn RenderOpener>;
 }
 
@@ -58,36 +59,72 @@ pub struct WasapiFactory;
 #[cfg(windows)]
 mod adapters {
     use super::{CaptureOpener, CaptureSource, RenderOpener, RenderSink};
-    use hse_wasapi::win::{LoopbackStream, RenderStream};
+    use hse_wasapi::win::{CaptureStream, LoopbackStream, RenderStream};
     use hse_wasapi::{BackendError, OpenOptions, StreamFormat};
 
-    pub struct WasapiCapture(pub LoopbackStream);
-    impl CaptureSource for WasapiCapture {
-        fn start(&mut self) -> Result<StreamFormat, BackendError> { self.0.start() }
-        fn pull(&mut self, out: &mut [f32]) -> Result<usize, BackendError> { self.0.pull(out) }
-        fn stop(&mut self) -> Result<(), BackendError> { self.0.stop() }
-        fn xruns(&self) -> u64 { self.0.xruns() }
+    impl CaptureSource for LoopbackStream {
+        fn start(&mut self) -> Result<StreamFormat, BackendError> {
+            self.start()
+        }
+        fn pull(&mut self, out: &mut [f32]) -> Result<usize, BackendError> {
+            self.pull(out)
+        }
+        fn stop(&mut self) -> Result<(), BackendError> {
+            self.stop()
+        }
+        fn xruns(&self) -> u64 {
+            self.xruns()
+        }
     }
 
-    pub struct WasapiRender(pub RenderStream);
-    impl RenderSink for WasapiRender {
-        fn start(&mut self) -> Result<StreamFormat, BackendError> { self.0.start() }
-        fn push(&mut self, inp: &[f32]) -> Result<(), BackendError> { self.0.push(inp) }
-        fn stop(&mut self) -> Result<(), BackendError> { self.0.stop() }
-        fn xruns(&self) -> u64 { self.0.xruns() }
+    impl CaptureSource for CaptureStream {
+        fn start(&mut self) -> Result<StreamFormat, BackendError> {
+            self.start()
+        }
+        fn pull(&mut self, out: &mut [f32]) -> Result<usize, BackendError> {
+            self.pull(out)
+        }
+        fn stop(&mut self) -> Result<(), BackendError> {
+            self.stop()
+        }
+        fn xruns(&self) -> u64 {
+            self.xruns()
+        }
+    }
+
+    impl RenderSink for RenderStream {
+        fn start(&mut self) -> Result<StreamFormat, BackendError> {
+            self.start()
+        }
+        fn push(&mut self, inp: &[f32]) -> Result<(), BackendError> {
+            self.push(inp)
+        }
+        fn stop(&mut self) -> Result<(), BackendError> {
+            self.stop()
+        }
+        fn xruns(&self) -> u64 {
+            self.xruns()
+        }
     }
 
     pub struct WasapiLoopbackOpener(pub OpenOptions);
     impl CaptureOpener for WasapiLoopbackOpener {
         fn open(self: Box<Self>) -> Result<Box<dyn CaptureSource>, BackendError> {
-            Ok(Box::new(WasapiCapture(hse_wasapi::open_loopback(&self.0)?)))
+            Ok(Box::new(hse_wasapi::open_loopback(&self.0)?))
+        }
+    }
+
+    pub struct WasapiCaptureOpener(pub OpenOptions);
+    impl CaptureOpener for WasapiCaptureOpener {
+        fn open(self: Box<Self>) -> Result<Box<dyn CaptureSource>, BackendError> {
+            Ok(Box::new(hse_wasapi::open_capture(&self.0)?))
         }
     }
 
     pub struct WasapiRenderOpener(pub OpenOptions);
     impl RenderOpener for WasapiRenderOpener {
         fn open(self: Box<Self>) -> Result<Box<dyn RenderSink>, BackendError> {
-            Ok(Box::new(WasapiRender(hse_wasapi::open_render(&self.0)?)))
+            Ok(Box::new(hse_wasapi::open_render(&self.0)?))
         }
     }
 }
@@ -108,6 +145,16 @@ impl BackendFactory for WasapiFactory {
     }
 
     #[cfg(windows)]
+    fn capture_opener(&self, opts: &OpenOptions) -> Box<dyn CaptureOpener> {
+        Box::new(adapters::WasapiCaptureOpener(opts.clone()))
+    }
+
+    #[cfg(not(windows))]
+    fn capture_opener(&self, _opts: &OpenOptions) -> Box<dyn CaptureOpener> {
+        Box::new(UnsupportedCaptureOpener)
+    }
+
+    #[cfg(windows)]
     fn render_opener(&self, opts: &OpenOptions) -> Box<dyn RenderOpener> {
         Box::new(adapters::WasapiRenderOpener(opts.clone()))
     }
@@ -124,7 +171,9 @@ struct UnsupportedCaptureOpener;
 #[cfg(not(windows))]
 impl CaptureOpener for UnsupportedCaptureOpener {
     fn open(self: Box<Self>) -> Result<Box<dyn CaptureSource>, BackendError> {
-        Err(BackendError::UnsupportedPlatform("非 Windows 平台无 WASAPI"))
+        Err(BackendError::UnsupportedPlatform(
+            "非 Windows 平台无 WASAPI",
+        ))
     }
 }
 
@@ -133,6 +182,8 @@ struct UnsupportedRenderOpener;
 #[cfg(not(windows))]
 impl RenderOpener for UnsupportedRenderOpener {
     fn open(self: Box<Self>) -> Result<Box<dyn RenderSink>, BackendError> {
-        Err(BackendError::UnsupportedPlatform("非 Windows 平台无 WASAPI"))
+        Err(BackendError::UnsupportedPlatform(
+            "非 Windows 平台无 WASAPI",
+        ))
     }
 }

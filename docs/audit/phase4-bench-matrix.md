@@ -212,16 +212,14 @@ reverbSimple 35.8 + bass 4.8 + loudness 12.1 + dynEq 20.2 + modMatrix 2.5 + limi
 
 ## 七、未测量 / 未覆盖（留档待后续）
 
-- **8 小时长时运行（soak）**：稳态内存/漂移/分段故障未做（规划书 Phase 4 之外的独立
-  验收项）。
 - **SIMD 显式向量化**：当前数字为 rustc 1.95 auto-vectorize 的结果，未做 AVX2/AVX-512
   intrinsics 专项（TS 审计确认的 radix-4 FFT / 块级向量化 EqChain 对应项）。若后续做
   SIMD 冲刺，以本矩阵为 before 基线复测。
 - **hse-stretch**：已移植至 hse-core 但不在 Phase 4 基准清单（外置离线语义、变长输出），
   未测。
 - **真实设备路径**：全链 CPU 数字为离线驱动 `process_planar` 的纯 DSP 成本，未含
-  WASAPI 后端拷贝/线程唤醒的服务进程端到端开销（Phase 2 已做真机回放功能验收，
-  性能端到端留待 soak 轮）。
+  WASAPI 后端拷贝/线程唤醒的服务进程端到端开销（Phase 2 已做真机回放机制验证，
+  系统级性能仍需单独测量）。
 - **笔记本功耗态**：未锁频、未控制后台负载，数字 ±2% 波动；正式对外发布数字建议在
   锁频桌面机（规划书参考机 Ryzen 5 / i5 级）复测。
 - **多实例并发**：单链单线程口径；N 会话并发扩展性未测（服务为每会话一链模型）。

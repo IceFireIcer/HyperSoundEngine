@@ -1,8 +1,8 @@
 //! hse-wasapi —— HyperSoundEngine 的 Windows 音频后端封装。
 //!
-//! 职责（规划书 §2.2）：共享模式渲染 + 输出设备 loopback 捕获（虚拟缆视为普通
-//! 捕获端点直捕）。实时路径纪律：数据面只经预分配环形缓冲与本 crate 的流对象，
-//! 不加锁、不分配（调用方预先给足缓冲）。
+//! 职责（规划书 §2.2）：共享模式渲染 + 输出设备 loopback 捕获 + 输入设备直捕。
+//! 实时路径纪律：数据面只经预分配环形缓冲与本 crate 的流对象，不加锁、不分配
+//! （调用方预先给足缓冲）。
 //!
 //! 平台策略：本文件全部类型与函数签名在所有平台编译；真实 WASAPI 实现在 win
 //! 模块（仅 Windows 编译，由 Phase 2 后端代理落地）。非 Windows 平台所有入口
@@ -85,6 +85,11 @@ pub fn open_loopback(opts: &OpenOptions) -> Result<win::LoopbackStream, BackendE
 }
 
 #[cfg(windows)]
+pub fn open_capture(opts: &OpenOptions) -> Result<win::CaptureStream, BackendError> {
+    win::CaptureStream::open(opts)
+}
+
+#[cfg(windows)]
 pub fn open_render(opts: &OpenOptions) -> Result<win::RenderStream, BackendError> {
     win::RenderStream::open(opts)
 }
@@ -95,20 +100,67 @@ mod unsupported_shim {
     /// 占位类型：不会在任何平台上产生实例。
     pub struct LoopbackStream;
     /// 占位类型：不会在任何平台上产生实例。
+    pub struct CaptureStream;
+    /// 占位类型：不会在任何平台上产生实例。
     pub struct RenderStream;
 }
 
 #[cfg(not(windows))]
 pub fn list_devices() -> Result<Vec<DeviceInfo>, BackendError> {
-    Err(BackendError::UnsupportedPlatform("非 Windows 平台无 WASAPI"))
+    Err(BackendError::UnsupportedPlatform(
+        "非 Windows 平台无 WASAPI",
+    ))
 }
 
 #[cfg(not(windows))]
-pub fn open_loopback(_opts: &OpenOptions) -> Result<unsupported_shim::LoopbackStream, BackendError> {
-    Err(BackendError::UnsupportedPlatform("非 Windows 平台无 WASAPI"))
+pub fn open_loopback(
+    _opts: &OpenOptions,
+) -> Result<unsupported_shim::LoopbackStream, BackendError> {
+    Err(BackendError::UnsupportedPlatform(
+        "非 Windows 平台无 WASAPI",
+    ))
+}
+
+#[cfg(not(windows))]
+pub fn open_capture(_opts: &OpenOptions) -> Result<unsupported_shim::CaptureStream, BackendError> {
+    Err(BackendError::UnsupportedPlatform(
+        "非 Windows 平台无 WASAPI",
+    ))
 }
 
 #[cfg(not(windows))]
 pub fn open_render(_opts: &OpenOptions) -> Result<unsupported_shim::RenderStream, BackendError> {
-    Err(BackendError::UnsupportedPlatform("非 Windows 平台无 WASAPI"))
+    Err(BackendError::UnsupportedPlatform(
+        "非 Windows 平台无 WASAPI",
+    ))
+}
+
+#[cfg(all(test, not(windows)))]
+mod tests {
+    use super::*;
+
+    fn options() -> OpenOptions {
+        OpenOptions {
+            device_id: None,
+            sample_rate: 48_000,
+            block_size_frames: 480,
+        }
+    }
+
+    #[test]
+    fn all_stream_entry_points_report_unsupported_platform() {
+        let opts = options();
+        assert!(matches!(
+            open_render(&opts),
+            Err(BackendError::UnsupportedPlatform(_))
+        ));
+        assert!(matches!(
+            open_loopback(&opts),
+            Err(BackendError::UnsupportedPlatform(_))
+        ));
+        assert!(matches!(
+            open_capture(&opts),
+            Err(BackendError::UnsupportedPlatform(_))
+        ));
+    }
 }

@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-08
+
+### Added
+- **Windows 捕获/渲染独立选路**：控制面 `configure` 新增 `mode:"capture"`、`captureDeviceId` 与可选 `outputDeviceId`；保留旧 `mode:"loopback"` + `renderDeviceId` 请求和四字段回显。`hse-wasapi` 新增默认/显式 capture 端点直捕，服务启动时分别构造捕获与渲染流，并拒绝两端协商采样率不一致。
+
+### Fixed
+- **推流集成测试跨平台时序稳定性**：双会话混后处理测试改为在 idle 期预装低于 capture→DSP 输入环容量的等长时间线，并以完整非零渲染序列作为消费屏障；不再依赖微秒级线程调度推断吞吐，避免 Linux/Windows CI 偶发将输入环积压误判为会话丢帧。
+
 ## [1.2.0] - 2026-08
 
 ### Added
@@ -39,7 +47,7 @@
 - **Phase 3 真正全链收口**：新增 `specs/engine/chain.md`，以 5 组 `engine-chain` 冻结向量固化 HyperSoundEngine 第 1–21 级组装行为；Rust `EngineChainStage` 完成响度归一化、Surround3D、NightMode、IEQ、分析/LUFS 取样、调制主增益及既有 DSP 模块的全链编排。第 22 级空间音频明确为 `spatial.mode='off'` 契约，不纳入本轮 Rust 全链。共享规格现为 **18 份（17 DSP + 1 engine-chain）**，冻结向量 **72 组 / 144 文件**，Rust 对拍门禁 **72/72 PASS**。
 - **Phase 5 wasm32 最小试点**：新增 `hse-wasm` workspace 成员，以 `wasm-bindgen` 暴露单个 `HseBiquad`，使用预分配 planar 缓冲与指针边界接入独立 AudioWorklet 示例；不替换现有 TS worklet，不代表完整 Rust 引擎链 wasm 化。配置消息使用 `requestId` 成功/失败回执；CI 锁定 `wasm-bindgen-cli 0.2.127`，实际生成 web glue 并执行 browser-platform 打包、wasm magic 与 Node builtin 隔离门禁。ASIO 与 Rust `hrtf-core` 尚未启动。
 - **Phase 3 收官：LufsMeter 双绿 + 向量 schema 计量读数演进（批次八）**：`specs/schema/vector-case.schema.json` 加性演进（moduleKind stream|meter 双向绑定 + readings 标量读数 {want, tol}，哨兵 "NaN"/"±Infinity" 等值判定）；`hse-core/src/lufs_meter.rs` 移植（K 加权两级 TDF2、BS.1770 双门限、LRA 直方图、4×/24 抽头真峰值多相核；f32 滑窗落盘/f64 统计的精度纪律逐字对齐；7 项规格外 TS 事实固化）；parity harness 扩展 meter 类型（两段输入布局 + readings 绝对容差/哨兵等值判定）。对拍门禁 63→**67 case 全 PASS**（LufsMeter 六读数最大偏差 3.55e-15，比最紧容差低 13 个数量级）。**至此 Phase 3 模块级工作完成**；本版本再以 engine-chain 向量完成 1–21 级组装收口。
-- **Phase 4 基准矩阵 + SIMD 评估 + 指标留档**：16 个 criterion bench（全 12 已移植模块 × 块长矩阵 + 全链 60s 离线 + fft/convolver/midi/wav/share_codec）+ `docs/audit/phase4-bench-matrix.md`（热点排名：convolver 385 ns/帧断层第一）+ `docs/audit/phase4-simd-eval.md`（逐位对拍约束分析：零期望样本须逐位、非零样本余量仅 8–10 f32 ulp → 仅通道级 SIMD 安全；自动向量化实测 +6–10%）。**§三指标全部达标**：全链离线 0.546% realtime = TS 基线的 9.7–10.2×（目标 ≥3×）；默认链 CPU 0.546%（≤5%）；最重场景 10.7%（≤25%）。SIMD 实施缓办；仅 8h 真机压测仍待长跑。
+- **Phase 4 基准矩阵 + SIMD 评估 + 指标留档**：16 个 criterion bench（全 12 已移植模块 × 块长矩阵 + 全链 60s 离线 + fft/convolver/midi/wav/share_codec）+ `docs/audit/phase4-bench-matrix.md`（热点排名：convolver 385 ns/帧断层第一）+ `docs/audit/phase4-simd-eval.md`（逐位对拍约束分析：零期望样本须逐位、非零样本余量仅 8–10 f32 ulp → 仅通道级 SIMD 安全；自动向量化实测 +6–10%）。**已测三项离线 DSP 性能达标**：全链离线 0.546% realtime = TS 基线的 9.7–10.2×（目标 ≥3×）；默认链 CPU 0.546%（≤5%）；最重场景 10.7%（≤25%）。SIMD 实施缓办；WASAPI 端到端延迟与全链随机参数扫描仍未验证。
 
 ### Fixed
 - **整链 sidechain 语义对齐 TS**：普通双声道 `process` 即使快照开启 `sidechainEnabled` 也保持内部检测；新增显式 `process_with_sidechain`，仅在调用方真实提供外部侧链时驱动 Compressor/Deesser，NightMode 永远使用内部检测。
@@ -86,7 +94,7 @@
 - vitest 配置显式排除本地不入库目录（.gitignore 中的归档/草稿），其中的测试文件不再被主套件扫描。
 
 ### Fixed
-- **服务控制面 configure 校验对齐规格（GWT-CP-06/08）**：校验顺序改为相位(-32001)→结构(-32602)→后端枚举(-32000)，非 null renderDeviceId 必须命中当前渲染端点枚举；fake 后端补 2 条回归用例。**Phase 2 真机端到端验收 14/14 PASS**（回环拦截→试点子链→渲染全链跑通；记录见 `docs/audit/service-phase2-acceptance.md`，8h 零 xrun 长跑与虚拟缆路径待正式播放器/VB-CABLE 后补测）。
+- **服务控制面 configure 校验对齐规格（GWT-CP-06/08）**：校验顺序改为相位(-32001)→结构(-32602)→后端枚举(-32000)，非 null renderDeviceId 必须命中当前渲染端点枚举；fake 后端补 2 条回归用例。**Phase 2 同设备旧试点链验收脚本 14/14 PASS**（记录见 `docs/audit/service-phase2-acceptance.md`）；原出口要求的独立设备路由、正式播放器与 VB-CABLE 路径当时尚未验收。
 - **旁通→重新启用爆音修复**：级从 disabled→enabled 时清空对应模块流状态（延迟线/全通链/卷积缓冲/包络），避免旁通窗口积压的旧音频被回放（pop/串音）；覆盖 Pre-EQ/Deesser/Compressor/NightMode/Delay/Chorus/Flanger/Phaser/Tremolo/混响三路/BassEnhancer/LoudnessComp/IEQ/DynamicEq/Limiter。
 - **consumeMidiQueue 稳态零分配**：MIDI 平滑 alpha 缓存 Map 提为实例字段复用（clear 复用不分配），收敛循环去除逐绑定闭包分配，兑现引擎文件头"process() 内零分配"承诺。
 

@@ -1,6 +1,6 @@
 # HyperSoundEngine —— 对外接口文档（API）
 
-> 适用版本：1.2.0（独立引擎包）。核心 API 自 0.2.0 稳定；当前包含 WAV legacy/standard 双模式与 world-listener 几何公共函数。
+> 适用版本：1.3.0（独立引擎包）。核心 API 自 0.2.0 稳定；当前包含 WAV legacy/standard 双模式与 world-listener 几何公共函数。
 > 分享串为 v2 紧凑格式（HSE2，兼容导入 v1 旧串，见 `src/engine/ShareCodec.ts`）。
 > 核心原则：**小接口、深实现**。大多数接入方只需要 `createEngine` + `HyperSoundEngineParams`。
 

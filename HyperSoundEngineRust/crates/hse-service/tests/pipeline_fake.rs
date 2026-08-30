@@ -190,6 +190,131 @@ fn configure_未知渲染设备引用拒绝且不留痕() {
 }
 
 #[test]
+fn configure_独立捕获与渲染选路_旧loopback请求保持兼容() {
+    let (engine, factory) = setup(Duration::from_millis(1), Duration::from_millis(1));
+
+    let legacy = engine
+        .configure(
+            json!({"mode":"loopback","renderDeviceId":"render-headphone","sampleRate":48000,"blockSizeFrames":64})
+                .as_object()
+                .unwrap(),
+        )
+        .unwrap();
+    assert!(legacy["applied"].get("outputDeviceId").is_none());
+    engine.start().unwrap();
+    assert_eq!(
+        *factory.opened_loopback.lock().unwrap(),
+        vec![Some("render-headphone".into())]
+    );
+    assert_eq!(
+        *factory.opened_capture.lock().unwrap(),
+        Vec::<Option<String>>::new()
+    );
+    assert_eq!(*factory.opened_render.lock().unwrap(), vec![None]);
+    engine.stop().unwrap();
+
+    let direct = engine
+        .configure(
+            json!({"mode":"capture","captureDeviceId":"cable-output","outputDeviceId":"render-headphone","sampleRate":48000,"blockSizeFrames":64})
+                .as_object()
+                .unwrap(),
+        )
+        .unwrap();
+    assert_eq!(direct["applied"]["captureDeviceId"], "cable-output");
+    assert_eq!(direct["applied"]["outputDeviceId"], "render-headphone");
+    engine.start().unwrap();
+    assert_eq!(
+        *factory.opened_capture.lock().unwrap(),
+        vec![Some("cable-output".into())]
+    );
+    assert_eq!(
+        *factory.opened_render.lock().unwrap(),
+        vec![None, Some("render-headphone".into())]
+    );
+    engine.stop().unwrap();
+}
+
+#[test]
+fn configure_模式字段组合与设备类别错误不留痕() {
+    let (engine, _factory) = setup(Duration::ZERO, Duration::ZERO);
+    configure_default(&engine);
+    let initial = engine.get_state()["config"].clone();
+
+    for config in [
+        json!({"mode":"loopback","renderDeviceId":null,"captureDeviceId":null,"sampleRate":48000,"blockSizeFrames":64}),
+        json!({"mode":"capture","captureDeviceId":null,"renderDeviceId":null,"sampleRate":48000,"blockSizeFrames":64}),
+        json!({"mode":"capture","sampleRate":48000,"blockSizeFrames":64}),
+    ] {
+        assert_eq!(
+            engine
+                .configure(config.as_object().unwrap())
+                .unwrap_err()
+                .code,
+            -32602
+        );
+        assert_eq!(engine.get_state()["config"], initial);
+    }
+
+    let structural =
+        json!({"mode":"loopback","renderDeviceId":"missing","sampleRate":0,"blockSizeFrames":64});
+    assert_eq!(
+        engine
+            .configure(structural.as_object().unwrap())
+            .unwrap_err()
+            .code,
+        -32602,
+        "结构校验必须先于设备枚举"
+    );
+    assert_eq!(engine.get_state()["config"], initial);
+
+    for config in [
+        json!({"mode":"loopback","renderDeviceId":"cable-output","sampleRate":48000,"blockSizeFrames":64}),
+        json!({"mode":"capture","captureDeviceId":"render-headphone","sampleRate":48000,"blockSizeFrames":64}),
+        json!({"mode":"capture","captureDeviceId":null,"outputDeviceId":"cable-output","sampleRate":48000,"blockSizeFrames":64}),
+    ] {
+        assert_eq!(
+            engine
+                .configure(config.as_object().unwrap())
+                .unwrap_err()
+                .code,
+            -32000
+        );
+        assert_eq!(engine.get_state()["config"], initial);
+    }
+}
+
+#[test]
+fn start_捕获与渲染采样率不一致时回滚idle() {
+    let (tx, _rx) = sync_channel::<ServiceEvent>(16);
+    let mut factory = FakeFactory::working(Duration::ZERO, Duration::ZERO);
+    Arc::get_mut(&mut factory).unwrap().capture_sample_rate = Some(44_100);
+    let engine = EngineHandle::new(Arc::clone(&factory) as Arc<dyn BackendFactory>, tx);
+    configure_default(&engine);
+
+    let err = engine.start().unwrap_err();
+    assert_eq!(err.code, -32000);
+    assert!(err.message.contains("必须等于配置值 48000Hz"));
+    assert_eq!(engine.get_state()["phase"], "idle");
+    assert_eq!(engine.get_state()["config"]["sampleRate"], 48_000);
+}
+
+#[test]
+fn start_两端共同偏离请求采样率时仍回滚idle() {
+    let (tx, _rx) = sync_channel::<ServiceEvent>(16);
+    let mut factory = FakeFactory::working(Duration::ZERO, Duration::ZERO);
+    let factory_mut = Arc::get_mut(&mut factory).unwrap();
+    factory_mut.capture_sample_rate = Some(44_100);
+    factory_mut.render_sample_rate = Some(44_100);
+    let engine = EngineHandle::new(Arc::clone(&factory) as Arc<dyn BackendFactory>, tx);
+    configure_default(&engine);
+
+    let err = engine.start().unwrap_err();
+    assert_eq!(err.code, -32000);
+    assert!(err.message.contains("配置值 48000Hz"));
+    assert_eq!(engine.get_state()["phase"], "idle");
+}
+
+#[test]
 fn configure_非idle拒绝优先于结构校验() {
     let (engine, _f) = setup(Duration::ZERO, Duration::ZERO);
     configure_default(&engine);

@@ -29,11 +29,21 @@ impl Phase {
     }
 }
 
+/// configure 选择的捕获源。
+#[derive(Debug, Clone)]
+pub enum CaptureConfig {
+    /// 捕获渲染端点的 loopback 流；字段名保留既有协议语义。
+    Loopback { render_device_id: Option<String> },
+    /// 直接打开捕获端点（例如 CABLE Output）。
+    Capture { capture_device_id: Option<String> },
+}
+
 /// configure 成功后的生效配置快照。
 #[derive(Debug, Clone)]
 pub struct ServiceConfig {
-    pub mode: String,
-    pub render_device_id: Option<String>,
+    pub capture: CaptureConfig,
+    pub output_device_id: Option<String>,
+    pub output_device_id_explicit: bool,
     pub sample_rate: u32,
     pub block_size_frames: u32,
 }
@@ -41,12 +51,24 @@ pub struct ServiceConfig {
 impl ServiceConfig {
     /// 回显为控制面契约的 config 对象（camelCase 键）。
     pub fn to_json(&self) -> Value {
-        json!({
-            "mode": self.mode,
-            "renderDeviceId": self.render_device_id,
-            "sampleRate": self.sample_rate,
-            "blockSizeFrames": self.block_size_frames,
-        })
+        let mut value = match &self.capture {
+            CaptureConfig::Loopback { render_device_id } => json!({
+                "mode": "loopback",
+                "renderDeviceId": render_device_id,
+                "sampleRate": self.sample_rate,
+                "blockSizeFrames": self.block_size_frames,
+            }),
+            CaptureConfig::Capture { capture_device_id } => json!({
+                "mode": "capture",
+                "captureDeviceId": capture_device_id,
+                "sampleRate": self.sample_rate,
+                "blockSizeFrames": self.block_size_frames,
+            }),
+        };
+        if self.output_device_id_explicit {
+            value["outputDeviceId"] = json!(self.output_device_id);
+        }
+        value
     }
 }
 
