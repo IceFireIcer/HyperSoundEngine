@@ -11,13 +11,12 @@
 5. [场景二:浏览器实时播放(AudioWorklet)](#5-场景二浏览器实时播放audioworklet)
 6. [场景三:多通道处理(processBus)](#6-场景三多通道处理processbus)
 7. [WAV 文件 I/O](#7-wav-文件-io)
-8. [MIDI 事件接口 / MIDI Learn](#8-midi-事件接口--midi-learn)
-9. [Sidechain](#9-sidechain)
-10. [参数调制矩阵](#10-参数调制矩阵)
-11. [自定义处理阶段](#11-自定义处理阶段)
-12. [场景预设与分享串](#12-场景预设与分享串)
-13. [UI 接入方式(React 调音室)](#13-ui-接入方式react-调音室)
-14. [类型速查](#14-类型速查)
+8. [Sidechain](#8-sidechain)
+9. [参数调制矩阵](#9-参数调制矩阵)
+10. [自定义处理阶段](#10-自定义处理阶段)
+11. [场景预设与分享串](#11-场景预设与分享串)
+12. [UI 接入方式(React 调音室)](#12-ui-接入方式react-调音室)
+13. [类型速查](#13-类型速查)
 
 ---
 
@@ -87,7 +86,7 @@ import { createEngine, createDefaultParams } from 'hypersoundengine'
 // 通用工厂(返回 AudioEngine 接口)
 const engine = createEngine(48000, 2)
 
-// 需要访问 HyperSoundEngine 专有 API(MIDI/processBus/registerStage)时:
+// 需要访问 HyperSoundEngine 专有 API(processBus/registerStage)时:
 import { createHyperSoundEngine } from 'hypersoundengine'
 const engine = createHyperSoundEngine(48000, 2)  // 返回具体类
 ```
@@ -255,76 +254,7 @@ const bus = new HseAudioBus(channels)
 
 ---
 
-## 8. MIDI 事件接口 / MIDI Learn
-
-> 仅 `HyperSoundEngine` 具体类提供(非通用 `AudioEngine` 接口)。
-
-### 8.1 发送 MIDI 事件
-
-```ts
-import { createHyperSoundEngine } from 'hypersoundengine'
-
-const engine = createHyperSoundEngine(48000, 2)
-
-// 入队(实时安全:写预分配环形队列,process 块头消费)
-engine.sendMidi([
-  { type: 'cc', channel: 0, cc: 7, value: 64 },        // CC 控制器
-  { type: 'noteOn', channel: 0, note: 60, velocity: 100 },
-  { type: 'noteOff', channel: 0, note: 60 },
-])
-
-// 正常 process —— 块头自动消费队列并应用绑定
-engine.process([inL, inR], [outL, outR])
-
-// 队列溢出诊断
-console.log(engine.getMidiDroppedCount())
-```
-
-### 8.2 MIDI Learn 绑定
-
-```ts
-import { AUTOMATABLE_PARAMS } from 'hypersoundengine'
-
-// 绑定 CC7 → 压缩阈值,范围 -60..0dB,平滑 20ms
-engine.midiLearn(7, { kind: 'path', path: 'compressor.thresholdDb' }, {
-  min: -60, max: 0, smoothMs: 20,
-})
-
-// 绑定 CC1 → 内置主增益(builtin)
-engine.midiLearn(1, { kind: 'builtin', param: 'masterGain' }, { min: 0, max: 2 })
-
-// 绑定 Note 60 → 混响开关(布尔)
-engine.midiLearn(60, { kind: 'path', path: 'reverb.enabled' }, {
-  eventType: 'note', min: 0, max: 1, smoothMs: 0,
-})
-
-// 反向映射:CC 0 → max,CC 127 → min
-engine.midiLearn(2, { kind: 'path', path: 'compressor.thresholdDb' }, {
-  min: -60, max: 0, invert: true,
-})
-
-// 查询 / 解绑
-engine.getMidiBindings()        // MidiBinding[]
-engine.midiUnlearn(7)           // 解除 CC7
-engine.midiUnlearn(60, { eventType: 'note' })  // 解除 Note 60
-```
-
-### 8.3 映射规则
-
-| 事件 | 数值参数 | 布尔参数 |
-|------|---------|---------|
-| CC | 0–127 线性映射到 [min, max] | CC ≥ 64 → true |
-| noteOn | → max | → true |
-| noteOff | → min | → false |
-
-- **平滑**:`smoothMs > 0` 时一阶低通向目标收敛(防 zipper);`smoothMs = 0` 直接到位
-- **白名单**:`AUTOMATABLE_PARAMS` 列出 34 个可寻址参数(compressor/deesser/bassEnhancer/reverb/modEffects/ieq/limiter/pitch 等);非法路径在 `midiLearn` 时抛错
-- **块速率**(非 sample-accurate):事件在 `process()` 块头消费
-- **绑定属配置**(`reset` 保留),队列/平滑状态属运行时(`reset` 清空)
-
----
-
-## 9. Sidechain
+## 8. Sidechain
 
 ```ts
 // 主信号 + 外部 sidechain 信号
@@ -342,7 +272,7 @@ engine.process([mainL, mainR], [outL, outR], [sideL, sideR])
 
 ---
 
-## 10. 参数调制矩阵
+## 9. 参数调制矩阵
 
 ```ts
 const params = createDefaultParams(48000)
@@ -362,11 +292,11 @@ engine.setParams(params)
 
 - LFO:正弦/三角/方波/锯齿
 - Envelope Follower:起控/释放/强度
-- 目标:`masterGain` / `stereoWidth`(内置);MIDI Learn 可寻址更多参数路径
+- 目标:`masterGain` / `stereoWidth`
 
 ---
 
-## 11. 自定义处理阶段
+## 10. 自定义处理阶段
 
 ```ts
 import type { ProcessingStage } from 'hypersoundengine'
@@ -386,7 +316,7 @@ engine.getStages()                        // 当前链副本
 
 ---
 
-## 12. 场景预设与分享串
+## 11. 场景预设与分享串
 
 ```ts
 import { SCENE_PRESETS, applyScene, encodeShareCode, decodeShareCode } from 'hypersoundengine'
@@ -403,11 +333,11 @@ engine.setParams(restored)
 
 ---
 
-## 13. UI 接入方式(React 调音室)
+## 12. UI 接入方式(React 调音室)
 
 UI 是**可选**的 React 组件库,经 `HyperSoundEngineUiBridge` 桥接,不直接 import 引擎。适合已用 React 的宿主嵌入完整调音界面。
 
-### 13.1 架构
+### 12.1 架构
 
 ```
 你的 App
@@ -424,7 +354,7 @@ UI 组件 ──读/写──> HyperSoundEngineUiBridge ──调用──> Audi
 
 UI 只依赖 bridge 接口,不直接依赖引擎具体类——换引擎实现只需换 bridge。
 
-### 13.2 最小接入
+### 12.2 最小接入
 
 ```tsx
 import { createHyperSoundEngine } from 'hypersoundengine'
@@ -458,7 +388,7 @@ function App() {
 }
 ```
 
-### 13.3 主面板 Props
+### 12.3 主面板 Props
 
 ```ts
 interface HyperSoundEngineMixingStudioProps {
@@ -471,7 +401,7 @@ interface HyperSoundEngineMixingStudioProps {
 }
 ```
 
-### 13.4 五个页签
+### 12.4 四个页签
 
 | 页签 | 功能 |
 |------|------|
@@ -479,9 +409,8 @@ interface HyperSoundEngineMixingStudioProps {
 | 均衡器 | 5/10/20 段 EQ 曲线编辑器 |
 | 调音器 | 分享串编码/解码 + 离线 WAV 导出 |
 | 分析 | 实时频谱 + 频谱特征 + LUFS |
-| MIDI | MIDI Learn 绑定面板(参数路径下拉 + CC/Note 绑定 + 绑定表 + 测试发送) |
 
-### 13.5 Bridge 接口
+### 12.5 Bridge 接口
 
 ```ts
 interface HyperSoundEngineUiBridge {
@@ -506,18 +435,10 @@ interface HyperSoundEngineUiBridge {
   hearingStep(): HyperSoundEngineHearingSession
   answerHearing(heard: boolean): HyperSoundEngineHearingSession
   resetHearing(): void
-  // MIDI(可选,仅 HyperSoundEngine 后端填充)
-  midi?: {
-    learn(cc, target, opts?): void
-    unlearn(cc, opts?): boolean
-    getBindings(): MidiBinding[]
-    sendMidi(events: MidiEvent[]): void
-    getDroppedCount(): number
-  }
 }
 ```
 
-### 13.6 参数更新模式(UI 侧)
+### 12.6 参数更新模式(UI 侧)
 
 UI 通过 `useHyperSoundEngineParams` hook 操作参数:
 
@@ -534,20 +455,7 @@ function MyPanel({ bridge }) {
 }
 ```
 
-### 13.7 MIDI 面板与桥的关系
-
-MIDI 面板(`MidiPanel`)依赖 `bridge.midi`。bridge 工厂会探测后端引擎是否实现 MIDI 接口:
-
-```ts
-// createHyperSoundEngineUiBridge 内部:
-const midiEngine = (typeof engine.sendMidi === 'function') ? engine : null
-// HyperSoundEngine → midiEngine 非 null → bridge.midi 填充
-// 通用 AudioEngine → midiEngine = null → bridge.midi = undefined(面板显示"不支持")
-```
-
-所以:**用 `createHyperSoundEngine`(具体类)而非 `createEngine`(接口)创建引擎时,MIDI 面板才可用**。
-
-### 13.8 UI 打包注意
+### 12.7 UI 打包注意
 
 - UI 在独立 `tsconfig.ui.json`,依赖 `react` / `react-dom` / `lucide-react`(peerDependencies,宿主自备)
 - 核心包构建(`npm run build`)**不包含** UI;宿主应用用 Vite/Webpack 自行打包 `ui/`
@@ -555,7 +463,7 @@ const midiEngine = (typeof engine.sendMidi === 'function') ? engine : null
 
 ---
 
-## 14. 类型速查
+## 13. 类型速查
 
 ```ts
 // 引擎
@@ -573,13 +481,6 @@ host.engine: AudioEngine
 // WAV
 encodeWav(channels, sampleRate, opts?): ArrayBuffer
 decodeWav(buffer): { sampleRate, channels, bitDepth }
-
-// MIDI(engine 专属)
-engine.sendMidi(events): void
-engine.midiLearn(cc, target, opts?): void
-engine.midiUnlearn(cc, opts?): boolean
-engine.getMidiBindings(): MidiBinding[]
-engine.getMidiDroppedCount(): number
 
 // 多通道
 HseAudioBus.create(ch, frames) / HseAudioBus.from(arr)

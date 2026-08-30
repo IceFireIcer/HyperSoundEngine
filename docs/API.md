@@ -176,35 +176,6 @@ const gainStage: ProcessingStage = {
 engine.registerStage(gainStage)
 ```
 
-### MIDI 事件接口 / MIDI Learn（`HyperSoundEngine` 专属）
-
-```ts
-type MidiEvent =
-  | { type: 'cc'; channel: number; cc: number; value: number }
-  | { type: 'noteOn'; channel: number; note: number; velocity: number }
-  | { type: 'noteOff'; channel: number; note: number }
-
-type AutomationTarget =
-  | { kind: 'builtin'; param: 'masterGain' | 'stereoWidth' }
-  | { kind: 'path'; path: string }   // 任意参数路径白名单（见 AUTOMATABLE_PARAMS）
-
-engine.sendMidi(events: MidiEvent[]): void
-engine.midiLearn(cc: number, target: AutomationTarget, opts?: {
-  eventType?: 'cc' | 'note'   // 默认 'cc'
-  min?: number; max?: number  // 覆盖白名单范围
-  smoothMs?: number           // 一阶平滑，默认 20
-  invert?: boolean            // 反向映射
-}): void
-engine.midiUnlearn(cc: number, opts?: { eventType?: 'cc' | 'note' }): boolean
-engine.getMidiBindings(): MidiBinding[]
-engine.getMidiDroppedCount(): number
-```
-
-- `sendMidi` 写入预分配环形队列（容量 4096，溢出丢最旧并累计 dropped），`process()` 块头消费（块速率，非 sample-accurate）。
-- CC 0–127 线性映射到 [min, max]；note on→max / note off→min（布尔参数 on→true / off→false）。
-- 路径白名单 `AUTOMATABLE_PARAMS`（compressor/deesser/bassEnhancer/reverb/modEffects/ieq/limiter/pitch 等），非法路径在 `midiLearn` 时抛错。
-- 平滑防 zipper；绑定属配置（`reset` 保留，仅清空运行时队列与平滑状态）。
-
 ### WAV 文件 I/O（`io/wav.ts`）
 
 ```ts

@@ -30,8 +30,7 @@ HyperSoundEngine/ui/
 ├── eqPanel.tsx           # 均衡器页：simple/pro、10/20 段、Q 补偿、锁定、预设、导入导出
 ├── sharePanel.tsx        # 调音器页：分享串（引擎编解码）、WAV 导出、引擎信息
 ├── analysisPanel.tsx     # 分析页：LUFS/GR/频谱/特征 + 听力测试流程
-├── HyperSoundEngineMixingStudio.tsx    # 主面板组装（5 个页签 + 弹窗调度）
-├── midiPanel.tsx         # MIDI 页：MIDI Learn 参数绑定 + CC/Note 绑定表 + 测试发送
+├── HyperSoundEngineMixingStudio.tsx    # 主面板组装（4 个页签 + 弹窗调度）
 └── index.ts              # 公共出口
 ```
 
@@ -81,7 +80,6 @@ const bridge = createHyperSoundEngineUiBridge(engine, ctx.sampleRate)
 | 均衡器 | simple 5 段 / pro 10-20 段 + **曲线编辑器拖拽** + 级联 Q 补偿 + 锁定 + 预设 + EQ JSON 导入导出 | 20 段、Q 补偿、锁定 |
 | 调音器 | **引擎分享串**（完整参数，版本+校验+白名单）+ WAV 导出 + 引擎信息（采样率/延迟/LUFS/GR） | 分享串格式 |
 | 分析 | LUFS/LRA/峰值/真峰值 + 限幅 GR 条 + 32 条频谱 + 5 项特征 + 听力测试（7 频点 × 5 轮） | 全部 |
-| MIDI | 参数路径下拉 + CC/Note 绑定 + 绑定表 + 测试发送 | MIDI Learn |
 
 ## 5. 设计说明
 

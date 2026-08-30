@@ -1,10 +1,9 @@
-//! bench_chain_full —— 引擎全链（hse-service PilotSubchain 12 级）离线吞吐基准。
+//! bench_chain_full —— 引擎全链（hse-service ServiceEngineChain 1–21 级）离线吞吐基准。
 //!
 //! 这是《规划书》§三指标 "离线吞吐 ≥3× TS 基线" 的正式测量：
 //! - 60 秒 48kHz 立体声音频（2,880,000 帧），主块长 128（22,500 块/迭代）；
-//! - 驱动 hse-service 的 [`PilotSubchain`]（引擎服务实际运行的装配形态），
-//!   装配顺序 = TS 22 级链的引擎相对顺序（midSide→biquad→eqChain→deesser→
-//!   compressor→modEffects→混响路→bass→loudnessComp→dynamicEq→modMatrix→limiter）；
+//! - 驱动 hse-service 的 [`ServiceEngineChain`]（引擎服务实际运行的装配形态），
+//!   装配顺序 = Rust `EngineChainStage` 1–21 级；spatial 固定 off；
 //! - TS 对照基线：`npm run benchmark` 本机实测 5000ms 音频 279.61ms = 5.59%
 //!   realtime（48kHz/128，恒定 0.1 激励，createDefaultParams 默认链）。
 //!   3× 目标 ⇒ Rust 需 ≤1.863% realtime（≤186.4ms 处理 10s 音频…按 5s 口径
@@ -27,7 +26,7 @@
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use hse_benches::{StereoBuffer, SAMPLE_RATE_HZ};
-use hse_service::dsp_chain::PilotSubchain;
+use hse_service::dsp_chain::ServiceEngineChain;
 use hse_service::params::{
     BiquadSpec, EqBandSpec, EqChainSpec, ModMatrixRouteSpec, PilotParams, ReverbRouteKind,
 };
@@ -40,8 +39,9 @@ const CHAIN_FRAMES: usize = (SAMPLE_RATE_HZ as usize) * (CHAIN_SECONDS as usize)
 const CHAIN_BLOCK: usize = 128;
 
 /// PRO 10 段 octave 中心频率（TS PRO_EQ_DEFAULT_BANDS）。
-const PRO_EQ_FREQS: [f64; 10] =
-    [31.5, 63.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0];
+const PRO_EQ_FREQS: [f64; 10] = [
+    31.5, 63.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0,
+];
 
 /// TS createDefaultParams 等价快照：显式装配 eqChain（10 段 0dB + Q 补偿），
 /// 其余键取 PilotParams::default()（与 TS 默认逐键对齐，见 params.rs 注释）。
@@ -52,7 +52,11 @@ fn ts_default_params() -> PilotParams {
     p.eq_chain = Some(EqChainSpec {
         bands: PRO_EQ_FREQS
             .iter()
-            .map(|&f| EqBandSpec { frequency: f, gain: 0.0, q: 1.0 })
+            .map(|&f| EqBandSpec {
+                frequency: f,
+                gain: 0.0,
+                q: 1.0,
+            })
             .collect(),
         band_count: 10.0,
         q_compensation: true,
@@ -124,10 +128,22 @@ fn bench_chain_full(c: &mut Criterion) {
     let master_synth = StereoBuffer::synthesized(CHAIN_FRAMES);
 
     let cases: [(&str, PilotParams, &StereoBuffer); 6] = [
-        ("ts_default_constant_0p1", ts_default_params(), &master_const),
+        (
+            "ts_default_constant_0p1",
+            ts_default_params(),
+            &master_const,
+        ),
         ("ts_default_synthesized", ts_default_params(), &master_synth),
-        ("all_on_reverb_simple", all_on_params(ReverbRouteKind::Simple), &master_synth),
-        ("all_on_reverb_fdn", all_on_params(ReverbRouteKind::Fdn), &master_synth),
+        (
+            "all_on_reverb_simple",
+            all_on_params(ReverbRouteKind::Simple),
+            &master_synth,
+        ),
+        (
+            "all_on_reverb_fdn",
+            all_on_params(ReverbRouteKind::Fdn),
+            &master_synth,
+        ),
         (
             "all_on_reverb_convolver_exp6000",
             all_on_params(ReverbRouteKind::Convolver),
@@ -144,7 +160,11 @@ fn bench_chain_full(c: &mut Criterion) {
     for (name, mut params, master) in cases {
         // convolver 路由需要 IR 配方（确定性 expNoise；heavy 场景 IR≈4s）。
         if params.reverb_route == ReverbRouteKind::Convolver {
-            let ir_len = if name.starts_with("heavy_convolver_ir4s") { 192_000.0 } else { 6000.0 };
+            let ir_len = if name.starts_with("heavy_convolver_ir4s") {
+                192_000.0
+            } else {
+                6000.0
+            };
             params.convolver.ir_recipe = Some(hse_core::convolver::IrRecipe::ExpNoise {
                 length: ir_len,
                 seed: 12345,
@@ -154,7 +174,15 @@ fn bench_chain_full(c: &mut Criterion) {
         }
         group.bench_function(BenchmarkId::from_parameter(name), |b| {
             // 装配/预分配在计时区外（对齐实时铁律：构造只在控制面线程发生）。
-            let mut chain = PilotSubchain::build(&params, SAMPLE_RATE_HZ, CHAIN_BLOCK)
+            let source = if params.loudness_comp.mode == "auto" {
+                serde_json::json!({"loudnessComp": {}})
+            } else {
+                serde_json::json!({})
+            };
+            let canonical = params
+                .to_canonical_json(&source, SAMPLE_RATE_HZ)
+                .expect("基准参数必须可投影为完整快照");
+            let mut chain = ServiceEngineChain::build(&canonical, SAMPLE_RATE_HZ, CHAIN_BLOCK)
                 .expect("基准用全链参数快照必须可装配");
             let mut work = StereoBuffer::zeroed(CHAIN_FRAMES);
             b.iter(|| {

@@ -32,7 +32,6 @@
 | 处理图 / 路由 | 动态节点图、DAG、并行 lanes、虚拟总线、Sidechain | 固定链，无动态图、无并行、无 sidechain | P0 |
 | 插件/扩展 | 模块化效果器注册、第三方处理器 | 有 `ProcessingStage`/`StereoProcessor` 接口，但引擎未暴露注册入口 | P0 |
 | 参数调制 | LFO、Envelope Follower、ADSR、Macro、Sample-accurate automation | 仅静态参数快照 | P0/P1 |
-| MIDI | MIDI 1.0/MPE/2.0、MIDI Learn | 无 | P1 |
 | 多通道 | 5.1/7.1、Ambisonics、任意通道路由 | 仅单声道/立体声 | P1 |
 | 调制类效果 | Chorus/Flanger/Phaser/Tremolo/Vibrato/Delay | 无 | P1 |
 | 语音处理 | AEC、ANS、VAD、啸叫抑制、AGC | 无（仅听力测试） | P1 |
@@ -69,7 +68,6 @@
 ### P1（功能补全）
 4. **Sidechain 输入**：为 Compressor/Deesser 增加可选 sidechain 输入。
 5. **参数调制矩阵**：LFO/Envelope Follower + 可寻址参数映射。
-6. **MIDI 事件接口**：至少提供事件队列与 MIDI Learn 映射。
 7. **多通道支持**：引入 `HseAudioBus` 抽象，逐步把立体声 DSP 扩展到 N 通道。
 8. **调制效果器**：Delay、Chorus、Flanger、Phaser、Tremolo。
 9. **文件 I/O**：WAV 编解码入库，FLAC/MP3 作为可选适配。
@@ -102,8 +100,7 @@
 - **调制类效果 UI**：效果页新增 Delay/Chorus/Flanger/Phaser/Tremolo 五卡片 + 参数调制矩阵卡片与弹窗（`ui/modalsModulation.tsx`）。
 - **Sidechain UI 开关**：Compressor/Deesser 弹窗新增外部 Sidechain 开关。
 
-已落地 **MIDI 事件接口 / MIDI Learn + WAV 文件 I/O** ✅：
-- **MIDI**：`sendMidi()` 环形队列 + 块头消费；`midiLearn/midiUnlearn/getMidiBindings/getMidiDroppedCount`；`AutomationTarget`（builtin 或参数路径白名单）+ CC/Note → 范围映射 + 一阶平滑；UI MIDI Learn 面板（`ui/midiPanel.tsx`）。
+已落地 **WAV 文件 I/O** ✅：
 - **WAV**：`src/io/wav.ts` `encodeWav/decodeWav`（16-bit PCM / 32-bit Float，多通道，严格 RIFF 校验）。
 
 已落地 **算法创新与优化** ✅：
@@ -113,4 +110,4 @@
 - **FDN 混响**（`dsp/FdnReverb.ts`）：反馈延迟网络 + Householder 正交矩阵，引擎 `reverb.mode='fdn'`。
 - **自适应动态均衡**（`dsp/DynamicEq.ts`）：全通交叉分带 + 频谱包络自动混音，引擎 `dynamicEq` 参数组。
 
-下一步建议：**sample-accurate 参数自动化**、MIDI 2.0/MPE、FLAC/Opus 解码、绑定关系纳入分享串。
+下一步建议：**sample-accurate 参数自动化**、FLAC/Opus 解码。

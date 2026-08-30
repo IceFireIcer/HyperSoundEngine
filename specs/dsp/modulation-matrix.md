@@ -252,8 +252,8 @@ stereoWidth = clamp(stereoWidth, 0, 2)
 - Schema：[`specs/schema/vector-case.schema.json`](../schema/vector-case.schema.json)
 - 行为事实标准：`src/dsp/modulation.ts`（`ModulationMatrix`/`Lfo`/`EnvelopeFollower`）；
   路由/源类型：`src/types.ts`（`ModulationRoute`/`LfoShape`/`ModulationSettings`）
-- 引擎接线（块头推进 / `mod-master-gain` 阶段 / `mid-side` 宽度分支 / enabled 门控与
-  MIDI masterGain 绑定）：`src/engine/HyperSoundEngine.ts`
+- 引擎接线（块头推进 / `mod-master-gain` 阶段 / `mid-side` 宽度分支 / enabled 门控）：
+  `src/engine/HyperSoundEngine.ts`
 - 参考单元测试：`test/modulation.test.ts`
 - 兄弟规格：[biquad](biquad.md) ｜ [limiter](limiter.md) ｜ [reverb-simple](reverb-simple.md) ｜
   [compressor](compressor.md) ｜ [bass-enhancer](bass-enhancer.md) ｜ [mid-side](mid-side.md) ｜

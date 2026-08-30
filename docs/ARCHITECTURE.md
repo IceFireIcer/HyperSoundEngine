@@ -115,7 +115,6 @@ interface ProcessingStage {
 > 自定义阶段经 `registerStage()` 插入（缺省位于 Limiter 之前）；
 > 多通道：`processBus()` 默认把 N 通道下混为立体声处理（环绕监听语义），
 > `mode:'perChannelPair'` 时按立体声对逐对独立处理（每对独立子引擎），适合 5.1/7.1 各通道独立 DSP；
-> MIDI：`sendMidi()` 事件入预分配环形队列，`process()` 块头消费，按 MIDI Learn 绑定（`AutomationTarget` 白名单路径）映射到参数并经一阶平滑应用（防 zipper）。
 
 ## 5. Rust 支线边界
 

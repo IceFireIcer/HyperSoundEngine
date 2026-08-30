@@ -19,9 +19,10 @@ publish = false
 
 [dependencies]
 hse-core = { path = "../crates/hse-core" }
-# Phase 4 全链基准：驱动引擎服务实际装配的 PilotSubchain（纯 DSP 结构体，
+# Phase 4 全链基准：驱动引擎服务实际装配的 ServiceEngineChain（纯 DSP 结构体，
 # 不触碰 WASAPI 后端 / 音频设备）。
 hse-service = { path = "../crates/hse-service" }
+serde_json.workspace = true
 
 [dev-dependencies]
 criterion = "0.5"
@@ -91,10 +92,6 @@ harness = false
 # ---- Phase 4 基准矩阵：I/O 工具路径 ----
 
 [[bench]]
-name = "bench_midi"
-harness = false
-
-[[bench]]
 name = "bench_share_codec"
 harness = false
 
@@ -102,7 +99,7 @@ harness = false
 name = "bench_wav"
 harness = false
 
-# ---- Phase 4 §三指标：全链离线吞吐（60s 音频，PilotSubchain）----
+# ---- Phase 4 §三指标：全链离线吞吐（60s 音频，ServiceEngineChain）----
 
 [[bench]]
 name = "bench_chain_full"

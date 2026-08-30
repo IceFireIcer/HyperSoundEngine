@@ -31,7 +31,6 @@ pub mod limiter;
 pub mod loudness_comp;
 pub mod lufs_meter;
 pub mod mid_side;
-pub mod midi;
 pub mod mod_effects;
 pub mod modulation_matrix;
 pub mod params;

@@ -9,15 +9,15 @@ HyperSoundEngine 是一个**不依赖任何特定宿主**的独立软件 DSP 音
 - 核心零 DOM / AudioContext / React 依赖，可跑在 Node、浏览器、Electron、AudioWorklet；
 - 浏览器宿主（`HyperSoundEngineHost`）与 WaveForge 适配层分离，其他软件可直接接入。
 
-> 当前生成代号 **HyperSoundEngine v1**（包版本 0.x 为其预发布阶段）；版本与命名规则见 [docs/VERSIONING.md](docs/VERSIONING.md)。
+> 当前生成代号 **HyperSoundEngine v1**，稳定包版本 **1.0.0**；版本与命名规则见 [docs/VERSIONING.md](docs/VERSIONING.md)。
 >
-> **0.7.0 状态**：18 份共享规格（17 DSP + 1 engine-chain）、72 组冻结向量 / 144 文件；TS 全量测试 50 文件 / 670 用例，Rust 对拍 72/72。Phase 3 已以 Rust 1–21 级全链收口，空间音频保持 `spatial.mode='off'` 契约；Phase 4 指标已达标，仅余 8h 真机压测；Phase 5 已完成 wasm 单 Biquad 最小试点，ASIO 与 Rust `hrtf-core` 尚未启动。
+> **1.0.0 状态**：共享核心规格为 20 份（17 DSP + engine-chain + params + scenes），72 组音频冻结向量 / 144 文件，另有 3 个参数/场景结构化夹具；TS 全量测试 50 文件 / 664 用例，Rust 对拍 72/72。Phase 3 已以 Rust 1–21 级完整链收口，服务进程也使用同一完整链；空间音频保持 `spatial.mode='off'` 契约。Phase 4 指标已达标，仅余 8h 真机压测；Phase 5 已完成 wasm 单 Biquad 最小试点，Rust `hrtf-core` 尚未启动。Windows 音频后端仅支持 WASAPI；项目不提供 MIDI 或 ASIO。
 
 ## 快速开始
 
 ```bash
 npm install
-npm test              # 全量测试（50 文件 / 670 用例，含空间音频 104 项）
+npm test              # 全量测试
 npm run build         # 产出 dist/（核心 ESM + 类型声明 + worklet 单文件包）
 npm run benchmark     # 本地性能基准（48kHz/128 帧默认全链）
 npm run benchmark:scenes  # 场景化基准（卷积/FDN 混响、DynamicEq）

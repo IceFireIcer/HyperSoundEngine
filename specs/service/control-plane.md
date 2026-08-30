@@ -129,7 +129,8 @@
 
 ## 五、方法规格
 
-> 方法表共六个。规划书草案阶段的独立 getStats 方法已并入 `getState.stats` 字段，以本契约为准。
+> 基础方法六个，推流方法两个。规划书草案阶段的独立 getStats 方法已并入
+> `getState.stats` 字段，以本契约为准。
 
 ### 5.1 listDevices —— 枚举音频端点
 

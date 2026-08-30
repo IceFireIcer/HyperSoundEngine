@@ -24,7 +24,7 @@ use rtrb::{Consumer, Producer, RingBuffer};
 
 use crate::backend::{CaptureOpener, RenderOpener};
 use crate::dsp_chain;
-use crate::dsp_chain::PilotSubchain;
+use crate::dsp_chain::ServiceEngineChain;
 use crate::sessions::SessionTable;
 use crate::state::{ServiceEvent, StatsAtomic};
 
@@ -72,8 +72,8 @@ pub fn build_rings(
 }
 
 /// 构造参数热更换命令环（控制面生产、DSP 线程消费）。
-pub fn build_command_ring() -> (Producer<PilotSubchain>, Consumer<PilotSubchain>) {
-    RingBuffer::<PilotSubchain>::new(4)
+pub fn build_command_ring() -> (Producer<ServiceEngineChain>, Consumer<ServiceEngineChain>) {
+    RingBuffer::<ServiceEngineChain>::new(4)
 }
 
 /// 拉起三个数据面线程。开流发生在各线程内；协商格式经握手通道回报。
@@ -86,7 +86,7 @@ pub fn spawn_workers(
     in_cons: Consumer<f32>,
     out_prod: Producer<f32>,
     out_cons: Consumer<f32>,
-    chain_rx: Consumer<PilotSubchain>,
+    chain_rx: Consumer<ServiceEngineChain>,
     block_frames: usize,
     deps: WorkerDeps,
     sessions: Arc<SessionTable>,
@@ -100,7 +100,8 @@ pub fn spawn_workers(
 
     let (cap_tx, cap_rx) = std::sync::mpsc::channel::<Result<StreamFormat, String>>();
     let (ren_tx, ren_rx) = std::sync::mpsc::channel::<Result<StreamFormat, String>>();
-    let (reclaim_prod, mut reclaim_cons) = RingBuffer::<PilotSubchain>::new(RECLAIM_RING_CAPACITY);
+    let (reclaim_prod, mut reclaim_cons) =
+        RingBuffer::<ServiceEngineChain>::new(RECLAIM_RING_CAPACITY);
 
     let h_reclaim = std::thread::Builder::new()
         .name("hse-reclaim".into())
@@ -474,8 +475,8 @@ fn replace_and_reclaim<T>(
 fn dsp_loop(
     mut cons_in: Consumer<f32>,
     mut prod_out: Producer<f32>,
-    mut chain_rx: Consumer<PilotSubchain>,
-    mut reclaim_tx: Producer<PilotSubchain>,
+    mut chain_rx: Consumer<ServiceEngineChain>,
+    mut reclaim_tx: Producer<ServiceEngineChain>,
     block_frames: usize,
     run: &AtomicBool,
     err: &AtomicBool,
@@ -488,8 +489,8 @@ fn dsp_loop(
     let mut filled = 0usize;
     let total = block_frames * 2;
     // 初始链由引擎在握手完成后经命令环送达。
-    let mut chain: Option<PilotSubchain> = None;
-    let mut awaiting_reclaim: Option<PilotSubchain> = None;
+    let mut chain: Option<ServiceEngineChain> = None;
+    let mut awaiting_reclaim: Option<ServiceEngineChain> = None;
     loop {
         if !run.load(Ordering::Relaxed) || err.load(Ordering::Relaxed) {
             break;
@@ -554,7 +555,7 @@ fn dsp_loop(
 
     // 退出 DSP 线程前把所有链移交回收线程。容量覆盖 active + pending +
     // command ring 全部元素；若回收线程调度较慢则仅自旋等待，不在本线程 drop。
-    let mut retire = |mut retired: PilotSubchain| loop {
+    let mut retire = |mut retired: ServiceEngineChain| loop {
         match reclaim_tx.push(retired) {
             Ok(()) => break,
             Err(rtrb::PushError::Full(value)) => {

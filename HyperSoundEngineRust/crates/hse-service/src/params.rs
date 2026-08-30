@@ -352,6 +352,143 @@ impl Default for PilotParams {
 }
 
 impl PilotParams {
+    /// 将旧版服务 wire 快照投影为 hse-core 接受的完整 HyperSoundEngineParams。
+    ///
+    /// wire 仍保持整体替换语义；未暴露的完整链级使用 core canonical 默认值。
+    /// 空间级始终强制 off，HseStretch 不属于该参数树与主链。
+    pub fn to_canonical_json(&self, source: &Value, sample_rate: f64) -> Result<Value, String> {
+        let mut canonical = hse_core::params::default_params(sample_rate);
+        canonical["sampleRate"] = json!(sample_rate);
+        canonical["spatial"]["mode"] = json!("off");
+        canonical["stereoWidth"] = json!(self.mid_side.width);
+        canonical["pitch"]["enabled"] = json!(self.mid_side.voice_balance != 0.0);
+        canonical["pitch"]["voiceBalance"] = json!(self.mid_side.voice_balance);
+
+        let mut eq_bands = Vec::new();
+        if let Some(biquad) = &self.biquad {
+            // canonical Pre-EQ 是 peaking 段数组；旧 biquad 键继续接受并投影到同一位置。
+            eq_bands.push(json!({
+                "frequency": biquad.f0,
+                "gain": biquad.gain_db,
+                "q": biquad.q,
+            }));
+        }
+        if let Some(eq) = &self.eq_chain {
+            eq_bands.extend(eq.bands.iter().map(|band| {
+                json!({
+                    "frequency": band.frequency,
+                    "gain": band.gain,
+                    "q": band.q,
+                })
+            }));
+            canonical["eq"]["qCompensation"] = json!(eq.q_compensation);
+        }
+        canonical["eq"]["enabled"] = json!(!eq_bands.is_empty());
+        canonical["eq"]["mode"] = json!("pro");
+        canonical["eq"]["bandCount"] = json!(eq_bands.len().min(20));
+        canonical["eq"]["proBands"] = Value::Array(eq_bands);
+
+        canonical["deesser"] = json!({
+            "enabled": self.deesser.enabled,
+            "centerHz": self.deesser.center_hz,
+            "q": self.deesser.q,
+            "thresholdDb": self.deesser.threshold_db,
+            "ratio": self.deesser.ratio,
+            "attackMs": self.deesser.attack_ms,
+            "releaseMs": self.deesser.release_ms,
+            "splitBand": self.deesser.split_band,
+            "mix": self.deesser.mix,
+            "sidechainEnabled": self.deesser.sidechain_enabled,
+        });
+        canonical["compressor"] = json!({
+            "enabled": self.compressor.enabled,
+            "thresholdDb": self.compressor.threshold_db,
+            "ratio": self.compressor.ratio,
+            "kneeDb": self.compressor.knee_db,
+            "attackMs": self.compressor.attack_ms,
+            "releaseMs": self.compressor.release_ms,
+            "makeupDb": self.compressor.makeup_db,
+            "outputGain": self.compressor.output_gain,
+            "sidechainEnabled": self.compressor.sidechain_enabled,
+        });
+        canonical["modEffects"] = json!({
+            "delay": {"enabled":self.mod_effects.delay.enabled,"delayMs":self.mod_effects.delay.delay_ms,"feedback":self.mod_effects.delay.feedback,"mix":self.mod_effects.delay.mix},
+            "chorus": {"enabled":self.mod_effects.chorus.enabled,"rateHz":self.mod_effects.chorus.rate_hz,"depthMs":self.mod_effects.chorus.depth_ms,"mix":self.mod_effects.chorus.mix},
+            "flanger": {"enabled":self.mod_effects.flanger.enabled,"rateHz":self.mod_effects.flanger.rate_hz,"depthMs":self.mod_effects.flanger.depth_ms,"feedback":self.mod_effects.flanger.feedback,"mix":self.mod_effects.flanger.mix},
+            "phaser": {"enabled":self.mod_effects.phaser.enabled,"rateHz":self.mod_effects.phaser.rate_hz,"depth":self.mod_effects.phaser.depth,"feedback":self.mod_effects.phaser.feedback,"mix":self.mod_effects.phaser.mix,"stages":self.mod_effects.phaser.stages},
+            "tremolo": {"enabled":self.mod_effects.tremolo.enabled,"rateHz":self.mod_effects.tremolo.rate_hz,"depth":self.mod_effects.tremolo.depth,"mix":self.mod_effects.tremolo.mix},
+        });
+
+        let (reverb_enabled, reverb_mode) = match self.reverb_route {
+            ReverbRouteKind::Simple => (true, "algorithmic"),
+            ReverbRouteKind::Fdn => (true, "fdn"),
+            ReverbRouteKind::Convolver => (true, "convolution"),
+            ReverbRouteKind::Off => (false, "off"),
+        };
+        let algorithmic = if self.reverb_route == ReverbRouteKind::Fdn {
+            json!({"roomSize":self.fdn_reverb.room_size,"damping":self.fdn_reverb.damping,
+                "wet":self.fdn_reverb.wet,"dry":self.fdn_reverb.dry,
+                "preDelayMs":self.fdn_reverb.pre_delay_ms,"width":self.fdn_reverb.width,
+                "type":self.fdn_reverb.reverb_type})
+        } else {
+            json!({"roomSize":self.reverb_simple.room_size,"damping":self.reverb_simple.damping,
+                "wet":self.reverb_simple.wet,"dry":self.reverb_simple.dry,
+                "preDelayMs":self.reverb_simple.pre_delay_ms,"width":self.reverb_simple.width,
+                "type":self.reverb_simple.reverb_type})
+        };
+        let ir = match &self.convolver.ir_recipe {
+            Some(recipe) => Some(hse_core::convolver::build_ir_recipe(recipe)?),
+            None => None,
+        };
+        canonical["reverb"] = json!({
+            "enabled": reverb_enabled,
+            "mode": reverb_mode,
+            "algorithmic": algorithmic,
+            "convolution": {
+                "ir": ir,
+                "irName": if ir.is_some() { Value::String("setParams-recipe".into()) } else { Value::Null },
+                "mix": self.convolver.mix,
+                "preDelayMs": self.convolver.pre_delay_ms,
+                "dePeriodize": true,
+            }
+        });
+        if self.reverb_route == ReverbRouteKind::Convolver && ir.is_none() {
+            return Err("convolver 路由需要 convolver.irRecipe（delta / expNoise 配方）".into());
+        }
+
+        canonical["bassEnhancer"] = json!({
+            "enabled":self.bass_enhancer.enabled,"cutoffHz":self.bass_enhancer.cutoff_hz,
+            "q":self.bass_enhancer.q,"harmonicType":self.bass_enhancer.harmonic_type,
+            "harmonicGain":self.bass_enhancer.harmonic_gain,"mix":self.bass_enhancer.mix,
+            "levelDb":self.bass_enhancer.level_db,"lowBoostDb":self.bass_enhancer.low_boost_db,
+        });
+        canonical["loudnessCompensation"] = json!({
+            "enabled": source.get("loudnessComp").is_some(),
+            "mode":self.loudness_comp.mode,"preset":self.loudness_comp.preset,
+            "bands":self.loudness_comp.bands.iter().map(|band| json!({"frequency":band.frequency,"gain":band.gain})).collect::<Vec<_>>(),
+            "volumePercent":self.loudness_comp.volume_percent,"maxBoostDb":self.loudness_comp.max_boost_db,
+            "smoothingSeconds":self.loudness_comp.smoothing_seconds,
+        });
+        canonical["dynamicEq"] = json!({
+            "enabled":self.dynamic_eq.enabled,"strength":self.dynamic_eq.strength,
+            "thresholdDb":self.dynamic_eq.threshold_db,"ratio":self.dynamic_eq.ratio,
+            "attackMs":self.dynamic_eq.attack_ms,"releaseMs":self.dynamic_eq.release_ms,
+            "bands":self.dynamic_eq.bands.iter().map(|band| json!({"enabled":band.enabled,"targetGainDb":band.target_gain_db})).collect::<Vec<_>>(),
+        });
+        canonical["modulation"] = json!({
+            "enabled": !self.mod_matrix.routes.is_empty(),
+            "routes": self.mod_matrix.routes.iter().map(|route| json!({"source":route.source,"target":route.target,"amount":route.amount,"offset":route.offset})).collect::<Vec<_>>(),
+            "lfo":{"shape":self.mod_matrix.lfo.shape,"rateHz":self.mod_matrix.lfo.rate_hz,"depth":self.mod_matrix.lfo.depth},
+            "envelope":{"attackMs":self.mod_matrix.envelope.attack_ms,"releaseMs":self.mod_matrix.envelope.release_ms,"amount":self.mod_matrix.envelope.amount},
+        });
+        canonical["limiter"] = json!({
+            "enabled":self.limiter.enabled,"thresholdDb":self.limiter.threshold_db,
+            "lookaheadMs":self.limiter.lookahead_ms,"attackMs":self.limiter.attack_ms,
+            "releaseMs":self.limiter.release_ms,"truePeak":self.limiter.true_peak,
+        });
+        Ok(canonical)
+    }
+
     /// 将已解析快照按公开协议键重新编码；只保留请求中出现过的可识别顶层键。
     pub fn to_wire_json(&self, source: &Value) -> Value {
         let Some(source) = source.as_object() else {
@@ -563,6 +700,17 @@ pub fn parse_pilot_params(value: &Value) -> Result<(PilotParams, Vec<String>), S
     let mut warnings: Vec<String> = Vec::new();
     for (k, v) in obj {
         match k.as_str() {
+            "midSide" => {
+                let o = v.as_object().ok_or("midSide 必须是 JSON 对象")?;
+                let mut seen = HashSet::new();
+                if let Some(x) = opt_num(o, "width", "midSide", &mut seen)? {
+                    p.mid_side.width = x;
+                }
+                if let Some(x) = opt_num(o, "voiceBalance", "midSide", &mut seen)? {
+                    p.mid_side.voice_balance = x;
+                }
+                collect_unknown(o, &seen, "midSide", &mut warnings);
+            }
             "biquad" => {
                 let o = v.as_object().ok_or("biquad 必须是 JSON 对象")?;
                 let mut seen = HashSet::new();
@@ -851,8 +999,11 @@ pub fn parse_pilot_params(value: &Value) -> Result<(PilotParams, Vec<String>), S
                 if let Some(x) = opt_str(o, "type", "fdnReverb", &mut seen)? {
                     p.fdn_reverb.reverb_type = x;
                 }
-                // 缺省/null 保留 None（= 线数 8；2/4/8/16 之外的值由模块校验报错）。
+                // 缺省/null 保留 None（= 线数 8）；显式值严格限制为核心支持的线数。
                 if let Some(x) = opt_num(o, "lines", "fdnReverb", &mut seen)? {
+                    if !matches!(x as i64, 2 | 4 | 8 | 16) || x.fract() != 0.0 {
+                        return Err("fdnReverb.lines 仅支持 2/4/8/16".into());
+                    }
                     p.fdn_reverb.lines = Some(x);
                 }
                 collect_unknown(o, &seen, "fdnReverb", &mut warnings);
@@ -1466,6 +1617,18 @@ mod tests {
         assert_eq!(p.mod_matrix.lfo.shape, "triangle");
         assert_eq!(p.mod_matrix.envelope.amount, 0.8);
         assert!(w.is_empty());
+    }
+
+    #[test]
+    fn mid_side_解析并投影到完整链() {
+        let value = serde_json::json!({"midSide": {"width": 1.5, "voiceBalance": -0.25}});
+        let (params, warnings) = parse_pilot_params(&value).unwrap();
+        assert_eq!(params.mid_side.width, 1.5);
+        assert_eq!(params.mid_side.voice_balance, -0.25);
+        assert!(warnings.is_empty());
+        let canonical = params.to_canonical_json(&value, 48_000.0).unwrap();
+        assert_eq!(canonical["stereoWidth"], 1.5);
+        assert_eq!(canonical["pitch"]["voiceBalance"], -0.25);
     }
 
     #[test]

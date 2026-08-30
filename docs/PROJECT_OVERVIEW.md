@@ -35,7 +35,7 @@ HyperSoundEngine 是一个**双支线实现的实时音频效果引擎**：TS �
 | 17 | [FFT 取样] | 频谱分析与特征提取 |
 | 18 | DynamicEq | 自适应动态均衡(频谱包络自动混音,5 带全通交叉) |
 | 19 | [LUFS 取样] | 响度统计 |
-| 20 | 调制主增益 | LFO/Envelope/MIDI 驱动的 masterGain |
+| 20 | 调制主增益 | LFO/Envelope 驱动的 masterGain |
 | 21 | Limiter | 前瞻限幅器(true peak,4× 过采样) |
 
 ### 二、参数调制矩阵
@@ -43,58 +43,47 @@ HyperSoundEngine 是一个**双支线实现的实时音频效果引擎**：TS �
 - **LFO**:正弦/三角/方波/锯齿四种波形,块速率更新
 - **Envelope Follower**:起控/释放/强度可调
 - **调制路由**:源(LFO/Envelope)→ 目标(masterGain / stereoWidth)+ 深度 + 偏移
-- 与 MIDI 自动化共用同一套参数寻址
-
-### 三、MIDI 事件接口 / MIDI Learn
-
-- **实时安全 MIDI 入口**:`sendMidi(events)` 写入预分配环形队列(容量 4096,溢出丢最旧并计数),`process()` 块头消费
-- **MIDI Learn 绑定**:CC / Note → 任意参数路径(`AutomationTarget` 白名单,34 个可寻址参数)
-- **范围映射**:CC 0–127 线性映射到参数 [min, max],支持反向映射
-- **一阶平滑**:防 zipper noise(平滑时间可配)
-- **note 驱动**:note on→max / note off→min;布尔参数 on→true / off→false(如效果开关)
-- 绑定属配置(`reset` 保留),运行时队列/平滑状态属运行时(`reset` 清空)
-
-### 四、多通道处理
+### 三、多通道处理
 
 - **HseAudioBus**:非交错 N 通道缓冲抽象 + 通道级工具(create/fromInterleaved/toInterleaved/copyTo/fill/applyGain/mixFrom/extract/downmixToMono/downmixToStereo)
 - **processBus 两种模式**:
   - `downmix`(默认):N 通道下混立体声处理(环绕监听语义)
   - `perChannelPair`:按立体声对 (0,1)(2,3)… 逐对独立处理(独立子引擎池,参数同步),支持 5.1/7.1 各通道独立 DSP
 
-### 五、WAV 文件 I/O
+### 四、WAV 文件 I/O
 
 - **encodeWav / decodeWav**:16-bit PCM 与 32-bit Float,多通道,标准 RIFF/WAVE
 - 严格校验(坏魔数/缺 chunk/块不对齐/0 声道一律抛错,防注入)
 - 解码结果为非交错 Float32Array[],可直接构造 HseAudioBus 进入处理链
 
-### 六、Sidechain
+### 五、Sidechain
 
 - `process(inputs, outputs, sidechain?)` 第三参数
 - Compressor / Deesser 可选 `sidechainEnabled`,用外部信号驱动包络/检测
 
-### 七、分析与测量
+### 六、分析与测量
 
 - **EngineStats**:LUFS(积分/瞬时)、LRA、峰值 dB、true peak dB、限幅衰减 dB、引擎延迟样本数
 - **EngineAnalysis**:幅度谱(FFT)+ 频谱特征(RMS/ZCR/质心/滚降/平坦度/波峰因子)
 - 实时闭环:IEQ 依据频谱特征自动修正
 
-### 八、场景预设与分享串
+### 七、场景预设与分享串
 
 - **12 个内置场景**:pop/enhance/jazz/dance/classical/livehouse/studio/warm/dts/vocal-stage/night-bass/heavy-bass
 - **我的场景**:localStorage 持久化(上限 8 个,快照去 IR)
 - **分享串**:base64url(version:checksum:json),FNV-1a 校验 + 白名单字段 + 数值 clamp,非法输入抛错
 
-### 九、浏览器宿主(AudioWorklet)
+### 八、浏览器宿主(AudioWorklet)
 
 - `HyperSoundEngineHost`:把引擎接入 Web Audio 图
 - 优先 AudioWorklet(渲染线程,低延迟),失败自动回退 ScriptProcessor
 - 参数经 `port.postMessage` 下发,stats/analysis 周期回传
 - 鸭子类型 AudioNode/AudioContext(Node 测试环境可 stub)
 
-### 十、可选 React UI(调音室)
+### 九、可选 React UI(调音室)
 
-- 玻璃拟态面板,5 个页签:音效场景 / 均衡器 / 调音器(分享串+导出)/ 分析 / MIDI
-- 效果卡片系统 + 参数弹窗(Spatial/Dynamics/Loudness/Modulation/MIDI)
+- 玻璃拟态面板,4 个页签:音效场景 / 均衡器 / 调音器(分享串+导出)/ 分析
+- 效果卡片系统 + 参数弹窗(Spatial/Dynamics/Loudness/Modulation)
 - 经 `HyperSoundEngineUiBridge` 桥接,UI 不直接 import 引擎
 
 ## 技术特性
@@ -126,7 +115,7 @@ hypersoundengine
 ```bash
 npm install hypersoundengine
 npm run build          # 构建核心 + worklet
-npm test               # 37 文件 / 368 用例
+npm test               # 全量测试
 ```
 
 ```ts

@@ -19,7 +19,7 @@ use rtrb::Producer;
 use serde_json::{json, Map, Value};
 
 use crate::backend::BackendFactory;
-use crate::dsp_chain::PilotSubchain;
+use crate::dsp_chain::ServiceEngineChain;
 use crate::params::{parse_pilot_params, PilotParams};
 use crate::pipeline;
 use crate::sessions::{SessionIdExhausted, SessionTable};
@@ -64,7 +64,7 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
 pub struct HotState {
     sample_rate: f64,
     max_block: usize,
-    chain_tx: Producer<PilotSubchain>,
+    chain_tx: Producer<ServiceEngineChain>,
 }
 
 struct EngineInner {
@@ -335,7 +335,7 @@ impl EngineHandle {
     /// start：idle → starting（可见）→ 开流握手 → 装链 → running。
     pub fn start(&self) -> Result<Value, RpcFault> {
         // 第一段：校验并置 starting，取出配置与参数快照及共享件克隆。
-        let (cfg, pilot, run_flag, err_flag, stats, ready_gate) = {
+        let (cfg, pilot, wire_source, run_flag, err_flag, stats, ready_gate) = {
             let mut g = self.inner.lock().unwrap();
             if g.phase != Phase::Idle {
                 return Err(RpcFault::state_forbidden(format!(
@@ -355,6 +355,7 @@ impl EngineHandle {
             (
                 cfg,
                 g.pilot_params.clone(),
+                g.last_params_value.clone().unwrap_or_else(|| json!({})),
                 Arc::clone(&g.run_flag),
                 Arc::clone(&g.err_flag),
                 Arc::clone(&g.stats),
@@ -363,7 +364,15 @@ impl EngineHandle {
         };
 
         // 第二段：锁外完成开流握手、建环、装配初始链。任一步失败即整体回滚。
-        match self.launch_pipeline(&cfg, &pilot, &run_flag, &err_flag, &stats, &ready_gate) {
+        match self.launch_pipeline(
+            &cfg,
+            &pilot,
+            &wire_source,
+            &run_flag,
+            &err_flag,
+            &stats,
+            &ready_gate,
+        ) {
             Ok((workers, chain_tx, negotiated_rate, block_frames)) => {
                 // 第三段：复查并发 stop 未打断，随后安装运行态并放行数据面。
                 let mut g = self.inner.lock().unwrap();
@@ -406,12 +415,18 @@ impl EngineHandle {
         &self,
         cfg: &ServiceConfig,
         pilot: &PilotParams,
+        wire_source: &Value,
         run_flag: &Arc<AtomicBool>,
         _err_flag: &Arc<AtomicBool>,
         stats: &Arc<StatsAtomic>,
         ready_gate: &Arc<AtomicBool>,
     ) -> Result<
-        (Vec<JoinHandle<()>>, Producer<PilotSubchain>, f64, usize),
+        (
+            Vec<JoinHandle<()>>,
+            Producer<ServiceEngineChain>,
+            f64,
+            usize,
+        ),
         (String, Vec<JoinHandle<()>>),
     > {
         let block_frames = cfg.block_size_frames as usize;
@@ -467,11 +482,20 @@ impl EngineHandle {
 
         // 以渲染端协商采样率为 DSP 链基准，构建初始子链并经命令环送达 DSP 线程。
         let negotiated = ren_fmt.sample_rate as f64;
-        let chain = match PilotSubchain::build(pilot, negotiated, block_frames) {
+        let canonical = match pilot.to_canonical_json(wire_source, negotiated) {
+            Ok(value) => value,
+            Err(e) => {
+                return Err(fail(
+                    format!("构建完整引擎参数失败：{}", e),
+                    std::mem::take(&mut handles.handles),
+                ));
+            }
+        };
+        let chain = match ServiceEngineChain::build(&canonical, negotiated, block_frames) {
             Ok(c) => c,
             Err(e) => {
                 return Err(fail(
-                    format!("构建试点子链失败：{}", e),
+                    format!("构建完整引擎链失败：{}", e),
                     std::mem::take(&mut handles.handles),
                 ));
             }
@@ -573,8 +597,11 @@ impl EngineHandle {
                 .hot
                 .as_ref()
                 .ok_or_else(|| RpcFault::backend_failed("运行态缺失热更换通道（内部错误）"))?;
+            let canonical = pilot
+                .to_canonical_json(params_value, hot.sample_rate)
+                .map_err(|e| RpcFault::invalid_params(format!("参数无法应用：{}", e)))?;
             Some(
-                PilotSubchain::build(&pilot, hot.sample_rate, hot.max_block)
+                ServiceEngineChain::build(&canonical, hot.sample_rate, hot.max_block)
                     .map_err(|e| RpcFault::invalid_params(format!("参数无法应用：{}", e)))?,
             )
         } else {
@@ -637,7 +664,8 @@ mod tests {
         let (old_params, _) = parse_pilot_params(&old_value).unwrap();
         let (mut chain_tx, _chain_rx) = pipeline::build_command_ring();
         for _ in 0..4 {
-            let filler = PilotSubchain::build(&old_params, 48_000.0, 64).unwrap();
+            let canonical = old_params.to_canonical_json(&old_value, 48_000.0).unwrap();
+            let filler = ServiceEngineChain::build(&canonical, 48_000.0, 64).unwrap();
             assert!(chain_tx.push(filler).is_ok());
         }
         {

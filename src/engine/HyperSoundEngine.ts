@@ -36,11 +36,7 @@ import type {
   CompressorSettings,
   ReverbSettings,
   IeqTargetCurve,
-  MidiEvent,
-  MidiBinding,
-  AutomationTarget,
 } from '../types'
-import { findAutomatableParam } from '../types'
 import type { AudioEngine, ProcessingStage } from '../interfaces'
 import { SIMPLE_EQ_FREQUENCIES, createDefaultParams } from '../types'
 import { EqChain } from '../dsp/EqChain'
@@ -321,21 +317,6 @@ export class HyperSoundEngine implements AudioEngine {
   private readonly _phaser: PhaserEffect
   private readonly _tremolo: TremoloEffect
 
-  // —— MIDI 事件队列（预分配环形，块头消费；事件编码为 4 个并行数组） ——
-  private static readonly MIDI_QUEUE_CAP = 4096
-  private readonly _midiType = new Uint8Array(HyperSoundEngine.MIDI_QUEUE_CAP)
-  private readonly _midiA = new Float32Array(HyperSoundEngine.MIDI_QUEUE_CAP)
-  private readonly _midiB = new Float32Array(HyperSoundEngine.MIDI_QUEUE_CAP)
-  private readonly _midiC = new Float32Array(HyperSoundEngine.MIDI_QUEUE_CAP)
-  private _midiHead = 0
-  private _midiTail = 0
-  private _midiCount = 0
-  private _midiDropped = 0
-
-  // —— MIDI Learn 绑定表（cc 或 note → 绑定 + 平滑状态；reset 保留，属配置） ——
-  private readonly _midiBindings = new Map<number, { binding: MidiBinding; current: number; target: number }>()
-  private _midiMasterBound = false
-
   // —— 多通道逐对处理子引擎池（processBus perChannelPair；懒创建，setParams/reset 同步） ——
   private readonly _pairEngines: HyperSoundEngine[] = []
 
@@ -380,8 +361,6 @@ export class HyperSoundEngine implements AudioEngine {
 
   // —— 处理链（20 级，顺序即数组顺序） ——
   private readonly _stages: ProcessingStage[] = []
-  /** MIDI 平滑 alpha 缓存（按 smoothMs 键，实例级复用——process 稳态零分配） */
-  private readonly _midiAlphaCache = new Map<number, number>()
 
   // —— 运行时状态 ——
   private _preEqActive = false
@@ -673,19 +652,14 @@ export class HyperSoundEngine implements AudioEngine {
       this._sidechainActive = false
     }
 
-    // MIDI 事件消费（块头：先于参数调制矩阵，使同块参数生效）
-    if (this._midiCount > 0) this.consumeMidiQueue(n)
-
     // 参数调制矩阵（块速率更新 masterGain / stereoWidth）
     if (this._params.modulation.enabled) {
       this._modMatrix.processBlockInto(L, R, n, this._modulationResult)
       this._modMasterGain = this._modulationResult.masterGain
       this._modStereoWidth = this._modulationResult.stereoWidth
     } else {
-      // 调制矩阵未启用：stereoWidth 回退快照值；masterGain 仅当无 MIDI 绑定时回退 1，
-      // 否则保留 MIDI 自动化设置的值（mod-master-gain stage 会据此生效）
+      this._modMasterGain = 1
       this._modStereoWidth = 1
-      if (!this._midiMasterBound) this._modMasterGain = 1
     }
 
     // 14 级处理链（顺序见 buildStages）
@@ -917,245 +891,10 @@ export class HyperSoundEngine implements AudioEngine {
     f.rolloffHz = 0
     f.flatness = 0
     f.crest = 0
-    // MIDI：绑定属配置保留；队列与平滑状态为运行时状态，复位
-    this._midiHead = 0
-    this._midiTail = 0
-    this._midiCount = 0
-    for (const s of this._midiBindings.values()) {
-      s.current = 0
-      s.target = 0
-    }
     // 自定义阶段复位（内置阶段未提供 reset 时自动跳过）
     for (const stage of this._stages) stage.reset?.()
     // 多通道子引擎复位
     for (const e of this._pairEngines) e.reset()
-  }
-
-  // ==================== MIDI 事件接口 / MIDI Learn ====================
-
-  /**
-   * 入队 MIDI 事件（块速率自动化）。实时安全：写入预分配环形队列，process() 块头消费。
-   * 队列满时丢弃最旧事件并累计 dropped 计数（不影响音频线程）。
-   */
-  sendMidi(events: MidiEvent[]): void {
-    for (const ev of events) {
-      const t = ev.type === 'cc' ? 0 : ev.type === 'noteOn' ? 1 : 2
-      const a = ev.type === 'cc' ? ev.cc : ev.note
-      const b = ev.type === 'cc' ? ev.value : ev.type === 'noteOn' ? ev.velocity : 0
-      if (this._midiCount >= HyperSoundEngine.MIDI_QUEUE_CAP) {
-        // 溢出：丢弃最旧
-        this._midiHead = (this._midiHead + 1) % HyperSoundEngine.MIDI_QUEUE_CAP
-        this._midiCount--
-        this._midiDropped++
-      }
-      const i = this._midiTail
-      this._midiType[i] = t
-      this._midiA[i] = a
-      this._midiB[i] = b
-      this._midiC[i] = 0
-      this._midiTail = (this._midiTail + 1) % HyperSoundEngine.MIDI_QUEUE_CAP
-      this._midiCount++
-    }
-  }
-
-  /**
-   * 绑定控制号（CC 或 note）到自动化目标。非法路径立即抛错（白名单语义）。
-   * opts：`eventType`（'cc' 默认 / 'note'）、`min`/`max`（覆盖白名单范围）、
-   * `smoothMs`（一阶平滑，默认 20）、`invert`（反向映射）。
-   */
-  midiLearn(cc: number, target: AutomationTarget, opts?: { eventType?: 'cc' | 'note'; min?: number; max?: number; smoothMs?: number; invert?: boolean }): void {
-    const meta = target.kind === 'builtin' ? null : findAutomatableParam(target.path)
-    if (target.kind === 'path' && !meta) {
-      throw new Error(`unknown automatable path: ${target.path}`)
-    }
-    if (target.kind === 'builtin' && target.param === 'masterGain') {
-      this._midiMasterBound = true
-    }
-    const min = opts?.min ?? (target.kind === 'builtin' ? (target.param === 'masterGain' ? 0 : 0) : meta!.min)
-    const max = opts?.max ?? (target.kind === 'builtin' ? (target.param === 'masterGain' ? 2 : 2) : meta!.max)
-    const smoothMs = opts?.smoothMs ?? 20
-    const eventType = opts?.eventType ?? 'cc'
-    const key = eventType === 'note' ? 0x4000 + cc : cc
-    this._midiBindings.set(key, {
-      binding: {
-        cc,
-        target,
-        min,
-        max,
-        smoothMs: smoothMs < 0 ? 0 : smoothMs,
-        invert: opts?.invert ?? false,
-      },
-      current: 0,
-      target: 0,
-    })
-  }
-
-  /** 解除绑定（cc 或 note）；无绑定则无操作。返回是否解除成功。 */
-  midiUnlearn(cc: number, opts?: { eventType?: 'cc' | 'note' }): boolean {
-    const key = (opts?.eventType ?? 'cc') === 'note' ? 0x4000 + cc : cc
-    const removed = this._midiBindings.delete(key)
-    this.refreshMidiMasterBound()
-    return removed
-  }
-
-  /** 当前全部 MIDI 绑定（副本）。 */
-  getMidiBindings(): MidiBinding[] {
-    const out: MidiBinding[] = []
-    for (const { binding } of this._midiBindings.values()) out.push({ ...binding, target: binding.target.kind === 'path' ? { kind: 'path', path: binding.target.path } : { kind: 'builtin', param: binding.target.param } })
-    return out
-  }
-
-  /** 队列溢出丢弃计数（自上次读取后累计）。 */
-  getMidiDroppedCount(): number {
-    return this._midiDropped
-  }
-
-  /** 消费队列全部事件（process 块头调用）。块速率应用。 */
-  private consumeMidiQueue(blockSize: number): void {
-    // alpha 缓存实例级复用（clear 不分配）：process 稳态零分配
-    const alphaCache = this._midiAlphaCache
-    alphaCache.clear()
-    while (this._midiCount > 0) {
-      const i = this._midiHead
-      const t = this._midiType[i]
-      const a = this._midiA[i]
-      const b = this._midiB[i]
-      this._midiHead = (this._midiHead + 1) % HyperSoundEngine.MIDI_QUEUE_CAP
-      this._midiCount--
-
-      const key = t === 0 ? a : 0x4000 + a
-      const st = this._midiBindings.get(key)
-      if (!st) continue // 未绑定控制号：安全忽略
-      const binding = st.binding
-
-      let targetValue: number
-      if (t === 0) {
-        // CC：0..127 线性映射到 [min, max]
-        const v = Math.min(127, Math.max(0, b)) / 127
-        targetValue = binding.min + (binding.max - binding.min) * (binding.invert ? 1 - v : v)
-      } else if (t === 1) {
-        // noteOn：布尔 → true；数值 → max
-        targetValue = binding.max
-      } else {
-        // noteOff：布尔 → false；数值 → min
-        targetValue = binding.min
-      }
-
-      // 一阶平滑（防 zipper）：smoothMs<=0 直接应用
-      if (binding.smoothMs <= 0) {
-        st.current = targetValue
-        st.target = targetValue
-        this.applyAutomationValue(binding.target, targetValue)
-      } else {
-        st.target = targetValue
-        let alpha = alphaCache.get(binding.smoothMs)
-        if (alpha === undefined) {
-          alpha = 1 - Math.exp(-blockSize / this._fs / (binding.smoothMs / 1000))
-          alphaCache.set(binding.smoothMs, alpha)
-        }
-        st.current += (st.target - st.current) * alpha
-        this.applyAutomationValue(binding.target, st.current)
-      }
-    }
-    // 无事件但存在平滑中绑定：继续向 target 收敛（保持轨迹单调）
-    for (const st of this._midiBindings.values()) {
-      const b = st.binding
-      if (b.smoothMs > 0 && Math.abs(st.current - st.target) > 1e-9) {
-        let alpha = alphaCache.get(b.smoothMs)
-        if (alpha === undefined) {
-          alpha = 1 - Math.exp(-blockSize / this._fs / (b.smoothMs / 1000))
-          alphaCache.set(b.smoothMs, alpha)
-        }
-        st.current += (st.target - st.current) * alpha
-        this.applyAutomationValue(b.target, st.current)
-      }
-    }
-  }
-
-  /** 应用自动化值到目标（builtin 或参数路径）。值已 clamp。 */
-  private applyAutomationValue(target: AutomationTarget, value: number): void {
-    if (target.kind === 'builtin') {
-      if (target.param === 'masterGain') {
-        this._modMasterGain = value < 0 ? 0 : value > 2 ? 2 : value
-      } else {
-        this._params.stereoWidth = value < 0 ? 0 : value > 2 ? 2 : value
-      }
-      return
-    }
-    const meta = findAutomatableParam(target.path)
-    if (!meta) return // learn 时已校验；运行时安全忽略
-    let v = value < meta.min ? meta.min : value > meta.max ? meta.max : value
-    if (meta.boolean) v = v >= 0.5 ? 1 : 0
-    this.writeParamPath(target.path, v)
-    this.refreshModuleForPath(target.path)
-  }
-
-  /** 写回参数快照叶子字段（点分路径，仅叶子数值/布尔）。 */
-  private writeParamPath(path: string, value: number): void {
-    const keys = path.split('.')
-    let obj: Record<string, unknown> = this._params as unknown as Record<string, unknown>
-    for (let i = 0; i < keys.length - 1; i++) {
-      const k = keys[i]
-      const next = obj[k]
-      if (typeof next !== 'object' || next === null) return
-      obj = next as Record<string, unknown>
-    }
-    const leaf = keys[keys.length - 1]
-    const cur = obj[leaf]
-    if (typeof cur === 'boolean') obj[leaf] = value >= 0.5
-    else if (typeof cur === 'number') obj[leaf] = value
-  }
-
-  /** 使路径对应的 DSP 模块生效（改参数快照后按顶层 section 调 setter）。 */
-  private refreshModuleForPath(path: string): void {
-    const p = this._params
-    if (path === 'compressor.enabled') return // active() 读快照，无需 setter
-    if (path.startsWith('compressor.')) { this._compressor.setParams(p.compressor); return }
-    if (path.startsWith('deesser.')) { this._deesser.setParams(p.deesser); return }
-    if (path.startsWith('bassEnhancer.')) { this._bass.setParams(p.bassEnhancer); return }
-    if (path.startsWith('reverb.algorithmic.')) {
-      this._reverbSimple.setParams({ ...p.reverb.algorithmic })
-      this._fdnReverb.setParams({ ...p.reverb.algorithmic, type: p.reverb.algorithmic.type })
-      return
-    }
-    if (path === 'reverb.enabled') return // active() 读快照
-    if (path.startsWith('modEffects.delay.')) { this._delay.setParams(p.modEffects.delay); return }
-    if (path.startsWith('modEffects.chorus.')) { this._chorus.setParams(p.modEffects.chorus); return }
-    if (path.startsWith('modEffects.flanger.')) { this._flanger.setParams(p.modEffects.flanger); return }
-    if (path.startsWith('modEffects.phaser.')) { this._phaser.setParams(p.modEffects.phaser); return }
-    if (path.startsWith('modEffects.tremolo.')) { this._tremolo.setParams(p.modEffects.tremolo); return }
-    if (path.startsWith('ieq.')) { this._ieqStrength = p.ieq.strength; return }
-    if (path.startsWith('dynamicEq.')) {
-      this._dynamicEq.setParams({
-        enabled: p.dynamicEq.enabled,
-        strength: p.dynamicEq.strength,
-        thresholdDb: p.dynamicEq.thresholdDb,
-        ratio: p.dynamicEq.ratio,
-        attackMs: p.dynamicEq.attackMs,
-        releaseMs: p.dynamicEq.releaseMs,
-        bands: p.dynamicEq.bands.map((b, i) => ({
-          enabled: b.enabled,
-          frequency: DYNAMIC_EQ_CROSSOVERS[i] ?? 0,
-          targetGainDb: b.targetGainDb,
-        })),
-      })
-      return
-    }
-    if (path.startsWith('limiter.')) { this._limiter.setParams(p.limiter); return }
-    if (path.startsWith('pitch.')) return // M/S 每块读快照；HseStretch 离线用
-    // stereoWidth builtin path（AUTOMATABLE 含 stereoWidth 顶层路径）：M/S 每块读快照
-  }
-
-  /** 重新计算 _midiMasterBound（是否有 masterGain 绑定）。 */
-  private refreshMidiMasterBound(): void {
-    let bound = false
-    for (const { binding } of this._midiBindings.values()) {
-      if (binding.target.kind === 'builtin' && binding.target.param === 'masterGain') {
-        bound = true
-        break
-      }
-    }
-    this._midiMasterBound = bound
   }
 
   // ==================== 内部实现 ====================
@@ -1339,7 +1078,7 @@ export class HyperSoundEngine implements AudioEngine {
       },
       {
         id: 'mod-master-gain',
-        active: () => this._params.modulation.enabled || this._midiMasterBound,
+        active: () => this._params.modulation.enabled,
         run: (L, R, n) => {
           const g = this._modMasterGain
           for (let i = 0; i < n; i++) {

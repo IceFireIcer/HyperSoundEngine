@@ -28,10 +28,9 @@
 | `bench_fdn_reverb` | 新增 | fdn-reverb（8 线，wet 0.3 / dry 0.7，与 reverb-simple 同快照口径对照） |
 | `bench_convolver` | 新增 | convolver：delta IR + expNoise IR×2 长度（6000 / 1024），块长矩阵 + IR 场景组 |
 | `bench_fft` | 新增 | fft：尺寸 1024/2048/4096/8192（块长 = N，L=Re / R=Im 双平面） |
-| `bench_midi` | 新增 | midi：MidiBindings::consume（16 绑定 × 128 事件突发 + 空闲守卫路径） |
 | `bench_share_codec` | 新增 | share_codec：decode_share_code（固化 v2 HSE2 串，854 字符） |
 | `bench_wav` | 新增 | wav：encode/decode × PCM16 / Float32（32768 帧立体声） |
-| `bench_chain_full` | 新增 | **全链 12 级离线吞吐（§三指标）**：hse-service `PilotSubchain` 驱动 60s 音频 |
+| `bench_chain_full` | 新增 | **完整 1–21 级离线吞吐（§三指标）**：hse-service `ServiceEngineChain` 驱动 60s 音频 |
 
 hse-core 中已移植但本矩阵未含的模块：`hse-stretch`（离线变速外置语义、输出长度可变，
 不适用恒长 `push_blocks` 框架，亦不在 Phase 4 基准清单内，留待后续单独补测）。
@@ -52,8 +51,7 @@ hse-core 中已移植但本矩阵未含的模块：`hse-stretch`（离线变速�
   "每调用固定开销 × 分块粒度"的净效应）。全部为 32768 的约数；冻结向量域的非 2 幂
   块长（333/384/441…）保留给对拍 harness，基准统一用 2 幂便于矩阵对比。
 - **throughput 语义**：`Throughput::Elements(帧数)` → criterion 报告的 elem/s 即 **帧(样本)/s**，
-  ×realtime = elem/s ÷ 48000；ns/帧 = 1e9 ÷ elem/s。I/O 组（share/wav/midi 突发）按
-  字节/事件计。
+  ×realtime = elem/s ÷ 48000；ns/帧 = 1e9 ÷ elem/s。I/O 组（share/wav）按字节计。
 
 ### 1.3 criterion 设置与运行环境
 
@@ -121,8 +119,6 @@ O(N log N) 增长平缓（1024→8192 每点成本 +31%），twiddle 表预建�
 
 | 场景 | 耗时（中位） | 吞吐 |
 |---|---|---|
-| midi consume 突发：16 绑定 × 128 事件（含 JSON 写回） | 8.94 µs | 14.32 M 事件/s（69.8 ns/事件） |
-| midi consume 空闲守卫（环空）block 128 / 1024 | 1.33 µs / 167 ns（每迭代 256/32 次调用） | **5.2 ns/调用，恒定** |
 | share_codec decode v2（854 字符 HSE2 串） | 117.1 µs | 6.96 MiB/s |
 | wav encode PCM16（32768 帧立体声，131156 B） | 151.1 µs | 827 MiB/s |
 | wav decode PCM16 | 70.5 µs | 1.73 GiB/s |
@@ -133,9 +129,7 @@ O(N log N) 增长平缓（1024→8192 每点成本 +31%），twiddle 表预建�
 
 ## 三、§三指标状态：全链离线吞吐（bench_chain_full，60s @48kHz / 块 128）
 
-被测对象是引擎服务实际装配的 `hse-service::dsp_chain::PilotSubchain`（12 级：
-midSide→biquad→eqChain→deesser→compressor→modEffects→混响路→bass→loudnessComp→
-dynamicEq→modMatrix→limiter），每迭代复制母带 → reset → 22,500 块连续
+被测对象现为引擎服务实际装配的 `hse-service::dsp_chain::ServiceEngineChain`（Rust `EngineChainStage` 第 1–21 级，spatial 固定 off），每迭代复制母带 → reset → 22,500 块连续
 `process_planar`。
 
 | 场景 | 处理 60s 音频耗时 | 吞吐（帧/s） | ×realtime | 实时 CPU（单核） |

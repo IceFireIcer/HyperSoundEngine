@@ -12,7 +12,7 @@
  *  - 听力测试状态机（HseHearingTest 封装）。
  */
 
-import type { EngineAnalysis, EngineStats, ScenePreset, HyperSoundEngineParams, MidiEvent, MidiBinding, AutomationTarget } from '../src/types'
+import type { EngineAnalysis, EngineStats, ScenePreset, HyperSoundEngineParams } from '../src/types'
 import { createDefaultParams } from '../src/types'
 import type { AudioEngine } from '../src/interfaces'
 import { SCENE_PRESETS, getSceneById } from '../src/engine/ScenePresets'
@@ -57,14 +57,6 @@ export interface HyperSoundEngineUiBridge {
   hearingStep(): HyperSoundEngineHearingSession
   answerHearing(heard: boolean): HyperSoundEngineHearingSession
   resetHearing(): void
-  /** MIDI Learn / 事件接口（仅 HyperSoundEngine 后端提供；通用 AudioEngine 缺省为 undefined） */
-  midi?: {
-    learn(cc: number, target: AutomationTarget, opts?: { eventType?: 'cc' | 'note'; min?: number; max?: number; smoothMs?: number; invert?: boolean }): void
-    unlearn(cc: number, opts?: { eventType?: 'cc' | 'note' }): boolean
-    getBindings(): MidiBinding[]
-    sendMidi(events: MidiEvent[]): void
-    getDroppedCount(): number
-  }
 }
 
 /** 快照入库前去除不可序列化数据（卷积 IR 数组 → irName 引用语义） */
@@ -110,10 +102,6 @@ export function createHyperSoundEngineUiBridge(engine: AudioEngine, sampleRate: 
     }
   }
 
-  // HyperSoundEngine 后端探测：仅当引擎实现 MIDI 接口时填充 midi 对象
-  type MidiCapable = { sendMidi(e: MidiEvent[]): void; midiLearn(cc: number, t: AutomationTarget, o?: Record<string, unknown>): void; midiUnlearn(cc: number, o?: Record<string, unknown>): boolean; getMidiBindings(): MidiBinding[]; getMidiDroppedCount(): number }
-  const midiEngine = (typeof (engine as unknown as MidiCapable).sendMidi === 'function') ? (engine as unknown as MidiCapable) : null
-
   const impl: HyperSoundEngineUiBridge = {
     getParams: () => JSON.parse(JSON.stringify(current)) as HyperSoundEngineParams,
     setParams: (p: HyperSoundEngineParams) => {
@@ -158,13 +146,6 @@ export function createHyperSoundEngineUiBridge(engine: AudioEngine, sampleRate: 
       return readHearing()
     },
     resetHearing: () => hearing.reset(),
-    midi: midiEngine ? {
-      learn: (cc, target, opts) => midiEngine.midiLearn(cc, target, opts as Record<string, unknown> | undefined),
-      unlearn: (cc, opts) => midiEngine.midiUnlearn(cc, opts as Record<string, unknown> | undefined),
-      getBindings: () => midiEngine.getMidiBindings(),
-      sendMidi: (events) => midiEngine.sendMidi(events),
-      getDroppedCount: () => midiEngine.getMidiDroppedCount(),
-    } : undefined,
   }
   return impl
 }

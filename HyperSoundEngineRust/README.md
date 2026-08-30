@@ -13,15 +13,16 @@ HyperSoundEngineRust/
 ├── Cargo.toml               # Cargo workspace 根（resolver = "2"，edition 2021）
 ├── README.md                # 本文档
 └── crates/
-    ├── hse-core/            # ✅ 骨架已建：Stage 抽象 + 引擎链雏形（纯库；真实 DSP 自下一阶段落地）
-    ├── hse-parity/          # ✅ 已建：对拍 harness（开发专用 bin，二进制名 hse-parity）
-    ├── hse-wasapi/          # ⏳ 占位说明：WASAPI 后端（渲染 + loopback/虚拟缆捕获），Phase 2+
-    ├── hse-napi/            # ⏳ 占位说明：Node/Electron 进程内嵌入扩展（napi-rs），Phase 2+ 按需
-    └── hse-service/         # ⏳ 占位说明：引擎服务进程 bin（线程编排 + 控制面），Phase 2+ 按需
+    ├── hse-core/            # ✅ 17 个 DSP 模块 + EngineChainStage 1–21 级主链
+    ├── hse-parity/          # ✅ 冻结向量对拍 harness（二进制名 hse-parity）
+    ├── hse-wasapi/          # ✅ WASAPI 共享模式渲染 + loopback 捕获
+    ├── hse-service/         # ✅ 完整主链服务进程、JSON-RPC 控制面与推流入口
+    ├── hse-wasm/            # ✅ 单 Biquad wasm32 最小试点
+    └── hse-napi/            # ⏳ 可选 Node/Electron 进程内嵌入扩展占位
 ```
 
-规划中还有 hse-asio（feature flag，许可决策后启动）与根级 benches/（criterion 基准矩阵），
-分别对应规划书 Phase 5 与 Phase 1，届时再加入工程。
+Windows 设备 I/O 固定由 `hse-wasapi` 承担，不规划其他 Windows 音频后端。根级 benches/
+（criterion 基准矩阵）对应规划书 Phase 1。
 
 ## 构建与验证
 

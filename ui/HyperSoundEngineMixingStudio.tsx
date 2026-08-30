@@ -12,7 +12,7 @@
  */
 
 import { useState } from 'react'
-import { AudioLines, SlidersHorizontal, Sparkles, Activity, Radio, X } from 'lucide-react'
+import { AudioLines, SlidersHorizontal, Sparkles, Activity, X } from 'lucide-react'
 import type { HyperSoundEngineTheme } from './theme'
 import { useHyperSoundEngineTheme } from './theme'
 import type { HyperSoundEngineUiBridge } from './bridge'
@@ -25,7 +25,6 @@ import { SpatialModal } from './modalsSpatial'
 import { DynamicsModal } from './modalsDynamics'
 import { LoudnessModal } from './modalsLoudness'
 import { ModulationModal } from './modalsModulation'
-import { MidiPanel } from './midiPanel'
 
 export interface HyperSoundEngineMixingStudioProps {
   bridge: HyperSoundEngineUiBridge
@@ -38,7 +37,7 @@ export interface HyperSoundEngineMixingStudioProps {
   exporting?: boolean
 }
 
-type Tab = 'effects' | 'eq' | 'tuner' | 'analyze' | 'midi'
+type Tab = 'effects' | 'eq' | 'tuner' | 'analyze'
 
 const PANEL_KEYFRAMES = `
 @keyframes hse-panel-backdrop { from { opacity: 0 } to { opacity: 1 } }
@@ -122,7 +121,6 @@ export default function HyperSoundEngineMixingStudio({ bridge, onClose, playerTh
               { key: 'eq' as Tab, label: '均衡器', icon: SlidersHorizontal },
               { key: 'tuner' as Tab, label: '调音器', icon: AudioLines },
               { key: 'analyze' as Tab, label: '分析', icon: Activity },
-              { key: 'midi' as Tab, label: 'MIDI', icon: Radio },
             ]).map((tab) => {
               const active = activeTab === tab.key
               return (
@@ -157,9 +155,6 @@ export default function HyperSoundEngineMixingStudio({ bridge, onClose, playerTh
               )}
               {activeTab === 'analyze' && (
                 <AnalysisPanel bridge={bridge} theme={theme} controller={controller} />
-              )}
-              {activeTab === 'midi' && (
-                <MidiPanel bridge={bridge} theme={theme} />
               )}
             </div>
           </div>

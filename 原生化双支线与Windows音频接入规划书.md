@@ -1,8 +1,8 @@
 # 原生化双支线与 Windows 音频接入规划书
 
 - 日期：2026-08-22
-- 状态：已定稿（grilling 会话产出，决策记录见 `docs/adr/0001`~`0003`，术语见 `CONTEXT.md`）
-- 范围：① 性能优化（激进原生化路线）② Windows 音频 API 接入（WASAPI 优先、ASIO 可选）
+- 状态：已定稿（grilling 会话产出，决策记录见 `docs/adr/0001`~`0004`，术语见 `CONTEXT.md`）
+- 范围：① 性能优化（激进原生化路线）② Windows 音频 API 接入（仅 WASAPI）
 
 ---
 
@@ -30,7 +30,6 @@ HyperSoundEngineRust/
 │   ├── hse-core/           # DSP 模块 + 引擎链（纯库；process 稳态零分配、无时钟/随机）
 │   ├── hse-parity/         # 对拍 harness：读 specs/ 向量 → 跑 hse-core → 比对（dev-only）
 │   ├── hse-wasapi/         # WASAPI 后端：渲染 + loopback 捕获（wasapi crate 封装）
-│   ├── hse-asio/           # ASIO 后端（feature flag，Phase 5，许可决策后启动）
 │   ├── hse-napi/           # napi-rs 扩展（可选：Node/Electron 进程内嵌入）
 │   └── hse-service/        # 引擎服务进程（bin）：线程编排 + WebSocket 控制面
 └── benches/                # 基准矩阵（criterion）
@@ -130,7 +129,7 @@ specs/
 
 ### Phase 3：模块对拍推进 + 推流协议（4-6 周）
 1. 21 级链逐模块规格化 + Rust 实现 + 双绿（Convolver 分区卷积、FFT 基-4、FdnReverb、DynamicEq、ModEffects、Compressor/Deesser sidechain、调制矩阵、LoudnessComp/LufsMeter…）；
-2. MIDI 环形队列 + MIDI Learn、WAV I/O（`.scratch/midi-and-wav-io/PRD.md` 作输入）；
+2. WAV I/O；
 3. 推流协议：会话管理（open/close）、二进制 PCM 帧（会话 id + 序号 + f32 载荷）、背压策略（丢弃旧块 + xrun 上报）、混后处理；
 4. `ShareCodec`/场景预设格式兼容（旧分享串在 Rust 支线可解析）。
 - **出口判据**：全链双绿；两个推流客户端 + 一路回环同时运行正确混音。
@@ -143,7 +142,6 @@ specs/
 - **出口判据**：§三全部指标实测达标并留档。
 
 ### Phase 5：可选扩展（按需启动）
-- **ASIO 后端**：2025-10 起 Steinberg ASIO SDK **双许可：GPLv3 或原专有许可**（[Steinberg 官方](https://www.steinberg.net/developers/asiosdk-open/)、[报道](https://cdm.link/open-steinberg-vst3-and-asio/)）——启动前需做许可决策（GPLv3 传染面 vs 专有许可申请）；ASIO 仅随推流/直渲染路径提供（loopback 是 WASAPI 独有）；
 - **wasm32 目标**：hse-core 编译 wasm 供浏览器 worklet 逐步替换 TS 核心（同代码近零成本，属可选演进，非本规划承诺）；
 - **空间音频**：按《空间音频实现规划书》§3.2 契约函数与 §八性能目标在 Rust 支线实现（TS 侧兄弟节点方案已作废，ADR-0003）。
 
@@ -152,10 +150,9 @@ specs/
 | 选型 | 依据 |
 |------|------|
 | Rust（否决 C） | 空间音频规划已引 rustup/cargo/wasm-pack；ADR-0001 已定 napi-rs；内存安全 |
-| [`wasapi`](https://docs.rs/wasapi) crate | 纯安全 Rust、CamillaDSP 作者维护、自带 loopback 同捕同播示例（[docs.rs](https://docs.rs/wasapi)、[crates.io](https://crates.io/crates/wasapi)）；cpal 的 loopback 支持仍是长期 open issue（[RustAudio/cpal#251](https://github.com/tomaka/cpal/issues/251)） |
-| cpal | 备选跨平台抽象（ASIO 绑定在其 feature 后面）；跨平台是后置目标，Phase 5 再议 |
+| Windows 音频后端 | 仅使用 [`wasapi`](https://docs.rs/wasapi) crate；回环捕获、虚拟缆直捕与渲染统一走 WASAPI |
+| cpal | 不采用；跨平台音频后端不在当前项目范围 |
 | `rtrb` 环形缓冲 | realtime-safe SPSC，音频线程标准做法 |
-| ASIO 许可 | 2025-10 双许可化（GPLv3 + 专有并行），[theaudioprogrammer](https://www.theaudioprogrammer.com/content/steinbergs-vst3-asio-sdks-go-open-source)、[KVR](https://www.kvraudio.com/news/steinberg-moves-vst-3-sdk-to-mit-open-source-license-asio-now-gplv3-65179) |
 | VB-CABLE 分发 | 官方允许免费/商业应用分发与嵌入安装包（[VB-Audio Licensing](https://vb-audio.com/Services/licensing.htm)；商用确据可邮件确认） |
 | WASAPI loopback 已知坑 | 毛刺/间断问题有社区记录（[Microsoft Learn](https://learn.microsoft.com/en-gb/answers/questions/1188388/persistent-audio-discontinuity-in-wasapi-loopback-capture)）——缓冲策略与 xrun 上报列为 Phase 2 验收项 |
 
@@ -166,13 +163,11 @@ specs/
 | 双实现三倍工件成本（规格+两实现） | 高（已知情接受） | 严格"规格先行"；小功能允许向量冻结滞后一拍但不得跳过 |
 | 两支线行为漂移 | 高 | CI 双绿门禁；向量归规格所有，单方面不可改 |
 | WASAPI loopback 毛刺 | 中 | 事件驱动 + 冗余缓冲 + xrun 计数上报；虚拟缆走直捕绕开 loopback |
-| ASIO 许可传染 | 中 | 推迟 Phase 5 决策；GPLv3 与专有双通道都在 |
 | 全链重写周期长、中间态不可用 | 中 | Phase 2 先端到端跑通小链（试点模块），后续模块逐个替换进链 |
-| Windows 专注导致跨平台债务 | 低（当前定位 Windows） | hse-core 保持平台无关；平台代码隔离在 hse-wasapi/asio |
+| Windows 专注导致跨平台债务 | 低（当前定位 Windows） | hse-core 保持平台无关；平台代码隔离在 hse-wasapi |
 
 ## 八、与既有规划的关系
 
 - 《空间音频实现规划书.md》：Rust HRTF 核并入 Rust 支线（Phase 5），其 §3.2 契约与 §八目标继续有效；TS 兄弟节点方案作废（ADR-0003）；
 - `.scratch/alg-optimization/PLAN.md`：已完成（TS 支线内优化），其结论构成 Rust 移植的算法蓝本（分区卷积、基-4 FFT、FDN、DynamicEq）；
-- `.scratch/midi-and-wav-io/PRD.md`：并入 Phase 3 规格输入；
 - TS 支线（本仓库 `src/`）：继续作为浏览器宿主与 Node 离线路径维护，新功能按"规格先行双实现"同步落两支线。

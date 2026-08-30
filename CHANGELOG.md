@@ -2,8 +2,14 @@
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-08
+
 ### Added
+- **Rust 服务完整链统一**：`hse-service` 删除独立维护的旧子链，改为通过兼容 wire 参数适配器构造 `hse-core::EngineChainStage`，实际执行第 1–21 级完整主链（空间级保持 off）；新增全级序、all-bypass 冻结向量投影和三源混后处理确定性测试，完整链 benchmark 同步迁移。
 - **参数/场景共享契约与 Rust 双向分享能力**：新增 `specs/engine/params.md`、`scenes.md` 及 3 个由 TS 事实源生成的结构化冻结夹具，固定完整默认参数、12 个内置场景和 14 个 HSE2 编码 case；Rust 新增默认参数/场景生成 API 与 HSE2 encode，覆盖固定键序、Crockford Base32、UTF-16 FNV、未知字段、非 ASCII、负零和“编码保留原值、解码再 clamp”的跨语言逐字符契约。
+
+### Removed
+- **MIDI 与 ASIO 范围清理**：项目不再提供或规划 MIDI 事件、MIDI Learn、相关 UI/API/服务控制面规格；删除 `specs/io/midi.md`。Windows 设备 I/O 固定为 WASAPI，不再规划 ASIO 后端；ADR-0004 取代 ADR-0001/0002 中的 ASIO 方向。调制矩阵的 LFO 与 Envelope Follower 保留。
 
 ### Fixed
 - **服务控制面契约与实时安全加固**：JSON-RPC 显式非法 `id`/`params` 在分派前拒绝且无副作用；start/stop 的 phase 通知在请求连接上严格先于响应，并向其他连接广播一次；`setParams` 运行态候选构链、命令投递与规范化 `lastParams` 改为事务提交，非运行态保留延迟构链兼容语义；公开 stop 不再接受 starting 状态。
