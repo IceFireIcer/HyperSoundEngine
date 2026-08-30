@@ -22,6 +22,7 @@ pub mod compressor;
 pub mod convolver;
 pub mod deesser;
 pub mod dynamic_eq;
+pub mod engine_chain;
 pub mod eq_chain;
 pub mod fft;
 pub mod fdn_reverb;

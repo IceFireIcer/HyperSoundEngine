@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "module": "engine-chain",
+  "case": "mod-dual-target",
+  "sampleRate": 48000,
+  "blockSize": 256,
+  "channels": 2,
+  "frames": 6144,
+  "params": {
+    "overrides": {
+      "eq": {
+        "enabled": false
+      },
+      "limiter": {
+        "enabled": false
+      },
+      "stereoWidth": 0.25,
+      "modulation": {
+        "enabled": true,
+        "lfo": {
+          "enabled": true,
+          "shape": "triangle",
+          "rateHz": 3,
+          "depth": 0.8
+        },
+        "envelope": {
+          "enabled": true,
+          "attackMs": 3,
+          "releaseMs": 90,
+          "amount": 0.9
+        },
+        "routes": [
+          {
+            "source": "lfo",
+            "target": "masterGain",
+            "amount": 0.35,
+            "offset": -0.05
+          },
+          {
+            "source": "envelope",
+            "target": "stereoWidth",
+            "amount": 0.9,
+            "offset": -0.2
+          }
+        ]
+      },
+      "spatial": {
+        "mode": "off"
+      }
+    }
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "同一 ModulationMatrix 块同时驱动 masterGain 与 stereoWidth；块头推进，宽度在 M/S 级应用，主增益在 LUFS 取样后应用。"
+}

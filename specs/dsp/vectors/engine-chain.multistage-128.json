@@ -1,0 +1,196 @@
+{
+  "schemaVersion": 1,
+  "module": "engine-chain",
+  "case": "multistage-128",
+  "sampleRate": 48000,
+  "blockSize": 128,
+  "channels": 2,
+  "frames": 12288,
+  "params": {
+    "overrides": {
+      "loudnessNormalization": {
+        "enabled": true,
+        "useRealtimeMeter": false,
+        "externalGainDb": -1.5
+      },
+      "surround3d": {
+        "enabled": true,
+        "distance": 0.85,
+        "speed": 0.7,
+        "angle": 11,
+        "direction": -1
+      },
+      "stereoWidth": 1.18,
+      "pitch": {
+        "enabled": true,
+        "voiceBalance": 0.12
+      },
+      "eq": {
+        "enabled": true,
+        "mode": "simple",
+        "simpleBands": [
+          2,
+          -1,
+          1.5,
+          -2,
+          1
+        ]
+      },
+      "deesser": {
+        "enabled": true,
+        "thresholdDb": -28,
+        "ratio": 5,
+        "mix": 0.65
+      },
+      "compressor": {
+        "enabled": true,
+        "thresholdDb": -18,
+        "ratio": 3,
+        "attackMs": 6,
+        "releaseMs": 110,
+        "makeupDb": 1
+      },
+      "nightMode": {
+        "enabled": true,
+        "amount": 3
+      },
+      "modEffects": {
+        "delay": {
+          "enabled": true,
+          "delayMs": 18,
+          "feedback": 0.22,
+          "mix": 0.12
+        },
+        "chorus": {
+          "enabled": true,
+          "rateHz": 1.3,
+          "depthMs": 2.5,
+          "mix": 0.18
+        },
+        "flanger": {
+          "enabled": true,
+          "rateHz": 0.8,
+          "depthMs": 1.2,
+          "feedback": 0.2,
+          "mix": 0.12
+        },
+        "phaser": {
+          "enabled": true,
+          "rateHz": 0.6,
+          "depth": 0.35,
+          "feedback": 0.2,
+          "mix": 0.15,
+          "stages": 4
+        },
+        "tremolo": {
+          "enabled": true,
+          "rateHz": 3.5,
+          "depth": 0.2,
+          "mix": 0.35
+        }
+      },
+      "reverb": {
+        "enabled": true,
+        "mode": "algorithmic",
+        "algorithmic": {
+          "type": "room",
+          "roomSize": 0.35,
+          "damping": 0.6,
+          "wet": 0.16,
+          "dry": 0.84,
+          "preDelayMs": 4,
+          "width": 1.1
+        }
+      },
+      "bassEnhancer": {
+        "enabled": true,
+        "cutoffHz": 95,
+        "harmonicType": "soft",
+        "harmonicGain": 0.25,
+        "mix": 0.22,
+        "lowBoostDb": 2
+      },
+      "loudnessCompensation": {
+        "enabled": true,
+        "mode": "auto",
+        "volumePercent": 55,
+        "smoothingSeconds": 0.08
+      },
+      "ieq": {
+        "enabled": true,
+        "strength": 0.25,
+        "targetCurve": "warm",
+        "timeConstantSec": 0.5
+      },
+      "dynamicEq": {
+        "enabled": true,
+        "strength": 0.35,
+        "thresholdDb": -24,
+        "ratio": 2.5,
+        "attackMs": 12,
+        "releaseMs": 160,
+        "bands": [
+          {
+            "enabled": true,
+            "targetGainDb": 1
+          },
+          {
+            "enabled": true,
+            "targetGainDb": -1
+          },
+          {
+            "enabled": true,
+            "targetGainDb": 1.5
+          },
+          {
+            "enabled": true,
+            "targetGainDb": -1.5
+          },
+          {
+            "enabled": true,
+            "targetGainDb": 0.5
+          }
+        ]
+      },
+      "modulation": {
+        "enabled": true,
+        "lfo": {
+          "enabled": true,
+          "shape": "sine",
+          "rateHz": 1.7,
+          "depth": 0.4
+        },
+        "envelope": {
+          "enabled": true,
+          "attackMs": 8,
+          "releaseMs": 140,
+          "amount": 0.5
+        },
+        "routes": [
+          {
+            "source": "lfo",
+            "target": "masterGain",
+            "amount": 0.12
+          }
+        ]
+      },
+      "limiter": {
+        "enabled": true,
+        "thresholdDb": -2,
+        "lookaheadMs": 3,
+        "attackMs": 0.5,
+        "releaseMs": 90,
+        "truePeak": true
+      },
+      "spatial": {
+        "mode": "off"
+      }
+    }
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "固定 128 帧块的 1–21 多级同时开启指纹，覆盖归一化至 Limiter 的全部可变音频级及两个只读取样级。"
+}

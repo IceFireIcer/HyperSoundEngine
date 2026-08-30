@@ -11,8 +11,9 @@
  *    驱动形态的模块——fft（非流式变换，(L,R)=(Re,Im) 平面，specs/dsp/fft.md §三）、
  *    convolver（IR 配方驱动，specs/dsp/convolver.md §4.2）、modulation-matrix
  *    （控制率 Stage 驱动，specs/dsp/modulation-matrix.md §4.4）、hse-stretch
- *    （块窗映射驱动，specs/dsp/hse-stretch.md §4.6）与 lufs-meter（计量型读数驱动，
- *    moduleKind='meter'，specs/dsp/lufs-meter.md §三）——
+ *    （块窗映射驱动，specs/dsp/hse-stretch.md §4.6）、lufs-meter（计量型读数驱动，
+ *    moduleKind='meter'，specs/dsp/lufs-meter.md §三）与 engine-chain（真实
+ *    HyperSoundEngine 1–21 级整链驱动，specs/engine/chain.md）——
  *    导出确定性对拍向量到 specs/dsp/vectors/<module>.<case>.json 与同名 .f32；
  *  - 向量格式契约（两支线共享，见 specs/ 目录规划文档）：
  *      JSON：schemaVersion=1 / module / case / sampleRate / blockSize / channels=2 /
@@ -117,6 +118,8 @@ const MODULE_SOURCES = [
   { id: 'modulation-matrix', file: 'modulation.ts' }, // 控制率 Stage 驱动（specs/dsp/modulation-matrix.md §4.4）
   { id: 'hse-stretch', file: 'HseStretch.ts' },       // 块窗映射驱动（specs/dsp/hse-stretch.md §4.6）
   { id: 'lufs-meter', file: 'LufsMeter.ts' },         // 计量型读数驱动（moduleKind='meter'，specs/dsp/lufs-meter.md §三）
+  { id: 'engine-chain', file: '../engine/HyperSoundEngine.ts' }, // 真实 1–21 级整链（spatial 固定 off）
+  { id: 'engine-types', file: '../types.ts' },        // engine-chain 默认参数事实源
 ]
 
 /**
@@ -1380,6 +1383,76 @@ const CASES = [
       return x
     },
   },
+
+  // ---------- engine-chain（真实 HyperSoundEngine 1–21 级；第 22 级 spatial 固定 off） ----------
+  // params 是相对 createDefaultParams(sampleRate) 的深合并 overrides；数组整体替换。
+  {
+    module: 'engine-chain', caseId: 'all-bypass-bitexact', sampleRate: 48000, blockSize: 128,
+    params: { overrides: {
+      eq: { enabled: false }, deesser: { enabled: false }, compressor: { enabled: false }, nightMode: { enabled: false },
+      bassEnhancer: { enabled: false }, reverb: { enabled: false, mode: 'off' }, surround3d: { enabled: false },
+      loudnessCompensation: { enabled: false }, loudnessNormalization: { enabled: false }, limiter: { enabled: false },
+      ieq: { enabled: false }, dynamicEq: { enabled: false }, pitch: { enabled: false }, modulation: { enabled: false, routes: [] },
+      modEffects: { delay: { enabled: false }, chorus: { enabled: false }, flanger: { enabled: false }, phaser: { enabled: false }, tremolo: { enabled: false } },
+      stereoWidth: 1, spatial: { mode: 'off' },
+    } },
+    notes: '1–21 级全旁路逐位锚点；M/S 为 width=1/voiceBalance=0 恒等，analysis/LUFS 仅取样不改音频，spatial.mode=off 排除第 22 级。',
+    inputL: (n) => lcgNoise(n, 91001, 0.7),
+    inputR: (n, fs) => sineSum(n, fs, [{ freqHz: 173, amp: 0.45, phaseRad: 0 }, { freqHz: 3100, amp: 0.25, phaseRad: Math.PI / 7 }]),
+  },
+  {
+    module: 'engine-chain', caseId: 'multistage-128', sampleRate: 48000, blockSize: 128,
+    params: { overrides: {
+      loudnessNormalization: { enabled: true, useRealtimeMeter: false, externalGainDb: -1.5 },
+      surround3d: { enabled: true, distance: 0.85, speed: 0.7, angle: 11, direction: -1 },
+      stereoWidth: 1.18, pitch: { enabled: true, voiceBalance: 0.12 },
+      eq: { enabled: true, mode: 'simple', simpleBands: [2, -1, 1.5, -2, 1] },
+      deesser: { enabled: true, thresholdDb: -28, ratio: 5, mix: 0.65 },
+      compressor: { enabled: true, thresholdDb: -18, ratio: 3, attackMs: 6, releaseMs: 110, makeupDb: 1 },
+      nightMode: { enabled: true, amount: 3 },
+      modEffects: { delay: { enabled: true, delayMs: 18, feedback: 0.22, mix: 0.12 }, chorus: { enabled: true, rateHz: 1.3, depthMs: 2.5, mix: 0.18 }, flanger: { enabled: true, rateHz: 0.8, depthMs: 1.2, feedback: 0.2, mix: 0.12 }, phaser: { enabled: true, rateHz: 0.6, depth: 0.35, feedback: 0.2, mix: 0.15, stages: 4 }, tremolo: { enabled: true, rateHz: 3.5, depth: 0.2, mix: 0.35 } },
+      reverb: { enabled: true, mode: 'algorithmic', algorithmic: { type: 'room', roomSize: 0.35, damping: 0.6, wet: 0.16, dry: 0.84, preDelayMs: 4, width: 1.1 } },
+      bassEnhancer: { enabled: true, cutoffHz: 95, harmonicType: 'soft', harmonicGain: 0.25, mix: 0.22, lowBoostDb: 2 },
+      loudnessCompensation: { enabled: true, mode: 'auto', volumePercent: 55, smoothingSeconds: 0.08 },
+      ieq: { enabled: true, strength: 0.25, targetCurve: 'warm', timeConstantSec: 0.5 },
+      dynamicEq: { enabled: true, strength: 0.35, thresholdDb: -24, ratio: 2.5, attackMs: 12, releaseMs: 160, bands: [{ enabled: true, targetGainDb: 1 }, { enabled: true, targetGainDb: -1 }, { enabled: true, targetGainDb: 1.5 }, { enabled: true, targetGainDb: -1.5 }, { enabled: true, targetGainDb: 0.5 }] },
+      modulation: { enabled: true, lfo: { enabled: true, shape: 'sine', rateHz: 1.7, depth: 0.4 }, envelope: { enabled: true, attackMs: 8, releaseMs: 140, amount: 0.5 }, routes: [{ source: 'lfo', target: 'masterGain', amount: 0.12 }] },
+      limiter: { enabled: true, thresholdDb: -2, lookaheadMs: 3, attackMs: 0.5, releaseMs: 90, truePeak: true }, spatial: { mode: 'off' },
+    } },
+    notes: '固定 128 帧块的 1–21 多级同时开启指纹，覆盖归一化至 Limiter 的全部可变音频级及两个只读取样级。',
+    inputL: (n, fs) => sineSum(n, fs, [{ freqHz: 67, amp: 0.42, phaseRad: 0 }, { freqHz: 997, amp: 0.31, phaseRad: Math.PI / 5 }, { freqHz: 6200, amp: 0.16, phaseRad: Math.PI / 3 }]),
+    inputR: (n) => lcgNoise(n, 91002, 0.48),
+  },
+  {
+    module: 'engine-chain', caseId: 'night-ieq-dynamic-crossblock', sampleRate: 48000, blockSize: 333,
+    params: { overrides: {
+      eq: { enabled: false }, limiter: { enabled: false }, nightMode: { enabled: true, amount: 8 },
+      compressor: { enabled: false, thresholdDb: -24, ratio: 5, attackMs: 4, releaseMs: 120 },
+      ieq: { enabled: true, strength: 0.8, targetCurve: 'vocal', timeConstantSec: 0.2 },
+      dynamicEq: { enabled: true, strength: 0.75, thresholdDb: -30, ratio: 4, attackMs: 5, releaseMs: 180, bands: [{ enabled: true, targetGainDb: -2 }, { enabled: true, targetGainDb: 2 }, { enabled: true, targetGainDb: 3 }, { enabled: true, targetGainDb: -3 }, { enabled: true, targetGainDb: 1 }] },
+      spatial: { mode: 'off' },
+    } },
+    notes: 'NightMode + IEQ + DynamicEq 跨块状态组合；333 帧与 IEQ 2048 窗、DynamicEq 128 控制块均不整除。',
+    inputL: (n, fs) => burstThenSilence(sineSum(n, fs, [{ freqHz: 180, amp: 0.55, phaseRad: 0 }, { freqHz: 1200, amp: 0.38, phaseRad: Math.PI / 6 }, { freqHz: 5400, amp: 0.28, phaseRad: Math.PI / 3 }]), Math.floor(n * 0.68)),
+    inputR: (n) => burstThenSilence(lcgNoise(n, 91003, 0.65), Math.floor(n * 0.68)),
+  },
+  {
+    module: 'engine-chain', caseId: 'lufs-normalization-400ms', sampleRate: 48000, blockSize: 128,
+    params: { overrides: { eq: { enabled: false }, limiter: { enabled: false }, loudnessNormalization: { enabled: true, targetLufs: -14, maxGainDb: 9, minGainDb: -9, useRealtimeMeter: true }, spatial: { mode: 'off' } } },
+    notes: '实时 LUFS 归一化跨 400ms 启动边界：前 19200 样本无完整读数保持 0dB；下一次 process 起按首个读数驱动 3s 平滑。读数不落本 stream 向量。',
+    inputL: (n, fs) => sine(n, fs, 997, 0.04), inputR: (n, fs) => sine(n, fs, 997, 0.04, Math.PI / 9),
+  },
+  {
+    module: 'engine-chain', caseId: 'mod-dual-target', sampleRate: 48000, blockSize: 256,
+    params: { overrides: {
+      eq: { enabled: false }, limiter: { enabled: false }, stereoWidth: 0.25,
+      modulation: { enabled: true, lfo: { enabled: true, shape: 'triangle', rateHz: 3, depth: 0.8 }, envelope: { enabled: true, attackMs: 3, releaseMs: 90, amount: 0.9 }, routes: [{ source: 'lfo', target: 'masterGain', amount: 0.35, offset: -0.05 }, { source: 'envelope', target: 'stereoWidth', amount: 0.9, offset: -0.2 }] },
+      spatial: { mode: 'off' },
+    } },
+    notes: '同一 ModulationMatrix 块同时驱动 masterGain 与 stereoWidth；块头推进，宽度在 M/S 级应用，主增益在 LUFS 取样后应用。',
+    inputL: (n, fs) => sineSum(n, fs, [{ freqHz: 220, amp: 0.58, phaseRad: 0 }, { freqHz: 1700, amp: 0.2, phaseRad: Math.PI / 5 }]),
+    inputR: (n, fs) => sineSum(n, fs, [{ freqHz: 330, amp: 0.42, phaseRad: Math.PI / 4 }, { freqHz: 2600, amp: 0.18, phaseRad: Math.PI / 2 }]),
+  },
 ]
 
 // ==================== 模块实例化与分块处理 ====================
@@ -1670,9 +1743,37 @@ function instantiateProcessor(modules, moduleId, sampleRate, params) {
       process.meter = meter
       return process
     }
+    case 'engine-chain': {
+      if (!modules['engine-chain'] || !modules['engine-chain'].HyperSoundEngine) throw new Error('engine-chain 引擎加载失败')
+      if (!modules['engine-types'] || !modules['engine-types'].createDefaultParams) throw new Error('engine-chain 默认参数加载失败')
+      const engine = new modules['engine-chain'].HyperSoundEngine(sampleRate, 2)
+      const fullParams = mergeEngineParams(modules['engine-types'].createDefaultParams(sampleRate), params.overrides ?? {})
+      if (!fullParams.spatial || fullParams.spatial.mode !== 'off') throw new Error('engine-chain 必须设置 spatial.mode="off"')
+      engine.setParams(fullParams)
+      return (l, r) => {
+        const outL = new Float32Array(l.length)
+        const outR = new Float32Array(r.length)
+        engine.process([l, r], [outL, outR])
+        return [outL, outR]
+      }
+    }
     default:
       throw new Error('未知模块 id：' + moduleId)
   }
+}
+
+/** engine-chain overrides 深合并：plain object 递归，数组/TypedArray/标量整体替换。 */
+function mergeEngineParams(base, overrides) {
+  for (const [key, value] of Object.entries(overrides)) {
+    const current = base[key]
+    if (value && typeof value === 'object' && !Array.isArray(value) && !ArrayBuffer.isView(value) &&
+        current && typeof current === 'object' && !Array.isArray(current) && !ArrayBuffer.isView(current)) {
+      mergeEngineParams(current, value)
+    } else {
+      base[key] = value
+    }
+  }
+  return base
 }
 
 /** 按 blockSize 分块跑完整段输入，返回拼接后的期望输出（契约语义） */
@@ -1885,6 +1986,11 @@ const FRAME_COUNTS = {
   'lufs-meter.case2': 24000,
   'lufs-meter.case3': 52920,
   'lufs-meter.case4': 480000,
+  'engine-chain.all-bypass-bitexact': 4096,
+  'engine-chain.multistage-128': 12288,
+  'engine-chain.night-ieq-dynamic-crossblock': 12345,
+  'engine-chain.lufs-normalization-400ms': 24576,
+  'engine-chain.mod-dual-target': 6144,
 }
 
 main().catch((err) => {

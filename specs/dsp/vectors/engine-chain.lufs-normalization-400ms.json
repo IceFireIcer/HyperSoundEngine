@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "module": "engine-chain",
+  "case": "lufs-normalization-400ms",
+  "sampleRate": 48000,
+  "blockSize": 128,
+  "channels": 2,
+  "frames": 24576,
+  "params": {
+    "overrides": {
+      "eq": {
+        "enabled": false
+      },
+      "limiter": {
+        "enabled": false
+      },
+      "loudnessNormalization": {
+        "enabled": true,
+        "targetLufs": -14,
+        "maxGainDb": 9,
+        "minGainDb": -9,
+        "useRealtimeMeter": true
+      },
+      "spatial": {
+        "mode": "off"
+      }
+    }
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "实时 LUFS 归一化跨 400ms 启动边界：前 19200 样本无完整读数保持 0dB；下一次 process 起按首个读数驱动 3s 平滑。读数不落本 stream 向量。"
+}

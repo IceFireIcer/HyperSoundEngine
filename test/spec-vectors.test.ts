@@ -31,13 +31,14 @@ import { ModulationMatrix } from '../src/dsp/modulation'
 import { HseStretch } from '../src/dsp/HseStretch'
 import { LufsMeter } from '../src/dsp/LufsMeter'
 import { fft } from '../src/dsp/fft'
-import type { LimiterSettings, CompressorSettings, BassEnhancerSettings, DeesserSettings, ModEffectsSettings, ModulationRoute, LfoShape } from '../src/types'
+import { HyperSoundEngine } from '../src/engine/HyperSoundEngine'
+import { createDefaultParams, type HyperSoundEngineParams, type LimiterSettings, type CompressorSettings, type BassEnhancerSettings, type DeesserSettings, type ModEffectsSettings, type ModulationRoute, type LfoShape } from '../src/types'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const VECTOR_DIR = resolve(fileURLToPath(import.meta.url), '..', '..', 'specs', 'dsp', 'vectors')
-const SUPPORTED_MODULES = ['biquad', 'limiter', 'reverb-simple', 'compressor', 'bass-enhancer', 'mid-side', 'eq-chain', 'fdn-reverb', 'deesser', 'loudness-comp', 'dynamic-eq', 'mod-effects', 'fft', 'convolver', 'modulation-matrix', 'hse-stretch', 'lufs-meter'] as const
+const SUPPORTED_MODULES = ['biquad', 'limiter', 'reverb-simple', 'compressor', 'bass-enhancer', 'mid-side', 'eq-chain', 'fdn-reverb', 'deesser', 'loudness-comp', 'dynamic-eq', 'mod-effects', 'fft', 'convolver', 'modulation-matrix', 'hse-stretch', 'lufs-meter', 'engine-chain'] as const
 
 /** 计量读数条目（specs/dsp/lufs-meter.md §三/§五）：want 为数值或非有限哨兵字符串 */
 interface ReadingEntry {
@@ -506,9 +507,40 @@ function instantiate(
       process.meter = meter
       return process
     }
+    case 'engine-chain': {
+      // 真实引擎 1–21 级驱动（specs/engine/chain.md）：默认参数事实源 + overrides 深合并，
+      // 一次 setParams 后按向量 blockSize 重放 process；spatial 必须 off，HseStretch 链外。
+      const engine = new HyperSoundEngine(sampleRate, 2)
+      const p = mergeEngineParams(createDefaultParams(sampleRate), (params.overrides ?? {}) as Record<string, unknown>)
+      if (!p.spatial || p.spatial.mode !== 'off') throw new Error('engine-chain 必须设置 spatial.mode="off"')
+      engine.setParams(p)
+      return (l, r) => {
+        const outL = new Float32Array(l.length)
+        const outR = new Float32Array(r.length)
+        engine.process([l, r], [outL, outR])
+        return [outL, outR]
+      }
+    }
     default:
       throw new Error('未知模块 id：' + moduleId)
   }
+}
+
+/** engine-chain overrides 深合并；数组与 typed array 整体替换，与导出器逐字同构。 */
+function mergeEngineParams(base: HyperSoundEngineParams, overrides: Record<string, unknown>): HyperSoundEngineParams {
+  const merge = (target: Record<string, unknown>, patch: Record<string, unknown>): void => {
+    for (const [key, value] of Object.entries(patch)) {
+      const current = target[key]
+      if (value && typeof value === 'object' && !Array.isArray(value) && !ArrayBuffer.isView(value) &&
+          current && typeof current === 'object' && !Array.isArray(current) && !ArrayBuffer.isView(current)) {
+        merge(current as Record<string, unknown>, value as Record<string, unknown>)
+      } else {
+        target[key] = value
+      }
+    }
+  }
+  merge(base as unknown as Record<string, unknown>, overrides)
+  return base
 }
 
 /** 按 blockSize 分块重跑整段输入，返回拼接后的左右输出 */

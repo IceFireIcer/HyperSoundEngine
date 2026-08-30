@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "module": "engine-chain",
+  "case": "night-ieq-dynamic-crossblock",
+  "sampleRate": 48000,
+  "blockSize": 333,
+  "channels": 2,
+  "frames": 12345,
+  "params": {
+    "overrides": {
+      "eq": {
+        "enabled": false
+      },
+      "limiter": {
+        "enabled": false
+      },
+      "nightMode": {
+        "enabled": true,
+        "amount": 8
+      },
+      "compressor": {
+        "enabled": false,
+        "thresholdDb": -24,
+        "ratio": 5,
+        "attackMs": 4,
+        "releaseMs": 120
+      },
+      "ieq": {
+        "enabled": true,
+        "strength": 0.8,
+        "targetCurve": "vocal",
+        "timeConstantSec": 0.2
+      },
+      "dynamicEq": {
+        "enabled": true,
+        "strength": 0.75,
+        "thresholdDb": -30,
+        "ratio": 4,
+        "attackMs": 5,
+        "releaseMs": 180,
+        "bands": [
+          {
+            "enabled": true,
+            "targetGainDb": -2
+          },
+          {
+            "enabled": true,
+            "targetGainDb": 2
+          },
+          {
+            "enabled": true,
+            "targetGainDb": 3
+          },
+          {
+            "enabled": true,
+            "targetGainDb": -3
+          },
+          {
+            "enabled": true,
+            "targetGainDb": 1
+          }
+        ]
+      },
+      "spatial": {
+        "mode": "off"
+      }
+    }
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "NightMode + IEQ + DynamicEq 跨块状态组合；333 帧与 IEQ 2048 窗、DynamicEq 128 控制块均不整除。"
+}

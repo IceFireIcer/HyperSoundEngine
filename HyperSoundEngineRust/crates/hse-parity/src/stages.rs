@@ -20,6 +20,7 @@ use hse_core::compressor::{CompressorSettings, CompressorStage};
 use hse_core::convolver::{build_ir_recipe, ConvolverOptions, ConvolverStage, IrRecipe};
 use hse_core::deesser::{DeesserSettings, DeesserStage};
 use hse_core::dynamic_eq::{DynamicEqBandParam, DynamicEqParams, DynamicEqStage};
+use hse_core::engine_chain::{EngineChainParams, EngineChainStage};
 use hse_core::eq_chain::{EqBandParam, EqChainStage};
 use hse_core::fdn_reverb::{FdnReverbParams, FdnReverbStage};
 use hse_core::fft::FftStage;
@@ -38,6 +39,37 @@ use hse_core::modulation_matrix::{
 use hse_core::reverb_simple::{ReverbSimpleParams, ReverbSimpleStage};
 use hse_core::Stage;
 
+/// 复刻 TS 引擎惰性扩容后末块仍使用历史容量工作缓冲的行为。
+struct EngineChainHarness {
+    engine: EngineChainStage,
+    left: Vec<f32>,
+    right: Vec<f32>,
+}
+
+impl Stage for EngineChainHarness {
+    fn prepare(&mut self, max_block_size: usize) {
+        self.left.resize(max_block_size, 0.0);
+        self.right.resize(max_block_size, 0.0);
+        self.engine.prepare(max_block_size);
+    }
+
+    fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
+        let frames = left.len();
+        self.left[..frames].copy_from_slice(left);
+        self.right[..frames].copy_from_slice(right);
+        self.engine.set_next_frame_count(frames);
+        self.engine.process(&mut self.left, &mut self.right);
+        left.copy_from_slice(&self.left[..frames]);
+        right.copy_from_slice(&self.right[..frames]);
+    }
+
+    fn reset(&mut self) {
+        self.left.fill(0.0);
+        self.right.fill(0.0);
+        self.engine.reset();
+    }
+}
+
 /// 按用例构造被测阶段（流式四段布局用例）。
 pub fn make_stage(case: &VectorCase) -> Result<Box<dyn Stage>, String> {
     let obj = case
@@ -45,6 +77,21 @@ pub fn make_stage(case: &VectorCase) -> Result<Box<dyn Stage>, String> {
         .as_object()
         .ok_or_else(|| "params 必须是 JSON 对象".to_string())?;
     match case.module.as_str() {
+        "engine-chain" => {
+            let overrides = obj
+                .get("overrides")
+                .ok_or_else(|| "缺少 params.overrides".to_string())?;
+            if !overrides.is_object() {
+                return Err("params.overrides 必须是对象".to_string());
+            }
+            let params = EngineChainParams::from_overrides(case.sample_rate, overrides)?;
+            let engine = EngineChainStage::from_params(case.sample_rate, params)?;
+            Ok(Box::new(EngineChainHarness {
+                engine,
+                left: Vec::new(),
+                right: Vec::new(),
+            }))
+        }
         "biquad" => Ok(Box::new(BiquadStage::new(
             case.sample_rate,
             string_field(obj, "type")?.as_str(),
@@ -110,7 +157,10 @@ pub fn make_stage(case: &VectorCase) -> Result<Box<dyn Stage>, String> {
             // MidSide 无采样率概念（构造无参，规格 mid-side §4.4）；
             // setParams 为位置参数接口，sampleRate 不得传入模块。
             let mut stage = MidSideStage::new();
-            stage.set_params(number_field(obj, "width")?, number_field(obj, "voiceBalance")?);
+            stage.set_params(
+                number_field(obj, "width")?,
+                number_field(obj, "voiceBalance")?,
+            );
             Ok(Box::new(stage))
         }
         "eq-chain" => {
@@ -119,7 +169,9 @@ pub fn make_stage(case: &VectorCase) -> Result<Box<dyn Stage>, String> {
             // bandCount 生效值 = max(1, floor(bandCount))，由阶段内复刻。
             let band_count = number_field(obj, "bandCount")?;
             let q_compensation = bool_field(obj, "qCompensation")?;
-            let bands_val = obj.get("bands").ok_or_else(|| "缺少 params.bands".to_string())?;
+            let bands_val = obj
+                .get("bands")
+                .ok_or_else(|| "缺少 params.bands".to_string())?;
             let arr = bands_val
                 .as_array()
                 .ok_or_else(|| "params.bands 必须是数组".to_string())?;
@@ -175,7 +227,9 @@ pub fn make_stage(case: &VectorCase) -> Result<Box<dyn Stage>, String> {
         "loudness-comp" => {
             // 规格（specs/dsp/loudness-comp.md §一）：本模块没有 enabled 字段——
             // 直接按六个快照字段构造，向量 params 不含 enabled。
-            let bands_val = obj.get("bands").ok_or_else(|| "缺少 params.bands".to_string())?;
+            let bands_val = obj
+                .get("bands")
+                .ok_or_else(|| "缺少 params.bands".to_string())?;
             let arr = bands_val
                 .as_array()
                 .ok_or_else(|| "params.bands 必须是数组".to_string())?;
@@ -207,7 +261,9 @@ pub fn make_stage(case: &VectorCase) -> Result<Box<dyn Stage>, String> {
             // 每项必含 frequency（缺 frequency 属 NaN 级联的禁止形态）。
             // 内部分析块 blockSize 与顶层驱动分块是两个独立参数，构造时都由
             // 阶段内钳制（[16, 2048] 整数语义）。
-            let bands_val = obj.get("bands").ok_or_else(|| "缺少 params.bands".to_string())?;
+            let bands_val = obj
+                .get("bands")
+                .ok_or_else(|| "缺少 params.bands".to_string())?;
             let arr = bands_val
                 .as_array()
                 .ok_or_else(|| "params.bands 必须是数组".to_string())?;
@@ -338,7 +394,9 @@ pub fn make_stage(case: &VectorCase) -> Result<Box<dyn Stage>, String> {
             // 推进矩阵（包络读取增益前输入），再把 masterGain 逐样本乘到 L/R
             // （引擎 mod-master-gain 阶段语义，由 Stage::process 内固定）。
             // stereoWidth 产物不入向量。参数无 enabled 字段（§一：全仓库无消费）。
-            let routes_val = obj.get("routes").ok_or_else(|| "缺少 params.routes".to_string())?;
+            let routes_val = obj
+                .get("routes")
+                .ok_or_else(|| "缺少 params.routes".to_string())?;
             let arr = routes_val
                 .as_array()
                 .ok_or_else(|| "params.routes 必须是数组".to_string())?;
@@ -426,8 +484,9 @@ pub fn make_meter(case: &VectorCase) -> Result<LufsMeter, String> {
         return Err("make_meter 只接受 moduleKind='meter' 的计量型用例".to_string());
     }
     match case.module.as_str() {
-        "lufs-meter" => LufsMeter::new(case.sample_rate)
-            .map_err(|err| format!("lufs-meter 构造失败：{err}")),
+        "lufs-meter" => {
+            LufsMeter::new(case.sample_rate).map_err(|err| format!("lufs-meter 构造失败：{err}"))
+        }
         other => Err(format!("未知计量型模块：{other}")),
     }
 }
@@ -441,7 +500,10 @@ fn string_field(obj: &Map<String, Value>, key: &str) -> Result<String, String> {
 }
 
 /// 取一个子对象字段（如 mod-effects 的 params.delay / params.chorus 等）。
-fn object_field<'a>(obj: &'a Map<String, Value>, key: &str) -> Result<&'a Map<String, Value>, String> {
+fn object_field<'a>(
+    obj: &'a Map<String, Value>,
+    key: &str,
+) -> Result<&'a Map<String, Value>, String> {
     match obj.get(key) {
         Some(Value::Object(o)) => Ok(o),
         Some(other) => Err(format!("params.{key} 必须是对象，实际 {other}")),

@@ -1,0 +1,84 @@
+{
+  "schemaVersion": 1,
+  "module": "engine-chain",
+  "case": "all-bypass-bitexact",
+  "sampleRate": 48000,
+  "blockSize": 128,
+  "channels": 2,
+  "frames": 4096,
+  "params": {
+    "overrides": {
+      "eq": {
+        "enabled": false
+      },
+      "deesser": {
+        "enabled": false
+      },
+      "compressor": {
+        "enabled": false
+      },
+      "nightMode": {
+        "enabled": false
+      },
+      "bassEnhancer": {
+        "enabled": false
+      },
+      "reverb": {
+        "enabled": false,
+        "mode": "off"
+      },
+      "surround3d": {
+        "enabled": false
+      },
+      "loudnessCompensation": {
+        "enabled": false
+      },
+      "loudnessNormalization": {
+        "enabled": false
+      },
+      "limiter": {
+        "enabled": false
+      },
+      "ieq": {
+        "enabled": false
+      },
+      "dynamicEq": {
+        "enabled": false
+      },
+      "pitch": {
+        "enabled": false
+      },
+      "modulation": {
+        "enabled": false,
+        "routes": []
+      },
+      "modEffects": {
+        "delay": {
+          "enabled": false
+        },
+        "chorus": {
+          "enabled": false
+        },
+        "flanger": {
+          "enabled": false
+        },
+        "phaser": {
+          "enabled": false
+        },
+        "tremolo": {
+          "enabled": false
+        }
+      },
+      "stereoWidth": 1,
+      "spatial": {
+        "mode": "off"
+      }
+    }
+  },
+  "tolerance": {
+    "kind": "relative",
+    "value": 0.000001,
+    "floor": 1e-9
+  },
+  "notes": "1–21 级全旁路逐位锚点；M/S 为 width=1/voiceBalance=0 恒等，analysis/LUFS 仅取样不改音频，spatial.mode=off 排除第 22 级。"
+}

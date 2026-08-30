@@ -218,6 +218,17 @@ impl BiquadStage {
         Ok(Self { coeffs, s1_l: 0.0, s2_l: 0.0, s1_r: 0.0, s2_r: 0.0 })
     }
 
+    /// 单声道块处理入口，用于引擎中左右各持独立 Biquad 实例的级。
+    pub fn process_mono(&mut self, samples: &mut [f32]) {
+        let coeffs = self.coeffs;
+        let (mut s1, mut s2) = (self.s1_l, self.s2_l);
+        for sample in samples.iter_mut() {
+            *sample = Self::tick(&coeffs, &mut s1, &mut s2, *sample);
+        }
+        self.s1_l = s1;
+        self.s2_l = s2;
+    }
+
     /// 当前归一化系数快照（诊断/测试用途）。
     pub fn coeffs(&self) -> BiquadCoeffs {
         self.coeffs
