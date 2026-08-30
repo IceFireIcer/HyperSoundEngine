@@ -25,11 +25,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: HyperSoundEngineRust
-      - name: Rust 支线单元测试（hse-core / hse-parity / hse-benches）
-        run: cargo test --workspace
+      - name: 安装 wasm 试点构建工具
+        run: |
+          npm ci
+          cargo install --locked wasm-bindgen-cli --version 0.2.127
+      - name: wasm32 最小试点构建门禁
+        run: |
+          rustup target add wasm32-unknown-unknown
+          cargo build -p hse-core --target wasm32-unknown-unknown --release --locked
+          cargo build -p hse-wasm --target wasm32-unknown-unknown --release --locked
+          wasm-bindgen target/wasm32-unknown-unknown/release/hse_wasm.wasm \
+            --target web \
+            --out-dir "$RUNNER_TEMP/wasm-pilot-pkg"
+          node ../scripts/check-wasm-pilot.mjs --pkg "$RUNNER_TEMP/wasm-pilot-pkg"
+        working-directory: HyperSoundEngineRust
+      - name: Rust 支线单元测试（workspace 全成员）
+        run: cargo test --workspace --locked
         working-directory: HyperSoundEngineRust
       - name: 对拍门禁（specs/ 冻结向量全部 PASS 才算过，双绿门禁 Rust 半边）
         run: cargo run -q -p hse-parity
