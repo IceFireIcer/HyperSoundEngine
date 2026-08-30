@@ -1,0 +1,80 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/IceFireIcer/HyperSoundEngine/specs/schema/world-listener.schema.json",
+  "title": "HyperSoundEngine world listener fixture",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "fixture", "coordinateSystem", "tolerance", "cases"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "fixture": { "const": "world-listener" },
+    "coordinateSystem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["handedness", "rightAxis", "upAxis", "forwardAxis", "angleUnit", "distanceUnit", "azimuthRange"],
+      "properties": {
+        "handedness": { "const": "right" },
+        "rightAxis": { "const": "+x" },
+        "upAxis": { "const": "+y" },
+        "forwardAxis": { "const": "+z" },
+        "angleUnit": { "const": "degree" },
+        "distanceUnit": { "const": "meter" },
+        "azimuthRange": { "const": "[-180,180)" }
+      }
+    },
+    "tolerance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["angleAbs", "distanceAbs"],
+      "properties": {
+        "angleAbs": { "type": "number", "exclusiveMinimum": 0 },
+        "distanceAbs": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 12,
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "listener", "source", "expected"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+          "listener": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["position", "yaw"],
+            "properties": {
+              "position": { "$ref": "#/definitions/vec3" },
+              "yaw": { "type": "number" }
+            }
+          },
+          "source": { "$ref": "#/definitions/vec3" },
+          "expected": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["azimuthDeg", "elevationDeg", "distance"],
+            "properties": {
+              "azimuthDeg": { "type": "number", "minimum": -180, "exclusiveMaximum": 180 },
+              "elevationDeg": { "type": "number", "minimum": -90, "maximum": 90 },
+              "distance": { "type": "number", "minimum": 0 }
+            }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "vec3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "z"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "z": { "type": "number" }
+      }
+    }
+  }
+}

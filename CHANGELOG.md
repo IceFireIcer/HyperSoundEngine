@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-08
+
+### Added
+- **Spatial Slice 1：world-listener 几何双绿**：新增共享规格、严格 JSON Schema 与 12 个结构化 case，冻结右手世界坐标、listener position/yaw、方位 `[-180,180)`、仰角、距离和平移/整圈等价语义；TS 将几何函数作为公共 API 导出并补引擎第 22 级 world/yaw 集成回归。
+- **Rust `hrtf-core` 起步**：新增平台无关、无生产依赖的 f64 world-listener 几何 crate；`hse-parity` 在原音频 72/72 之外强制执行空间 12/12，缺少或无效空间夹具即门禁失败。此版本不包含 Rust HRIR、卷积、房间或主链 stage 22。
+
+### Fixed
+- **world 方位规范化**：修复 TS 世界模式在 yaw 跨越 ±180° 或超出整圈时产生越界方位、进而错误选择左右输入声道的问题；重合点保持全零，非有限坐标在调用边界拒绝。
+
 ## [1.1.0] - 2026-08
 
 ### Added

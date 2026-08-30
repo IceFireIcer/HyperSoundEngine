@@ -1,0 +1,127 @@
+{
+  "schemaVersion": 1,
+  "fixture": "world-listener",
+  "coordinateSystem": {
+    "handedness": "right",
+    "rightAxis": "+x",
+    "upAxis": "+y",
+    "forwardAxis": "+z",
+    "angleUnit": "degree",
+    "distanceUnit": "meter",
+    "azimuthRange": "[-180,180)"
+  },
+  "tolerance": {
+    "angleAbs": 1e-9,
+    "distanceAbs": 1e-9
+  },
+  "cases": [
+    {
+      "id": "front",
+      "listener": {
+        "position": { "x": 0, "y": 0, "z": 0 },
+        "yaw": 0
+      },
+      "source": { "x": 0, "y": 0, "z": 5 },
+      "expected": { "azimuthDeg": 0, "elevationDeg": 0, "distance": 5 }
+    },
+    {
+      "id": "right",
+      "listener": {
+        "position": { "x": 0, "y": 0, "z": 0 },
+        "yaw": 0
+      },
+      "source": { "x": 5, "y": 0, "z": 0 },
+      "expected": { "azimuthDeg": 90, "elevationDeg": 0, "distance": 5 }
+    },
+    {
+      "id": "left",
+      "listener": {
+        "position": { "x": 0, "y": 0, "z": 0 },
+        "yaw": 0
+      },
+      "source": { "x": -5, "y": 0, "z": 0 },
+      "expected": { "azimuthDeg": -90, "elevationDeg": 0, "distance": 5 }
+    },
+    {
+      "id": "behind",
+      "listener": {
+        "position": { "x": 0, "y": 0, "z": 0 },
+        "yaw": 0
+      },
+      "source": { "x": 0, "y": 0, "z": -5 },
+      "expected": { "azimuthDeg": -180, "elevationDeg": 0, "distance": 5 }
+    },
+    {
+      "id": "above",
+      "listener": {
+        "position": { "x": 0, "y": 0, "z": 0 },
+        "yaw": 0
+      },
+      "source": { "x": 0, "y": 5, "z": 0 },
+      "expected": { "azimuthDeg": 0, "elevationDeg": 90, "distance": 5 }
+    },
+    {
+      "id": "below",
+      "listener": {
+        "position": { "x": 0, "y": 0, "z": 0 },
+        "yaw": 0
+      },
+      "source": { "x": 0, "y": -5, "z": 0 },
+      "expected": { "azimuthDeg": 0, "elevationDeg": -90, "distance": 5 }
+    },
+    {
+      "id": "translated",
+      "listener": {
+        "position": { "x": 10, "y": -2, "z": 3 },
+        "yaw": 0
+      },
+      "source": { "x": 10, "y": -2, "z": 8 },
+      "expected": { "azimuthDeg": 0, "elevationDeg": 0, "distance": 5 }
+    },
+    {
+      "id": "yaw-positive",
+      "listener": {
+        "position": { "x": 0, "y": 0, "z": 0 },
+        "yaw": 30
+      },
+      "source": { "x": 0, "y": 0, "z": 5 },
+      "expected": { "azimuthDeg": -30, "elevationDeg": 0, "distance": 5 }
+    },
+    {
+      "id": "yaw-negative",
+      "listener": {
+        "position": { "x": 0, "y": 0, "z": 0 },
+        "yaw": -30
+      },
+      "source": { "x": 0, "y": 0, "z": 5 },
+      "expected": { "azimuthDeg": 30, "elevationDeg": 0, "distance": 5 }
+    },
+    {
+      "id": "yaw-wrap",
+      "listener": {
+        "position": { "x": 0, "y": 0, "z": 0 },
+        "yaw": 30
+      },
+      "source": { "x": -0.17364817766693033, "y": 0, "z": -0.984807753012208 },
+      "expected": { "azimuthDeg": 160, "elevationDeg": 0, "distance": 1 }
+    },
+    {
+      "id": "yaw-full-turn",
+      "listener": {
+        "position": { "x": 0, "y": 0, "z": 0 },
+        "yaw": 390
+      },
+      "source": { "x": -0.17364817766693033, "y": 0, "z": -0.984807753012208 },
+      "expected": { "azimuthDeg": 160, "elevationDeg": 0, "distance": 1 }
+    },
+    {
+      "id": "coincident",
+      "listener": {
+        "position": { "x": 1, "y": 2, "z": 3 },
+        "yaw": 725
+      },
+      "source": { "x": 1, "y": 2, "z": 3 },
+      "expected": { "azimuthDeg": 0, "elevationDeg": 0, "distance": 0 }
+    }
+  ]
+}

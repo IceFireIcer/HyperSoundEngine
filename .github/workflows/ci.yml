@@ -20,6 +20,8 @@ jobs:
       - run: npm test
       - name: 引擎参数与场景契约幂等门禁
         run: node scripts/export-engine-contracts.mjs
+      - name: Spatial world-listener 契约门禁
+        run: node scripts/export-spatial-vectors.mjs
       - run: npm run build
 
   rust:
@@ -36,8 +38,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: HyperSoundEngineRust
-      - name: Rust 实时安全改动格式门禁
-        run: rustfmt --edition 2021 --check crates/hse-core/src/convolver.rs crates/hse-core/tests/realtime_alloc.rs
+      - name: Rust 实时安全与空间契约改动格式门禁
+        run: >-
+          rustfmt --edition 2021 --check
+          crates/hse-core/src/convolver.rs
+          crates/hse-core/tests/realtime_alloc.rs
+          crates/hrtf-core/src/lib.rs
+          crates/hrtf-core/src/world.rs
+          crates/hse-parity/src/spatial_runner.rs
+          crates/hse-parity/src/spatial_vector.rs
         working-directory: HyperSoundEngineRust
       - name: Rust Clippy 正确性与性能门禁
         # 精确小数常数与 x-x NaN 传播用于复刻 TS 位型，已由冻结向量覆盖。

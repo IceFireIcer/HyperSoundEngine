@@ -4,9 +4,10 @@
 > 位于仓库根，不属于任何单一支线。术语基线见仓库根 `CONTEXT.md`；
 > 行为事实标准当前为 TS 支线源码；本总纲与其下规格文档使用同一套领域语言。
 >
-> 当前基线：**21 份双支线共享规格（17 DSP + 3 engine + 1 I/O）**，其中 18 份纳入音频对拍；
-> 音频冻结向量 **72 组 / 144 文件**，另有参数/场景结构化契约夹具 **3 个 JSON**与
-> standard WAV 共享夹具 **1 个 JSON**；Rust `hse-parity` 音频对拍门禁 **72/72 PASS**。
+> 当前基线：**22 份双支线共享规格（17 DSP + 3 engine + 1 I/O + 1 spatial）**，其中 18 份纳入音频对拍；
+> 音频冻结向量 **72 组 / 144 文件**，另有参数/场景结构化契约夹具 **3 个 JSON**、
+> standard WAV 共享夹具 **1 个 JSON**与 world-listener **12 个结构化 case**；Rust `hse-parity`
+> 综合门禁为音频 **72/72 PASS** + 空间 **12/12 PASS**。
 
 ---
 
@@ -29,7 +30,8 @@ HyperSoundEngine 按《原生化双支线与 Windows 音频接入规划书》Pha
 specs/
 ├── README.md                        ← 本文件：规格书写总纲（两支线必读）
 ├── schema/
-│   └── vector-case.schema.json      ← 测试向量 JSON 的 draft-07 Schema（唯一合法性判据）
+│   ├── vector-case.schema.json      ← DSP 音频向量的 draft-07 Schema
+│   └── world-listener.schema.json   ← world-listener 结构化夹具 Schema
 └── dsp/
     ├── biquad.md                    ← 模块规格：biquad
     ├── limiter.md                   ← 模块规格：limiter
@@ -59,6 +61,9 @@ specs/
 └── io/
     ├── wav.md                       ← legacy / standard WAV 双模式兼容契约
     └── vectors/wav-standard.json    ← 两支线共享的标准 RIFF 结构化夹具
+└── spatial/
+    ├── world-listener.md            ← 世界坐标到头坐标方向契约
+    └── vectors/world-listener.v1.json ← 12 个结构化几何 case
 ```
 
 ---
@@ -197,7 +202,7 @@ specs/
 | 支线 | 门禁命令 | 判定内容 |
 |---|---|---|
 | TS 支线 | `npx vitest run test/spec-vectors.test.ts` | 遍历 `specs/dsp/vectors/` 全部夹具，按 §3.4 分块驱动 `src/` 实现，按 §3.5 判定 |
-| Rust 支线 | `cd HyperSoundEngineRust && cargo run -q -p hse-parity` | 同一批夹具、同一公式，驱动 `hse-core` 模块与 `EngineChainStage`；72/72 PASS 才通过 |
+| Rust 支线 | `cd HyperSoundEngineRust && cargo run -q -p hse-parity` | 驱动 `hse-core` 音频模块/主链与 `hrtf-core` world-listener 几何核；音频 72/72、空间 12/12 均通过才算绿 |
 
 补充规则：
 

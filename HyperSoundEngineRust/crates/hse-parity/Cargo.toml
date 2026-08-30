@@ -13,5 +13,6 @@ name = "hse-parity"
 path = "src/main.rs"
 
 [dependencies]
+hrtf-core = { path = "../hrtf-core" }
 hse-core = { path = "../hse-core" }
 serde_json = { workspace = true }

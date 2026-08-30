@@ -221,7 +221,7 @@ function speakersFromSettings(s: SpatialSettings): VirtualSpeaker[] {
   if (s.mode === 'stage') {
     const custom = s.stage.customSources.map((src) => {
       const rel = computeRelativeDirection(
-        { position: { x: 0, y: 1.6, z: 0 }, yaw: 0, pitch: 0, roll: 0 },
+        { position: { x: 0, y: 1.6, z: 0 }, yaw: 0 },
         src.position,
       )
       return {

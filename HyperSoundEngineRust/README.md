@@ -14,7 +14,8 @@ HyperSoundEngineRust/
 ├── README.md                # 本文档
 └── crates/
     ├── hse-core/            # ✅ 17 个 DSP 模块 + EngineChainStage 1–21 级主链
-    ├── hse-parity/          # ✅ 冻结向量对拍 harness（二进制名 hse-parity）
+    ├── hrtf-core/           # ✅ world-listener f64 几何核；渲染器尚未实现
+    ├── hse-parity/          # ✅ 音频 + 空间共享夹具门禁（二进制名 hse-parity）
     ├── hse-wasapi/          # ✅ WASAPI 共享模式渲染 + loopback 捕获
     ├── hse-service/         # ✅ 完整主链服务进程、JSON-RPC 控制面与推流入口
     ├── hse-wasm/            # ✅ 单 Biquad wasm32 最小试点
@@ -31,7 +32,7 @@ Windows 设备 I/O 固定由 `hse-wasapi` 承担，不规划其他 Windows 音�
 ```bash
 cargo check                      # 全 workspace 类型/借用检查
 cargo test                       # 单元测试（容差公式、f32 切分、用例解析、执行器、StageChain）
-cargo run -p hse-parity          # 空跑 / 对拍 specs/dsp/vectors（见下节）
+cargo run -p hse-parity          # 对拍音频 72 case + world-listener 12 case
 cargo build --release            # nightly 工作流使用的构建方式
 ```
 
@@ -44,26 +45,26 @@ nightly 工作流的假设：检测到本目录即执行 `cargo build --release`
 
 ```bash
 cargo run -p hse-parity                        # 自动定位 specs/dsp/vectors
-cargo run -p hse-parity -- <specs 向量目录>     # 或显式指定向量目录
+cargo run -p hse-parity -- <specs/dsp/vectors 目录>  # 显式音频向量目录；空间夹具从 specs 兄弟目录推导
 ```
 
 自动定位顺序：先从编译期记录的 crate 路径（CARGO_MANIFEST_DIR）逐级向上查找
-`specs/dsp/vectors`；找不到再从当前工作目录逐级向上查找。
+`specs/dsp/vectors`；找不到再从当前工作目录逐级向上查找。空间夹具固定从同一
+`specs` 根下的 `spatial/vectors/world-listener.v1.json` 读取。
 
 ### 行为与退出码
 
 | 场景 | 行为 | 退出码 |
 |------|------|--------|
-| 向量目录不存在，或没有任何 *.json 用例 | 打印友好提示后结束（Phase 0 允许空跑框架） | 0 |
-| 全部用例通过 | 打印每个用例的 PASS 与最大误差汇总 | 0 |
-| 任一用例失败 | 打印失配详情（失配样本数、首个失配样本定位）或夹具缺陷原因 | 1 |
+| 音频向量目录或 world-listener 夹具缺失/为空/无效 | 打印夹具缺陷并失败 | 1 |
+| 音频 72 case 与空间 12 case 全部通过 | 分别打印 PASS 与最大误差汇总 | 0 |
+| 任一用例失败 | 打印失配详情与首个失配字段/样本 | 1 |
 
 ### 与 specs/ 门禁的关系
 
-- 向量由 TS 支线导出工具生成并**冻结**，归 `specs/` 所有，任何一方不得单方面修改；
-- 同一份向量同时喂 TS 侧 vitest 测试与本 harness，**双绿才算实现完成**（CI 门禁的 Rust 半边）；
-- 容差口径两支线统一：对每个样本 `|got - want| <= value * max(|want|, floor)`，
-  非有限值一律判失配；
+- 音频向量由 TS 支线导出工具生成并冻结，按相对容差逐样本或 meter 读数对拍；
+- `specs/spatial/vectors/world-listener.v1.json` 由 TS 与 `hrtf-core` 共同消费，按字段绝对容差对拍；
+- 任一夹具缺失、无效或任一 case 失败，综合门禁退出码均为 1；
 - 处理语义：输入按 blockSize 顺序分块调用模块（末块可短），状态跨块保持，
   期望输出为逐块输出按序拼接；
 - `.f32` 布局为小端、非交错的四段：
@@ -73,18 +74,18 @@ cargo run -p hse-parity -- <specs 向量目录>     # 或显式指定向量目�
 
 ### 当前实现状态
 
-被测对象是**直通假实现**（输出=输入）。因此一旦向量存在，成片 FAIL 属预期——
-这正是 Phase 0 出口判据要求的"harness 能跑通一个假实现"；待 hse-core 真实模块
-按规格逐个落地后，同一命令应当转绿。
+`hse-core` 已覆盖 17 个 DSP 模块与 `EngineChainStage` 1–21 级，音频向量 72/72 PASS。
+`hrtf-core` 已实现 world-listener position/yaw 几何核，空间结构化 case 12/12 PASS；
+HRIR、插值、卷积、房间与 Rust 主链第 22 级尚未实现。
 
-## Phase 0 出口判据对照（规划书 §五）
+## 当前门禁对照
 
 | 判据 | 归属 | 状态 |
 |------|------|------|
-| Rust workspace 骨架 | 本目录 | ✅ 已交付 |
-| hse-parity harness（读向量 / 比对 / 容差） | 本目录 crates/hse-parity | ✅ 已交付，含单元测试 |
-| harness 能跑通一个假实现 | 本目录 | ✅ 直通假实现 + 空跑兜底 |
-| 试点 biquad / limiter / reverb-simple 规格与 TS 绿 | specs/ 与 TS 支线侧 | 由并行工作流推进 |
+| 七包 Rust workspace | 本目录 | ✅ 已交付 |
+| 音频冻结向量 | hse-core + hse-parity | ✅ 72/72 |
+| world-listener 结构化夹具 | hrtf-core + hse-parity | ✅ 12/12 |
+| Rust HRTF 渲染 | hrtf-core | ⏳ 后续 Slice |
 
 ## 铁律提示（对新增代码生效）
 

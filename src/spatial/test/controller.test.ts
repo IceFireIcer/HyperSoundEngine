@@ -67,12 +67,27 @@ describe('controller：computeRelativeDirection 几何', () => {
     expect(computeRelativeDirection(l, { x: 5, y: 0, z: 0 }).azimuthDeg).toBeCloseTo(60, 6)
   })
 
+  it('相对方位规范化到 [-180, 180)，含跨界与超一圈 yaw', () => {
+    const source = { x: -0.17364817766693033, y: 0, z: -0.984807753012208 }
+    expect(computeRelativeDirection(listenerAt({ x: 0, y: 0, z: 0 }, 30), source).azimuthDeg).toBeCloseTo(160, 10)
+    expect(computeRelativeDirection(listenerAt({ x: 0, y: 0, z: 0 }, 390), source).azimuthDeg).toBeCloseTo(160, 10)
+    expect(computeRelativeDirection(listenerAt({ x: 0, y: 0, z: 0 }, -330), source).azimuthDeg).toBeCloseTo(160, 10)
+    expect(computeRelativeDirection(listenerAt({ x: 0, y: 0, z: 0 }, 0), { x: 0, y: 0, z: -1 }).azimuthDeg).toBe(-180)
+  })
+
   it('听者位置偏移 + 偏航：原点 (1,2,3)、源 (4,7,3)、yaw 15', () => {
     const r = computeRelativeDirection(listenerAt({ x: 1, y: 2, z: 3 }, 15), { x: 4, y: 7, z: 3 })
     // direction = (3, 5, 0)：atan2(3, 0) = 90 → 90 − 15 = 75
     expect(r.azimuthDeg).toBeCloseTo(75, 5)
     expect(r.distance).toBeCloseTo(Math.sqrt(34), 5)
     expect(r.elevationDeg).toBeCloseTo((Math.asin(5 / Math.sqrt(34)) * 180) / Math.PI, 5)
+  })
+
+  it('非有限 listener/source 输入在调用边界拒绝', () => {
+    expect(() => computeRelativeDirection(listenerAt({ x: 0, y: 0, z: 0 }, Number.NaN), { x: 0, y: 0, z: 1 }))
+      .toThrow('computeRelativeDirection: listener and source values must be finite')
+    expect(() => computeRelativeDirection(listenerAt({ x: 0, y: 0, z: 0 }), { x: Number.POSITIVE_INFINITY, y: 0, z: 1 }))
+      .toThrow('computeRelativeDirection: listener and source values must be finite')
   })
 
   it('源与听者重合：方位/仰角 0、距离 0（无 NaN）', () => {

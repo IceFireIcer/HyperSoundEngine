@@ -11,7 +11,7 @@
  * right=(cos yaw, −sin yaw)（与 ui/worldControl.ts 一致），位移方向恒相对听者朝向。
  */
 
-import type { ListenerState } from './types'
+import type { ListenerState, Vec3, WorldListenerPose } from './types'
 
 /** 相对方向计算结果（角度单位度，距离单位米） */
 export interface RelativeDirection {
@@ -20,15 +20,23 @@ export interface RelativeDirection {
   distance: number
 }
 
+export function wrapAzimuthDeg(angle: number): number {
+  return (((angle + 180) % 360) + 360) % 360 - 180
+}
+
 /**
  * 计算声源相对听者的方向（世界坐标 → 头相关方位/仰角/距离）。
  * 输入为任意世界坐标（与听者朝向无关的位置量）；输出已扣除听者偏航 yaw，
  * 使 0° 恒为听者正前方。纯函数：无状态、无副作用。
  */
 export function computeRelativeDirection(
-  listener: ListenerState,
-  source: { x: number; y: number; z: number },
+  listener: WorldListenerPose,
+  source: Vec3,
 ): RelativeDirection {
+  if (![listener.position.x, listener.position.y, listener.position.z, listener.yaw, source.x, source.y, source.z]
+    .every(Number.isFinite)) {
+    throw new Error('computeRelativeDirection: listener and source values must be finite')
+  }
   const dx = source.x - listener.position.x
   const dy = source.y - listener.position.y
   const dz = source.z - listener.position.z
@@ -37,8 +45,8 @@ export function computeRelativeDirection(
     // 声源与听者重合：方向未定义，约定为正前方（避免 asin 除零 → NaN）
     return { azimuthDeg: 0, elevationDeg: 0, distance: 0 }
   }
-  const azimuthDeg = (Math.atan2(dx, dz) * 180) / Math.PI - listener.yaw
-  const elevationDeg = (Math.asin(dy / distance) * 180) / Math.PI
+  const azimuthDeg = wrapAzimuthDeg((Math.atan2(dx, dz) * 180) / Math.PI - listener.yaw)
+  const elevationDeg = (Math.asin(Math.max(-1, Math.min(1, dy / distance))) * 180) / Math.PI
   return { azimuthDeg, elevationDeg, distance }
 }
 
@@ -97,7 +105,7 @@ export function moveListener(l: ListenerState, d: { x: number; y: number; z: num
  * 既有的合法 yaw；跨 ±180 边界正确折返（如 170°+20° → −170°、355°+10° → 5°）。
  */
 export function rotateListener(l: ListenerState, dYawDeg: number): ListenerState {
-  const yaw = ((((l.yaw + dYawDeg + 180) % 360) + 360) % 360) - 180
+  const yaw = wrapAzimuthDeg(l.yaw + dYawDeg)
   return { position: { ...l.position }, yaw, pitch: l.pitch, roll: l.roll }
 }
 

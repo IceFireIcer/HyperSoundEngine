@@ -22,6 +22,8 @@ describe('public API (standalone core)', () => {
     expect(typeof core.encodeShareCode).toBe('function')
     expect(typeof core.encodeWav).toBe('function')
     expect(typeof core.decodeWav).toBe('function')
+    expect(typeof core.computeRelativeDirection).toBe('function')
+    expect(typeof core.wrapAzimuthDeg).toBe('function')
     expect(typeof core.SpectrumAnalyzer).toBe('function')
   })
 

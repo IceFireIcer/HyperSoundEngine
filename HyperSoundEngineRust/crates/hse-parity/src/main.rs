@@ -1,32 +1,35 @@
 //! hse-parity —— HyperSoundEngine 对拍 harness（开发专用命令行工具）。
 //!
-//! 读取仓库根 `specs/dsp/vectors` 下的共享测试向量，用被测实现重放输入并比对：
+//! 读取仓库根 `specs/dsp/vectors` 音频向量与 `specs/spatial/vectors` 结构化空间夹具：
 //!
 //! - 流式用例（moduleKind 缺省/'stream'）：把输入按 blockSize 分块驱动被测阶段，
 //!   与期望输出按两支线统一的相对容差逐样本比对；
 //! - 计量型用例（moduleKind='meter'，specs/dsp/lufs-meter.md §三）：把两段输入
 //!   分块馈入计量模块（就地分析），全部块馈入完成后一次性读取六项读数，与
 //!   readings 逐项判定（绝对容差 + NaN/±Infinity 哨兵等值）。
+//! - 空间结构化用例：调用 `hrtf-core` world-listener 几何核，按字段绝对容差判定。
 //!
-//! 打印每个用例的 PASS/FAIL 与最大误差汇总。
+//! 打印音频与空间用例各自的 PASS/FAIL 和最大误差汇总。
 //!
 //! 用法：
 //!
 //! ```text
 //! cargo run -p hse-parity                 # 自动定位向量目录（缺省）
-//! cargo run -p hse-parity -- <specs 向量目录>
+//! cargo run -p hse-parity -- <specs/dsp/vectors 目录>
 //! ```
 //!
 //! 退出码约定：
 //!
-//! - `0`：全部用例通过，或向量目录不存在/为空（Phase 0 允许空跑框架）；
-//! - `1`：存在任一 FAIL（数值失配或夹具缺陷）。
+//! - `0`：音频与空间夹具全部通过；
+//! - `1`：任一用例失败、夹具缺失或夹具结构无效。
 //!
 //! 说明：未落地的流式模块回退直通假实现（输出=输入），有向量时出现成片 FAIL
 //! 属预期，恰证比对逻辑有效；hse-core 真实模块落地后同一命令应转绿。
 
 mod runner;
 mod segments;
+mod spatial_runner;
+mod spatial_vector;
 mod stages;
 mod tolerance;
 mod vector;
@@ -37,14 +40,17 @@ use std::path::{Path, PathBuf};
 
 use vector::VectorCase;
 
-/// 正常结束（含"无向量可跑"的空跑场景）。
+/// 正常结束：音频与空间夹具全部通过。
 const EXIT_ALL_GREEN: i32 = 0;
 /// 存在任一失败用例。
 const EXIT_HAS_FAILURES: i32 = 1;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.iter().any(|arg| arg.as_str() == "-h" || arg.as_str() == "--help") {
+    if args
+        .iter()
+        .any(|arg| arg.as_str() == "-h" || arg.as_str() == "--help")
+    {
         print_usage();
         flush_stdout();
         return;
@@ -58,13 +64,13 @@ fn main() {
 fn print_usage() {
     println!("hse-parity —— HyperSoundEngine 对拍 harness（开发专用）");
     println!();
-    println!("用法：hse-parity [specs 向量目录]");
+    println!("用法：hse-parity [specs/dsp/vectors 目录]");
     println!();
     println!("不带参数时，按以下顺序自动定位 specs/dsp/vectors：");
     println!("  1. 从编译期记录的本 crate 路径（CARGO_MANIFEST_DIR）逐级向上查找；");
     println!("  2. 从当前工作目录逐级向上查找。");
     println!();
-    println!("退出码：0 = 全绿或空跑（目录不存在/为空）；1 = 存在失败用例。");
+    println!("退出码：0 = 音频与空间夹具全绿；1 = 用例失败、夹具缺失或夹具无效。");
 }
 
 fn flush_stdout() {
@@ -77,8 +83,11 @@ fn resolve_vectors_dir(explicit: Option<&Path>) -> Option<PathBuf> {
         return Some(dir.to_path_buf());
     }
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    find_vectors_dir_upwards(&manifest_dir)
-        .or_else(|| std::env::current_dir().ok().and_then(|cwd| find_vectors_dir_upwards(&cwd)))
+    find_vectors_dir_upwards(&manifest_dir).or_else(|| {
+        std::env::current_dir()
+            .ok()
+            .and_then(|cwd| find_vectors_dir_upwards(&cwd))
+    })
 }
 
 /// 从 start 逐级向上找第一个包含 specs/dsp/vectors 的祖先目录。
@@ -99,7 +108,10 @@ fn collect_json_files(dir: &Path) -> Vec<PathBuf> {
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(err) => {
-            println!("警告：无法枚举目录 {}（{err}），按无向量处理。", dir.display());
+            println!(
+                "警告：无法枚举目录 {}（{err}），按无向量处理。",
+                dir.display()
+            );
             return Vec::new();
         }
     };
@@ -123,8 +135,7 @@ fn run(explicit_dir: Option<&Path>) -> i32 {
         Some(dir) => dir,
         None => {
             println!("未能定位 specs 向量目录：未通过参数指定，且从编译期路径与当前目录都找不到 specs/dsp/vectors。");
-            println!("Phase 0 允许空跑框架：本次不对拍任何向量，按通过结束（退出码 0）。");
-            return EXIT_ALL_GREEN;
+            return EXIT_HAS_FAILURES;
         }
     };
 
@@ -136,14 +147,14 @@ fn run(explicit_dir: Option<&Path>) -> i32 {
     println!("向量目录：{}{source_note}", vectors_dir.display());
 
     if !vectors_dir.is_dir() {
-        println!("该目录不存在——Phase 0 允许空跑框架：没有可对拍的向量，按通过结束（退出码 0）。");
-        return EXIT_ALL_GREEN;
+        println!("该目录不存在：没有可对拍的音频向量。");
+        return EXIT_HAS_FAILURES;
     }
 
     let json_files = collect_json_files(&vectors_dir);
     if json_files.is_empty() {
-        println!("目录中没有 *.json 向量用例——Phase 0 允许空跑框架：没有可对拍的向量，按通过结束（退出码 0）。");
-        return EXIT_ALL_GREEN;
+        println!("目录中没有 *.json 音频向量用例。");
+        return EXIT_HAS_FAILURES;
     }
 
     println!(
@@ -165,7 +176,9 @@ fn run(explicit_dir: Option<&Path>) -> i32 {
             Ok((case, outcome)) => {
                 let name = case.display_name();
                 if name != label {
-                    println!("提示：文件 {label} 内声明的用例名是 {name}（两者不一致，按文件名继续）。");
+                    println!(
+                        "提示：文件 {label} 内声明的用例名是 {name}（两者不一致，按文件名继续）。"
+                    );
                 }
                 let frames = match &outcome {
                     EvaluatedOutcome::Stream(stream) => stream.frames,
@@ -261,11 +274,55 @@ fn run(explicit_dir: Option<&Path>) -> i32 {
         "总计 {} 个用例：PASS {pass_count} 个，FAIL {fail_count} 个；全程最大 |got-want| = {worst_abs_diff:.3e}",
         pass_count + fail_count
     );
-    println!("说明：流式用例按音频段相对容差逐样本比对；计量型（moduleKind='meter'）用例按 readings");
+    println!(
+        "说明：流式用例按音频段相对容差逐样本比对；计量型（moduleKind='meter'）用例按 readings"
+    );
     println!("      标量读数判定（绝对容差 + NaN/±Infinity 哨兵等值，specs/dsp/lufs-meter.md §三/§五）；");
     println!("      全部转绿即双支线门禁的 Rust 半边通过（TS 冻结向量全 PASS = exit 0）。");
 
-    if fail_count > 0 {
+    let spatial_path = vectors_dir.parent().and_then(Path::parent).map(|specs| {
+        specs
+            .join("spatial")
+            .join("vectors")
+            .join("world-listener.v1.json")
+    });
+    let spatial_failed = match spatial_path {
+        Some(path) if path.is_file() => match spatial_vector::load_fixture(&path) {
+            Ok(fixture) => {
+                let outcome = spatial_runner::run_fixture(&fixture);
+                println!();
+                println!("==== Spatial world-listener 汇总 ====");
+                println!(
+                    "总计 {} 个用例：PASS {} 个，FAIL {} 个；最大绝对偏差 = {:.3e}",
+                    outcome.checked,
+                    outcome.passed_cases,
+                    outcome.failed_cases,
+                    outcome.max_abs_deviation
+                );
+                for failure in &outcome.failures {
+                    println!("[FAIL] {failure}");
+                }
+                !outcome.passed
+            }
+            Err(reason) => {
+                println!("[FAIL] Spatial world-listener 夹具错误：{reason}");
+                true
+            }
+        },
+        Some(path) => {
+            println!(
+                "[FAIL] 缺少 Spatial world-listener 夹具：{}",
+                path.display()
+            );
+            true
+        }
+        None => {
+            println!("[FAIL] 无法从 DSP 向量目录定位 specs/spatial/vectors");
+            true
+        }
+    };
+
+    if fail_count > 0 || spatial_failed {
         EXIT_HAS_FAILURES
     } else {
         EXIT_ALL_GREEN

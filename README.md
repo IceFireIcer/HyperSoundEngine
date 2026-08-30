@@ -9,9 +9,9 @@ HyperSoundEngine 是一个**不依赖任何特定宿主**的独立软件 DSP 音
 - 核心零 DOM / AudioContext / React 依赖，可跑在 Node、浏览器、Electron、AudioWorklet；
 - 浏览器宿主（`HyperSoundEngineHost`）与 WaveForge 适配层分离，其他软件可直接接入。
 
-> 当前生成代号 **HyperSoundEngine v1**，稳定包版本 **1.1.0**；版本与命名规则见 [docs/VERSIONING.md](docs/VERSIONING.md)。
+> 当前生成代号 **HyperSoundEngine v1**，稳定包版本 **1.2.0**；版本与命名规则见 [docs/VERSIONING.md](docs/VERSIONING.md)。
 >
-> **1.1.0 状态**：共享规格为 21 份（17 DSP + engine-chain + params + scenes + WAV），72 组音频冻结向量 / 144 文件，另有 3 个参数/场景结构化夹具与 1 个 standard WAV 共享夹具；Rust 对拍 72/72。WAV 编码保留默认 legacy 契约并新增显式 standard RIFF 模式，解码自动识别两者，WaveForge 导出固定使用 standard。Phase 3 已以 Rust 1–21 级完整链收口，服务进程也使用同一完整链；空间音频保持 `spatial.mode='off'` 契约。Phase 4 指标已达标，仅余 8h 真机压测；Phase 5 已完成 wasm 单 Biquad 最小试点，Rust `hrtf-core` 尚未启动。Windows 音频后端仅支持 WASAPI；项目不提供 MIDI 或 ASIO。
+> **1.2.0 状态**：共享规格为 22 份（17 DSP + 3 engine + WAV + world-listener），72 组音频冻结向量 / 144 文件，另有 3 个参数/场景夹具、1 个 standard WAV 夹具与 12 个 world-listener case；综合 Rust 门禁为音频 72/72 + 空间 12/12。Rust `hrtf-core` 已完成 position/yaw 世界几何核，但 HRIR、卷积、房间与主链第 22 级仍待实现；TS 第 22 级继续作为空间渲染参考。WAV 支持 legacy/standard 双模式。Windows 音频后端仅支持 WASAPI；项目不提供 MIDI 或 ASIO。
 
 ## 快速开始
 
@@ -81,7 +81,7 @@ HyperSoundEngine/
 
 HyperSoundEngineRust/ —— **Rust 支线**（独立 Cargo workspace，见《原生化双支线与
 Windows 音频接入规划书》）：hse-core（17 个 DSP 模块 + `EngineChainStage` 1–21 级主链，
-`spatial.mode='off'` 契约）/ hse-parity（72/72）/ hse-wasapi / hse-service / hse-wasm
+`spatial.mode='off'` 契约）/ hrtf-core（world-listener 几何 12/12）/ hse-parity（音频 72/72 + 空间 12/12）/ hse-wasapi / hse-service / hse-wasm
 （单 Biquad 的 wasm32 最小试点）/ hse-napi（占位）；与 TS 支线零代码依赖。
 ```
 

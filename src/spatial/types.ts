@@ -178,10 +178,21 @@ export interface SpatialParams {
   keymap?: Partial<KeyMap>
 }
 
-/** 听者状态（世界坐标 + 欧拉朝向；波 1 各模式均固定原点朝前） */
-export interface ListenerState {
-  position: { x: number; y: number; z: number }
+/** 三维右手世界坐标（米）。 */
+export interface Vec3 {
+  x: number
+  y: number
+  z: number
+}
+
+/** world listener 几何契约仅消费位置与水平偏航。 */
+export interface WorldListenerPose {
+  position: Vec3
   yaw: number
+}
+
+/** 听者状态（世界坐标 + 欧拉朝向；波 1 各模式均固定原点朝前） */
+export interface ListenerState extends WorldListenerPose {
   pitch: number
   roll: number
 }

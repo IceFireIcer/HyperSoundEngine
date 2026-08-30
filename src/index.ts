@@ -35,6 +35,10 @@ export type { SeparationStem, StemSeparatorAdapter, SeparationTask } from './off
 export { encodeWav, decodeWav } from './io/wav'
 export type { WavContainerFormat, WavDecodeResult, WavEncodeOptions } from './io/wav'
 
+export { computeRelativeDirection, wrapAzimuthDeg } from './spatial/controller'
+export type { RelativeDirection } from './spatial/controller'
+export type { Vec3, WorldListenerPose } from './spatial/types'
+
 // —— dsp 全部模块 ——
 export * from './dsp/fft'
 export * from './dsp/biquad'

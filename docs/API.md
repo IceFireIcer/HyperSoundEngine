@@ -1,8 +1,7 @@
 # HyperSoundEngine —— 对外接口文档（API）
 
-> 适用版本：0.5.0（独立引擎包）。核心 API 自 0.2.0 稳定；0.4.0 起新增：参数模型
-> 可选 `spatial` 段（空间音频）、`BassEnhancerSettings.lowBoostDb`、`getStages()` 阶段注册表；
-> 0.5.0 起分享串为 v2 紧凑格式（HSE2，兼容导入 v1 旧串，见 `src/engine/ShareCodec.ts`）。
+> 适用版本：1.2.0（独立引擎包）。核心 API 自 0.2.0 稳定；当前包含 WAV legacy/standard 双模式与 world-listener 几何公共函数。
+> 分享串为 v2 紧凑格式（HSE2，兼容导入 v1 旧串，见 `src/engine/ShareCodec.ts`）。
 > 核心原则：**小接口、深实现**。大多数接入方只需要 `createEngine` + `HyperSoundEngineParams`。
 
 ---
@@ -19,10 +18,14 @@ npm install hypersoundengine
 import {
   createEngine,
   createDefaultParams,
+  computeRelativeDirection,
+  wrapAzimuthDeg,
   type HyperSoundEngineParams,
   type AudioEngine,
   type EngineStats,
   type EngineAnalysis,
+  type Vec3,
+  type WorldListenerPose,
 } from 'hypersoundengine'
 ```
 
@@ -191,6 +194,17 @@ decodeWav(buffer: ArrayBuffer | Uint8Array): { sampleRate: number; channels: Flo
 - 编码默认 `format: 'legacy'`，保留 1.0.0 及更早版本的大端数值头字节契约；对外交换文件应显式使用 `format: 'standard'`，生成标准小端 RIFF/WAVE。
 - 解码自动识别 legacy 与 standard；standard 路径严格校验 RIFF/data 长度、采样率、byteRate 与 blockAlign。
 - 多通道直接对应 `HseAudioBus` 非交错布局，解码结果可零拷贝进入 `processBus`。
+
+### World listener 几何
+
+```ts
+computeRelativeDirection(listener: WorldListenerPose, source: Vec3): RelativeDirection
+wrapAzimuthDeg(angle: number): number
+```
+
+- 右手坐标：`+X` 右、`+Y` 上、`+Z` 前；位置单位米，角度单位度。
+- `yaw=0` 朝 `+Z`，正 yaw 向右；输出方位固定在 `[-180, 180)`。
+- 该 API 仅处理 position/yaw 几何，不包含 pitch/roll、多普勒、HRIR 或卷积。
 
 ---
 

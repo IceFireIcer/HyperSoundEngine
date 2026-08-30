@@ -107,6 +107,7 @@ interface ProcessingStage {
  ├─ 19) [LUFS 取样点]
  ├─ 20) 调制主增益（LFO/Envelope → masterGain）
  ├─ 21) Limiter
+ ├─ 22) 空间音频（TS 内联；mode='off' 时旁路）
  └─ 输出
 ```
 
@@ -121,7 +122,8 @@ interface ProcessingStage {
 Rust workspace 与 TS 支线零代码依赖，由 `specs/` 共享行为契约：
 
 - `hse-core::engine_chain::EngineChainStage` 镜像 TS 主链第 1–21 级，包含链内组合级与分析/计量状态；它实现 `Stage`，以 `prepare` 预分配并通过 `process` 原位处理。
-- 第 22 级空间音频不在当前 Rust 主链内。`EngineChainParams::from_overrides` 强制 `spatial.mode='off'`，非 off 参数直接拒绝；因此 72/72 对拍结论不包含 Rust HRTF 实现。
+- 第 22 级空间音频不在当前 Rust 主链内。`EngineChainParams::from_overrides` 强制 `spatial.mode='off'`，非 off 参数直接拒绝；因此 72/72 音频对拍不包含 Rust HRTF 渲染。
+- 独立 `hrtf-core` 已实现 world-listener 的 position/yaw 几何核，由 12 个结构化共享 case 对拍；它尚不包含 HRIR、卷积、房间或渲染循环，也未接入 `EngineChainStage`。
 - `hse-wasm` 是依赖 `hse-core` 的边界 crate，当前只导出 `HseBiquad`。宿主经左右 planar 缓冲指针与 `process(frames)` 原位交换数据，构造时按 `maxFrames` 预分配。
 - wasm 试点使用独立 AudioWorklet 示例，不导入或替换现有 TS worklet，也不暴露 `EngineChainStage`。依赖方向仅为 `hse-wasm -> hse-core`，核心不得反向依赖 wasm/浏览器 API。
 
