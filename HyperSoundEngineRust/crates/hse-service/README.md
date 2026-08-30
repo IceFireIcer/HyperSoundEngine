@@ -1,12 +1,12 @@
 # hse-service —— 引擎服务进程
 
-**一句话职责**（《原生化双支线与Windows音频接入规划书》§2.2）：回环拦截端到端——WASAPI loopback 捕获 → rtrb 双环 → DSP 线程（引擎子链全序装配 midSide → biquad → eqChain → deesser → compressor → modEffects → reverb 三路路由(simple|fdn|convolver|off) → bassEnhancer → loudnessComp → dynamicEq → modMatrix(控制率) → limiter）→ rtrb → WASAPI 渲染；控制面为 localhost WebSocket JSON-RPC；Phase 3 起同一连接上的二进制帧承载**推流入口**（specs/service/push-stream.md）。
+**一句话职责**（《原生化双支线与Windows音频接入规划书》§2.2）：WASAPI loopback 或捕获端点直捕 + PCM 推流会话 → 混后处理 → rtrb 双环 → DSP 线程（`hse-core::EngineChainStage` 第 1–21 级完整主链，spatial 固定 off）→ WASAPI 独立渲染端点；控制面为 localhost WebSocket JSON-RPC。
 
 ## 线程编排（§2.2 架构 + push-stream 混后处理）
 
 ```text
 ┌ 捕获线程(loopback.pull) ─┐
-│                          ├→ 逐样本求和(混后处理) → 入环 → DSP 线程(出环 → planar 子链) → 出环 → 渲染线程
+│                          ├→ 逐样本求和(混后处理) → 入环 → DSP 线程(出环 → planar 1–21 级完整主链) → 出环 → 渲染线程
 └ 控制面连接线程(二进制帧) ─┘         ↑ rtrb                          ↑ 参数热更换：rtrb 命令环整链换入
 控制面线程(WebSocket：文本=JSON-RPC ｜ 二进制=推流帧，同端口按 opcode 分流)
        ── 共享状态 / 原子统计 / 有界事件通道 / 会话表 ── 数据面
@@ -21,13 +21,13 @@
 ## 控制面契约（JSON-RPC 2.0 over WebSocket）
 
 默认 `ws://127.0.0.1:4780/`；`--port N` 参数或 `HSE_SERVICE_PORT` 环境变量可覆盖。
-方法表（8 个）：`listDevices` / `getState` / `configure{mode,renderDeviceId,sampleRate,blockSizeFrames}` / `start` / `stop` /
+方法表（8 个）：`listDevices` / `getState` / `configure{mode,renderDeviceId?,captureDeviceId?,outputDeviceId?,sampleRate,blockSizeFrames}` / `start` / `stop` /
 `setParams{params}` / `openSession{sampleRate,channels,format}`（未配置图采样率 -32001；协商违规 -32602；id 耗尽 -32000）/
 `closeSession{sessionId}`（未知或重复 close → -32602）。
 错误码 -32700/-32600/-32601/-32602/-32000/-32001；事件通知 `event.phase`、`event.xrun`。
 **推流二进制帧**（同连接，音频只进不出）：`sessionId u32 LE + seq u64 LE + 交错 f32LE 立体声载荷`（载荷为 8 的倍数、≥8、≤1 MiB），
 违规帧与未知会话帧静默丢弃；每会话有界环（容量按帧计）drop-oldest 背压；连接断开自动关闭其打开的全部会话。
-`setParams.params` 当前可识别键（Phase 3 全序链，完整子键域见 `specs/service/control-plane.md` §5.6）：
+`setParams.params` 当前可识别兼容 wire 键（投影到完整 `EngineChainStage`，子键域见 `specs/service/control-plane.md` §5.6）：
 `midSide{width,voiceBalance}`、`biquad{type,f0,q,gainDb}`（键缺省=级不装配）、
 `eqChain{bands,bandCount,qCompensation}`（键缺省=级不装配）、`deesser{enabled,centerHz,q,thresholdDb,ratio,attackMs,releaseMs,splitBand,mix,sidechainEnabled}`、
 `compressor{…}`、`modEffects{delay,chorus,flanger,phaser,tremolo}`、`reverbSimple{…}`、
@@ -44,7 +44,7 @@
 ```powershell
 cargo run -p hse-service            # 启动服务（默认端口 4780）
 cargo run -p hse-cli -- list-devices [--full]
-cargo run -p hse-cli -- configure [--device <id>] [--rate 48000] [--block 256]
+cargo run -p hse-cli -- configure [--mode loopback|capture] [--input-device <id>] [--output-device <id>] [--rate 48000] [--block 256]
 cargo run -p hse-cli -- start
 cargo run -p hse-cli -- get-state
 cargo run -p hse-cli -- set-params params.json   # {"biquad":{...},"reverbSimple":{...},"limiter":{...}}
@@ -59,7 +59,7 @@ cargo run -p hse-cli -- stop
 |------|------|
 | `backend.rs` | CaptureSource/RenderSink/opener 抽象 + WasapiFactory 生产适配 |
 | `fake_backend.rs` | 内存假后端（测试支撑；含静音回环捕获模式） |
-| `dsp_chain.rs` | 引擎子链全序装配（13 级 + reverb 三路路由 + 控制率 modMatrix）与 planar/交错转换 |
+| `dsp_chain.rs` | 包装并驱动 `hse-core::EngineChainStage` 第 1–21 级完整主链，以及 planar/交错转换 |
 | `params.rs` | setParams 快照解析（识别键/警告/TS 缺省/类型分层校验） |
 | `pipeline.rs` | 三条数据面线程与双环/命令环（捕获线程含混后处理前级） |
 | `sessions.rs` | 推流会话表：二进制帧解析、每会话有界环（drop-oldest）、混合前级 |
@@ -73,13 +73,3 @@ cargo run -p hse-cli -- stop
 ```powershell
 cargo test -p hse-service           # 单测+集成测试全绿，不依赖真实音频设备
 ```
-## 8h 稳定性压测
-
-```powershell
-cargo run -p hse-service --release        # 终端 A
-node ../../scripts/soak-8h.mjs --duration 28800 --report soak-report.json   # 终端 B（过夜）
-```
-
-- 默认合成馈送 + 静音链路（wet=0/dry=0）：测稳定性/泄漏/计数器单调，不出声；
-- `--no-session`：真实播放器模式（用户播放音乐，回环为实时时钟源），`xrunsOut==0` 为硬判据（零 xrun 判定）；
-- 报告 JSON 含逐分钟采样（phase/frames/xruns），判定：phase 全程 running、计数器单调、吞吐合格。

@@ -1,4 +1,4 @@
-# Phase 2 真机端到端验收记录 —— 引擎服务进程 v1（回环拦截）
+# Phase 2 真机部分验收记录 —— 同一默认设备上的旧试点链
 
 > 日期：2026-08-29（北京时间）
 > 对象：`HyperSoundEngineRust/crates/hse-service`（release 构建，含本次修复）+ `hse-wasapi`
@@ -9,7 +9,7 @@
 > 控制面 GWT 序列；音频源为 PowerShell SoundPlayer 播放 48kHz 扫频 WAV 至默认渲染设备，
 > 服务以 loopback 拦截同设备 → 试点子链（biquad → reverb-simple → limiter）→ 渲染回默认设备。
 
-## 一、结果总览：14/14 PASS
+## 一、本验收脚本结果：14/14 PASS（不等于 Phase 2 出口通过）
 
 | # | 验收项 | 结果 | 证据 |
 |---|--------|------|------|
@@ -23,7 +23,7 @@
 | 8 | GWT-CP-16 setParams 未知顶层键/子键 → warnings 字典序 ["biquad.order","myPluginKey"] 且被忽略 | PASS | 恰为该二元素 |
 | 9 | GWT-CP-17 快照整体替换（lastParams 不残留上一快照键） | PASS | 仅剩 limiter，thresholdDb=-2 |
 | 10 | GWT-CP-06 非 idle 拒绝 configure（-32001） | PASS | running 态拒绝 |
-| 11 | **端到端：真实音频流经全链**——播放 8s 扫频期间 DSP 累计处理帧数增长 | PASS | ΔframesProcessed=258,816（≈5.4s @48k；差值系 SoundPlayer 供块抖动，见 §四） |
+| 11 | **端到端：真实音频流经旧试点链**——播放 8s 扫频期间 DSP 累计处理帧数增长 | PASS | ΔframesProcessed=258,816（≈5.4s @48k；差值系 SoundPlayer 供块抖动，见 §四） |
 | 12 | GWT-CP-04 计数器单调不减（四计数器两次采样） | PASS | 全部 ≥ |
 | 13 | xrun 上报机制正确：event.xrun 通知与 stats 计数器同源单调 | PASS | 会话内 198 条通知，totalIn/totalOut 与 getState 对账一致 |
 | 14 | GWT-CP-13 停止全序：running→stopping→idle 事件 + stopped:true + config/lastParams 保留 | PASS | 全序正确 |
@@ -48,17 +48,15 @@ fake 后端单测/集成同步全绿（含本次新增 2 条 GWT-CP-06/08 用例
 
 | 出口判据 | 状态 | 说明 |
 |---|---|---|
-| 任意播放器输出到指定设备 → 经引擎全链 → 真实设备出声 | ✅ 机制验证 | 回环捕获→试点子链→渲染端到端跑通（判据 11）；**出声质量**需人耳/正式播放器复核 |
+| 任意播放器输出到指定设备 → 经引擎全链 → 真实设备出声 | ⏳ 未验收 | 本次只证明同一默认设备上的 loopback→旧试点链→同设备渲染；当前 1–21 级链、正式播放器、异设备输出均未做真机验收 |
 | 控制面可热改参数 | ✅ | running 态 setParams 快照替换 + 热应用（fake 侧另有块边界生效测试） |
-| 8h 零 xrun | ⏳ 待长跑 | 本次 5 分钟 soak（见 §五）；8h 需正式播放器 + 后台长跑，属时间预算问题非实现问题 |
-| 虚拟缆直捕路径 | ⏳ 待 VB-CABLE | 本机未安装；安装引导（检测/引导安装）未实现 |
+| 虚拟缆直捕路径 | ⏳ 待 VB-CABLE | 独立捕获/渲染选路已在代码和 fake 后端测试中落地；本机未安装 VB-CABLE，真机路径尚未验收 |
 
 **xrun 数据的解读**：短窗实测 xrunsOut≈4.7s 当量——归因于 SoundPlayer（WaveOut 大缓冲）
-供块极不平滑 + 同设备回授场景，属测试源伪影而非服务缺陷；事件通知（198 条）与计数器
-单调对账正确，证明 xrun 上报链路（规划书 §六 风险缓解项）按设计工作。零 xrun 判据应在
-正式播放器（foobar2000/浏览器）+ 异设备（或虚拟缆）拓扑下长跑复测。
+供块极不平滑 + 同设备回授场景；事件通知（198 条）与计数器单调对账正确，证明 xrun 上报链路
+（规划书 §六风险缓解项）按设计工作。该数据只描述本次测试拓扑，不构成正式播放器或异设备路径的性能结论。
 
-## 五、5 分钟 soak（补充）
+## 五、5 分钟运行观测
 
 见会话记录：60s 间隔采样 ×5，phase 恒 running、framesProcessed 持续增长、计数器单调；
 数据以提交时的会话日志为准（本文件不嵌实时数据）。

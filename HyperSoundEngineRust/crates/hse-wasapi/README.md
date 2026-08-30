@@ -1,5 +1,9 @@
-# hse-wasapi（占位目录，crate 未建）
+# hse-wasapi
 
-**一句话职责**（源自《原生化双支线与Windows音频接入规划书》§2.1）：Windows WASAPI 音频后端——事件驱动共享模式渲染 + loopback / 虚拟缆捕获，封装 `wasapi` crate。
+Windows WASAPI 低层后端，提供事件驱动共享模式的三类流：
 
-**启动节奏：Phase 2+（按需启动）**。当前目录仅含本说明文档，没有 Cargo 清单；启动时再创建 crate 并加入 workspace 的 `members`。
+- `open_render(&OpenOptions)`：渲染端点输出，`device_id=None` 选择默认渲染端点；
+- `open_loopback(&OpenOptions)`：渲染端点 loopback 捕获，`device_id=None` 选择默认渲染端点；
+- `open_capture(&OpenOptions)`：捕获端点直接捕获，`device_id=None` 选择默认捕获端点。
+
+三类入口均协商交错立体声 f32。`open_loopback` 与 `open_capture` 复用相同的无分配读取实现，但严格选择不同类别的端点；显式 `device_id` 类别不匹配时返回 `BackendError::DeviceNotFound`。

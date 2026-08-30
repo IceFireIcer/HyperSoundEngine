@@ -27,12 +27,24 @@ pub struct FakeCapture {
 
 impl FakeCapture {
     pub fn new(period: Duration, format: StreamFormat) -> Self {
-        Self { cursor: 0, period, format, pulls: 0, silent: false }
+        Self {
+            cursor: 0,
+            period,
+            format,
+            pulls: 0,
+            silent: false,
+        }
     }
 
     /// 静音捕获源：pull 恒返回 0 帧（节拍仍生效，用于限制轮询节奏）。
     pub fn silent(period: Duration, format: StreamFormat) -> Self {
-        Self { cursor: 0, period, format, pulls: 0, silent: true }
+        Self {
+            cursor: 0,
+            period,
+            format,
+            pulls: 0,
+            silent: true,
+        }
     }
 }
 
@@ -101,15 +113,28 @@ impl RenderSink for FakeRender {
     }
 }
 
-struct FakeLoopbackOpener { opts: OpenOptions, period: Duration, silent: bool }
+struct FakeLoopbackOpener {
+    opts: OpenOptions,
+    period: Duration,
+    silent: bool,
+    opened: Arc<Mutex<Vec<Option<String>>>>,
+    sample_rate: Option<u32>,
+}
 impl CaptureOpener for FakeLoopbackOpener {
     fn open(self: Box<Self>) -> Result<Box<dyn CaptureSource>, BackendError> {
+        self.opened
+            .lock()
+            .unwrap()
+            .push(self.opts.device_id.clone());
         if let Some(m) = &self.opts.device_id {
             if m == "force-error" {
                 return Err(BackendError::DeviceNotFound(m.clone()));
             }
         }
-        let format = StreamFormat { sample_rate: self.opts.sample_rate, channels: 2 };
+        let format = StreamFormat {
+            sample_rate: self.sample_rate.unwrap_or(self.opts.sample_rate),
+            channels: 2,
+        };
         let src = if self.silent {
             FakeCapture::silent(self.period, format)
         } else {
@@ -119,9 +144,21 @@ impl CaptureOpener for FakeLoopbackOpener {
     }
 }
 
-struct FakeRenderOpener { opts: OpenOptions, period: Duration, received: Arc<Mutex<Vec<f32>>>, push_calls: Arc<AtomicU64>, open_error: Option<String> }
+struct FakeRenderOpener {
+    opts: OpenOptions,
+    period: Duration,
+    received: Arc<Mutex<Vec<f32>>>,
+    push_calls: Arc<AtomicU64>,
+    open_error: Option<String>,
+    opened: Arc<Mutex<Vec<Option<String>>>>,
+    sample_rate: Option<u32>,
+}
 impl RenderOpener for FakeRenderOpener {
     fn open(self: Box<Self>) -> Result<Box<dyn RenderSink>, BackendError> {
+        self.opened
+            .lock()
+            .unwrap()
+            .push(self.opts.device_id.clone());
         if let Some(m) = &self.open_error {
             return Err(BackendError::Stream(m.clone()));
         }
@@ -129,7 +166,10 @@ impl RenderOpener for FakeRenderOpener {
             received: self.received,
             push_calls: self.push_calls,
             period: self.period,
-            format: StreamFormat { sample_rate: self.opts.sample_rate, channels: 2 },
+            format: StreamFormat {
+                sample_rate: self.sample_rate.unwrap_or(self.opts.sample_rate),
+                channels: 2,
+            },
         }))
     }
 }
@@ -139,10 +179,15 @@ pub struct FakeFactory {
     pub devices: Vec<DeviceInfo>,
     pub render_received: Arc<Mutex<Vec<f32>>>,
     pub push_calls: Arc<AtomicU64>,
+    pub opened_loopback: Arc<Mutex<Vec<Option<String>>>>,
+    pub opened_capture: Arc<Mutex<Vec<Option<String>>>>,
+    pub opened_render: Arc<Mutex<Vec<Option<String>>>>,
     pub open_error: Option<String>,
     pub capture_period: Duration,
     pub render_period: Duration,
     pub capture_silent: bool,
+    pub capture_sample_rate: Option<u32>,
+    pub render_sample_rate: Option<u32>,
 }
 
 impl FakeFactory {
@@ -150,17 +195,42 @@ impl FakeFactory {
     pub fn working(capture_period: Duration, render_period: Duration) -> Arc<Self> {
         Arc::new(Self {
             devices: vec![
-                DeviceInfo { kind: DeviceKind::Render, id: "render-default".into(), name: "扬声器（默认）".into(), is_default: true },
-                DeviceInfo { kind: DeviceKind::Render, id: "render-headphone".into(), name: "耳机".into(), is_default: false },
-                DeviceInfo { kind: DeviceKind::Capture, id: "capture-loopback".into(), name: "扬声器（回环）".into(), is_default: true },
-                DeviceInfo { kind: DeviceKind::Capture, id: "cable-output".into(), name: "CABLE Output".into(), is_default: false },
+                DeviceInfo {
+                    kind: DeviceKind::Render,
+                    id: "render-default".into(),
+                    name: "扬声器（默认）".into(),
+                    is_default: true,
+                },
+                DeviceInfo {
+                    kind: DeviceKind::Render,
+                    id: "render-headphone".into(),
+                    name: "耳机".into(),
+                    is_default: false,
+                },
+                DeviceInfo {
+                    kind: DeviceKind::Capture,
+                    id: "capture-loopback".into(),
+                    name: "扬声器（回环）".into(),
+                    is_default: true,
+                },
+                DeviceInfo {
+                    kind: DeviceKind::Capture,
+                    id: "cable-output".into(),
+                    name: "CABLE Output".into(),
+                    is_default: false,
+                },
             ],
             render_received: Arc::new(Mutex::new(Vec::new())),
             push_calls: Arc::new(AtomicU64::new(0)),
+            opened_loopback: Arc::new(Mutex::new(Vec::new())),
+            opened_capture: Arc::new(Mutex::new(Vec::new())),
+            opened_render: Arc::new(Mutex::new(Vec::new())),
             open_error: None,
             capture_period,
             render_period,
             capture_silent: false,
+            capture_sample_rate: None,
+            render_sample_rate: None,
         })
     }
 
@@ -178,10 +248,28 @@ impl FakeFactory {
             devices: Vec::new(),
             render_received: Arc::new(Mutex::new(Vec::new())),
             push_calls: Arc::new(AtomicU64::new(0)),
+            opened_loopback: Arc::new(Mutex::new(Vec::new())),
+            opened_capture: Arc::new(Mutex::new(Vec::new())),
+            opened_render: Arc::new(Mutex::new(Vec::new())),
             open_error: Some(message.into()),
             capture_period: Duration::ZERO,
             render_period: Duration::ZERO,
             capture_silent: false,
+            capture_sample_rate: None,
+            render_sample_rate: None,
+        })
+    }
+    fn capture_opener_for(
+        &self,
+        opts: &OpenOptions,
+        opened: &Arc<Mutex<Vec<Option<String>>>>,
+    ) -> Box<dyn CaptureOpener> {
+        Box::new(FakeLoopbackOpener {
+            opts: opts.clone(),
+            period: self.capture_period,
+            silent: self.capture_silent,
+            opened: Arc::clone(opened),
+            sample_rate: self.capture_sample_rate,
         })
     }
 }
@@ -192,7 +280,11 @@ impl BackendFactory for FakeFactory {
     }
 
     fn loopback_opener(&self, opts: &OpenOptions) -> Box<dyn CaptureOpener> {
-        Box::new(FakeLoopbackOpener { opts: opts.clone(), period: self.capture_period, silent: self.capture_silent })
+        self.capture_opener_for(opts, &self.opened_loopback)
+    }
+
+    fn capture_opener(&self, opts: &OpenOptions) -> Box<dyn CaptureOpener> {
+        self.capture_opener_for(opts, &self.opened_capture)
     }
 
     fn render_opener(&self, opts: &OpenOptions) -> Box<dyn RenderOpener> {
@@ -202,6 +294,8 @@ impl BackendFactory for FakeFactory {
             received: Arc::clone(&self.render_received),
             push_calls: Arc::clone(&self.push_calls),
             open_error: self.open_error.clone(),
+            opened: Arc::clone(&self.opened_render),
+            sample_rate: self.render_sample_rate,
         })
     }
 }

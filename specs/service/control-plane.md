@@ -16,11 +16,7 @@
   仅以状态机相位与统计计数器的形式在结果中显影。
 - **控制面与数据面分离**（规划书 §2.2）：控制面连接可以随时断开重连，不影响已建立的音频流；
   数据面异常通过事件通知与统计计数器上报，不要求控制面在线。
-- **当前阶段范围声明**（Phase 2 起，Phase 3 批次二修订）：单客户端假设（§九）、应用层心跳暂缓（§九）、
-  处理链为引擎子链全序装配 midSide → biquad → eqChain → deesser → compressor → modEffects →
-  reverb（simple | fdn | convolver | off 三路路由）→ bassEnhancer → loudnessComp → dynamicEq →
-  modMatrix（控制率）→ limiter（§八）、
-  音频入口为回环拦截 + 推流（Phase 3 起，见 push-stream.md）。
+- **当前实现范围**：服务数据面运行 `hse-core::EngineChainStage` 第 1–21 级完整主链，空间第 22 级固定为 off；`setParams` 保留兼容 wire 键并投影为完整 canonical 参数，未暴露级使用核心默认值。音频入口为回环拦截、捕获端点直捕与推流。
   推流入口的同端口复用分流规则见 [`push-stream.md`](push-stream.md)。
 
 ## 二、传输与寻址
@@ -150,7 +146,7 @@ DeviceInfo 字段表：
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `id` | string | 稳定设备标识（Windows IMMDevice ID 字符串），同类别内唯一，可直接作为 `configure.renderDeviceId` |
+| `id` | string | Windows IMMDevice ID；render/capture 分类独立，按类别用于 `renderDeviceId`、`captureDeviceId` 或 `outputDeviceId` |
 | `name` | string | 友好名（如扬声器/耳机名、CABLE Input 等），仅供展示 |
 | `isDefault` | bool | 是否该类别（render 或 capture）的**系统默认端点**；每个非空数组内恰有一个 `true` |
 
@@ -207,30 +203,54 @@ DeviceInfo 字段表：
 请求：
 
 ```json
-{"jsonrpc":"2.0","id":3,"method":"configure","params":{"mode":"loopback","renderDeviceId":null,"sampleRate":48000,"blockSizeFrames":256}}
+{"jsonrpc":"2.0","id":3,"method":"configure","params":{"mode":"loopback","renderDeviceId":null,"outputDeviceId":null,"sampleRate":48000,"blockSizeFrames":256}}
 ```
 
 成功结果（applied 为生效配置的原样回显）：
 
 ```json
-{"jsonrpc":"2.0","id":3,"result":{"applied":{"mode":"loopback","renderDeviceId":null,"sampleRate":48000,"blockSizeFrames":256}}}
+{"jsonrpc":"2.0","id":3,"result":{"applied":{"mode":"loopback","renderDeviceId":null,"outputDeviceId":null,"sampleRate":48000,"blockSizeFrames":256}}}
+```
+
+capture 直捕请求示例：
+
+```json
+{"jsonrpc":"2.0","id":3,"method":"configure","params":{"mode":"capture","captureDeviceId":"cable-output-id","outputDeviceId":"speakers-id","sampleRate":48000,"blockSizeFrames":256}}
 ```
 
 | 参数 | 类型 | 校验层级 | 说明 |
 |---|---|---|---|
-| `mode` | string | 非 `"loopback"` → -32602 | 入口形态；当前唯一合法值即回环拦截 |
-| `renderDeviceId` | string\|null | 非法引用 → -32000 | 回环拦截目标渲染端点的 `id`（接入方播放所至的输出设备或虚拟缆 CABLE Input）；null 表示该类别系统默认渲染端点。语义锚定：本参数选择的是**被捕获的拦截源**；最终渲染出口在本阶段固定取系统默认渲染端点，未暴露配置键 |
-| `sampleRate` | u32 | 非 ≥1 整数 → -32602 | 期望采样率；实际流格式协商失败属后端错误，在 start 时报 -32000 |
-| `blockSizeFrames` | u32 | 非 ≥1 整数 → -32602 | 期望每块帧数（事件驱动轮询周期）；后端能力上限校验失败在 start 时报 -32000 |
+| `mode` | string | 非 `"loopback"` / `"capture"` → -32602 | 捕获形态：loopback 捕获渲染端点；capture 直接打开捕获端点（如 CABLE Output） |
+| `renderDeviceId` | string\|null | loopback 必填；非法引用 → -32000 | loopback 模式的被捕获渲染端点；null 表示默认渲染端点。旧四字段请求保持此语义 |
+| `captureDeviceId` | string\|null | capture 必填；非法引用 → -32000 | capture 模式的直捕端点；null 表示默认捕获端点 |
+| `outputDeviceId` | string\|null | 可选；非法引用 → -32000 | 最终渲染端点；省略或 null 表示默认渲染端点。省略时旧请求的 applied/config 保持四字段形态 |
+| `sampleRate` | u32 | 非 8000..384000 整数 → -32602 | 期望采样率；捕获与渲染协商结果都必须等于该值，否则 start 报 -32000 |
+| `blockSizeFrames` | u32 | 非 16..8192 整数 → -32602 | 期望每块帧数（事件驱动轮询周期）；后端能力上限校验失败在 start 时报 -32000 |
 
 - **仅 phase=idle 可调用**，否则报 -32001 且状态（含既有 config）不变；
-- 校验分两级：结构与静态域检查在 configure 内完成；需要后端参与的检查（格式协商、能力上限）
-  允许推迟到 start；但 renderDeviceId 若非 null 且不在当前枚举结果中，configure 即报 -32000。
+- 字段组合：loopback 必须携带 `renderDeviceId` 且不得携带 `captureDeviceId`；capture 必须携带 `captureDeviceId` 且不得携带 `renderDeviceId`；违反组合约束报 -32602；
+- 校验分两级：结构与静态域检查在 configure 内完成；所有显式设备 id 在提交前按类别校验，未知或类别错误报 -32000；格式协商与捕获/渲染采样率一致性在 start 检查；
+- 兼容性：既有 `{mode:"loopback",renderDeviceId,sampleRate,blockSizeFrames}` 请求继续有效，且未显式携带 `outputDeviceId` 时 applied/getState.config 不新增该键。
 
 #### GWT-CP-05：idle 合法配置生效
-- **给定**：phase=idle，参数通过结构校验且 renderDeviceId 为 null 或存在于当前枚举结果
-- **当**：发送 `configure`
-- **则**：响应 result.applied 与请求 params 四字段逐字段相等；此后 getState.config 等于该 applied 对象
+- **给定**：phase=idle，参数通过结构校验，显式设备 id 均存在于对应类别
+- **当**：发送合法 loopback 或 capture 配置
+- **则**：响应 result.applied 与请求中的生效字段逐字段相等；此后 getState.config 等于该 applied 对象；旧四字段 loopback 请求保持四字段回显
+
+#### GWT-CP-05A：捕获源与渲染出口独立选路
+- **给定**：枚举中存在非默认渲染端点 R、捕获端点 C 与输出端点 O
+- **当**：分别配置 `{mode:"loopback",renderDeviceId:R,outputDeviceId:O,...}` 与 `{mode:"capture",captureDeviceId:C,outputDeviceId:O,...}` 并启动
+- **则**：前者从 R 建立 loopback 捕获、后者从 C 建立直捕；两者都向 O 建立渲染流，源 id 不得传给渲染 opener
+
+#### GWT-CP-05B：模式字段组合严格且设备类别正确
+- **给定**：phase=idle
+- **当**：loopback 携带 captureDeviceId、capture 携带 renderDeviceId、缺少模式所需源键，或显式 id 不属于要求的设备类别
+- **则**：字段组合错误报 -32602；未知或类别错误报 -32000；getState.config 保持原值
+
+#### GWT-CP-05C：协商采样率偏离配置时启动回滚
+- **给定**：合法配置的捕获或渲染端最终协商采样率不等于配置的 sampleRate，包括两端共同协商到同一替代值
+- **当**：发送 start
+- **则**：返回 -32000，phase 回到 idle，config 保留，所有已启动线程被停止并回收
 
 #### GWT-CP-06：非 idle 一律拒绝
 - **给定**：phase ∈ {starting, running, stopping}
@@ -238,12 +258,12 @@ DeviceInfo 字段表：
 - **则**：响应 error code=-32001；getState.config 保持原值不变
 
 #### GWT-CP-07：结构非法拒绝且不留痕
-- **给定**：phase=idle；分别取 mode="capture"、sampleRate=0、sampleRate=48.5、blockSizeFrames=0、缺失任一键
+- **给定**：phase=idle；分别取 mode="other"、模式与源设备键组合冲突、sampleRate<8000 或 >384000、非整数 sampleRate、blockSizeFrames<16 或 >8192、缺失任一必填键
 - **当**：逐一发送 `configure`
 - **则**：每次响应 error code=-32602；getState.config 不变（此前配置过的仍保持）
 
 #### GWT-CP-08：未知设备引用报后端失败
-- **给定**：phase=idle，renderDeviceId 设为枚举结果中不存在的字符串
+- **给定**：phase=idle，任一显式源设备或输出设备 id 设为枚举结果中不存在或类别不匹配的字符串
 - **当**：发送 `configure`
 - **则**：响应 error code=-32000；getState.config 不变
 
@@ -310,7 +330,7 @@ DeviceInfo 字段表：
 
 ### 5.6 setParams —— 参数快照下发
 
-请求（试点子链三键齐全的示例）：
+请求（兼容 wire 参数示例）：
 
 ```json
 {"jsonrpc":"2.0","id":6,"method":"setParams","params":{"params":{"biquad":{"type":"peaking","f0":120,"q":0.8,"gainDb":3.5},"reverbSimple":{"roomSize":0.5,"damping":0.3,"wet":0.25,"dry":0.75,"preDelayMs":20,"width":1,"type":"hall"},"limiter":{"enabled":true,"thresholdDb":-1,"lookaheadMs":5,"attackMs":1,"releaseMs":60,"truePeak":true}}}}
@@ -335,7 +355,7 @@ DeviceInfo 字段表：
 - **事务提交**：running 时，候选快照只有在解析、构链、prepare 和命令投递全部成功后，才同时替换 `lastParams` 与后续 start 使用的参数；任一步失败均返回错误，`lastParams`、后续启动参数和运行链保持调用前旧值；命令环满按 -32000 拒绝，不以 accepted:true 或 warning 表示丢弃；
 - 非 running 时保持既有延迟校验语义：通过结构解析后立即存储规范化快照，不提前构链；下次 start 再按实际协商格式构链，届时构建失败按启动失败回滚；
 
-#### 可识别键表（引擎子链全序装配；随模块落地扩展，属向后兼容变更）
+#### 可识别 wire 键表（投影到 1–21 级完整 EngineChainStage）
 
 | 顶层键 | 子键 | 类型 | 说明 |
 |---|---|---|---|
@@ -497,57 +517,16 @@ DeviceInfo 字段表：
 4. 通知只经控制面连接推送；控制面断线期间的 xrun 不补发（重连后靠 getState 对账）；
 5. 同一连接上通知与响应严格按发生序交错发送。
 
-## 八、引擎子链及其与全链的对应关系
+## 八、服务完整链及 wire 参数适配
 
-Phase 3 批次二起，管线内实际运行的链为**全序引擎子链**（对齐 TS 全链 22 级的引擎
-相对顺序），顺序固定：
-
-```text
-交错 f32 进（L,R,L,R,…） → [拆包 planar] → midSide → biquad → eqChain → deesser
-  → compressor → modEffects（Delay→Chorus→Flanger→Phaser→Tremolo）→ reverb 三路路由
-  （simple | fdn | convolver | off）→ bassEnhancer → loudnessComp → dynamicEq
-  → modMatrix（控制率：推进矩阵 + masterGain 乘 L/R）→ limiter → [打包交错] → 交错 f32 出
-```
-
-与 TS 支线全链（文档口径 22 级，`src/engine/HyperSoundEngine.ts` 的 buildStages 固定数组）
-的对应关系（全链级号以 buildStages 数组序为准）：
-
-| 子链级 | 对应模块规格 | 全链位置 | 全链实现形态 |
-|---|---|---|---|
-| midSide | [`specs/dsp/mid-side.md`](../dsp/mid-side.md) | 第 3 级 M/S | MidSide 本体（width + voiceBalance） |
-| biquad | [`specs/dsp/biquad.md`](../dsp/biquad.md) | 第 4 级 pre-eq | EqChain（biquad 级联）——既有单节 biquad 键保留为该级**前置单节** |
-| eqChain | [`specs/dsp/eq-chain.md`](../dsp/eq-chain.md) | 第 4 级 pre-eq | EqChain 本体（多段级联 + 级联 Q 补偿），`eqChain` 键独立成级 |
-| deesser | [`specs/dsp/deesser.md`](../dsp/deesser.md) | 第 5 级 deesser | Deesser 本体（本链无外部 sidechain 源，内部单声道和检测） |
-| compressor | [`specs/dsp/compressor.md`](../dsp/compressor.md) | 第 6 级 compressor | Compressor 本体（sidechain 派生见其 §4.5） |
-| modEffects | [`specs/dsp/mod-effects.md`](../dsp/mod-effects.md) | 第 8–12 级 delay/chorus/flanger/phaser/tremolo | ModEffectsStage 五效果按引擎接线顺序级联，禁用级整级跳过 |
-| reverb 路由 | [reverb-simple](../dsp/reverb-simple.md) ｜ [fdn-reverb](../dsp/fdn-reverb.md) ｜ [convolver](../dsp/convolver.md) | 第 13 级 reverb | 三路路由（`reverbRoute` 键）：simple=ReverbSimple / fdn=FDN 网络 / convolver=分区卷积（IR 由确定性配方给出）/ off=整级直通 |
-| bassEnhancer | [`specs/dsp/bass-enhancer.md`](../dsp/bass-enhancer.md) | 第 14 级 bass | BassEnhancer 本体（含 lowBoostDb） |
-| loudnessComp | [`specs/dsp/loudness-comp.md`](../dsp/loudness-comp.md) | 第 15 级 loudness-compensation | LoudnessComp 本体（无 enabled 门控，「关闭」形态见 §5.6 键表注 3） |
-| dynamicEq | [`specs/dsp/dynamic-eq.md`](../dsp/dynamic-eq.md) | 第 18 级 dynamic-eq | DynamicEq 本体，crossover 由服务侧按引擎常量 [200,800,2500,8000] 固定注入 |
-| modMatrix | [`specs/dsp/modulation-matrix.md`](../dsp/modulation-matrix.md) | 第 20 级 mod-master-gain | 控制率级：每块推进矩阵（包络读取增益前输入）→ masterGain 逐样本乘 L/R（stereoWidth 产物不回灌 midSide，见 §5.6 键表注 4） |
-| limiter | [`specs/dsp/limiter.md`](../dsp/limiter.md) | 第 21 级（末级）limiter | Limiter 本体 |
-
-不参与本子链的全链级（未移植或引擎内部组合，而非激活旁路）：
-loudness-normalization / surround3d（第 1–2 级）、NightMode（第 7 级，压缩增强 + shelf 的
-引擎内部组合）、IEQ 与分析取样（第 16–17、19 级 lufs，引擎内部闭环组合）、spatial（第 22 级，
-空间音频内联级）；HseStretch 按引擎语义为 `getStretch()` 外置调用，不入链。
+服务数据面实际构造并运行 `hse-core::EngineChainStage` 第 1–21 级；级序、旁路、sidechain 与分析语义以 [`engine/chain.md`](../engine/chain.md) 为准。`PilotParams` 只是控制协议兼容层：将本节可识别 wire 键投影到完整 canonical `EngineChainParams`，未暴露级使用核心默认值。空间第 22 级强制 `off`，`HseStretch` 保持链外能力。
 
 约束：
 
-1. 各级行为以冻结向量 + 各模块规格为准（双绿门禁），控制面协议不重复定义 DSP 行为；
-2. 数据布局契约（`hse-wasapi/src/lib.rs`）：进程内统一交错立体声 f32；planar 转换只发生在
-   DSP 线程边界——交错进、planar 过链、交错出；
-3. Phase 3 起新模块按规格逐级插入链中，插入动作只改变服务进程内部拓扑；
-   本契约的方法表与状态机不受影响（setParams 可识别键随模块落地同步扩展，属向后兼容变更）；
-4. **缺省直通形态**（回归锚）：全键缺省 + reverbSimple 全干（wet=0, dry=1, preDelayMs=0）+
-   limiter 禁用 ⇒ 整链**逐位直通**。达成方式：`biquad`/`eqChain` 键缺省不装配级
-   （级不存在，而非 0dB 级联——design_biquad 以 `b0×(1/a0)` 归一化，部分 (f,q) 组合下
-   0dB peaking 并非逐位恒等，故 TS 的 enabled:true+10×0dB 缺省形态在服务链中收窄为
-   「键缺省=级不装配」，显式配置时子键回落 TS 缺省）；deesser/modEffects/dynamicEq 缺省
-   disabled 硬旁路；loudnessComp 缺省 custom+空带（目标全 0 → 恒等系数）；modMatrix
-   缺省无路由（masterGain 基线 1，×1.0 逐位还原）；reverbRoute 缺省 simple（既有行为）。
-   reverb 路由为 convolver 时湿路引入 partitionSize 样本延迟（模块规格 §4.5），属该路
-   路由的固有语义。
+1. 各级行为以冻结向量 + 各模块规格为准，控制面协议不重复定义 DSP 行为；
+2. 数据布局契约（`hse-wasapi/src/lib.rs`）：进程内统一交错立体声 f32；planar 转换只发生在 DSP 线程边界；
+3. wire 键扩展只改变兼容适配层，不改变 `EngineChainStage` 的完整级序；
+4. 缺省直通回归锚仍为：全键缺省 + reverbSimple 全干 + limiter 禁用，整链逐位直通。
 
 ## 九、并发约束
 
@@ -578,7 +557,8 @@ loudness-normalization / surround3d（第 1–2 级）、NightMode（第 7 级�
    （specs/README.md §七、AGENTS.md 命名铁律）；
 5. 每次对本文件的实质修订按 docs/VERSIONING.md 记录进仓库根 CHANGELOG.md；
 6. 客户端兼容义务：对未知 method 返回的 -32601、未知键产生的 warnings、未知事件通知
-   必须容忍并忽略，禁止硬失败。
+   必须容忍并忽略，禁止硬失败；
+7. **1.3.0 加性演进**：`configure` 新增 capture 模式、`captureDeviceId` 与可选 `outputDeviceId`；既有 loopback 四字段请求及其 applied/config 形态保持不变。
 
 ## 十一、关联文件
 

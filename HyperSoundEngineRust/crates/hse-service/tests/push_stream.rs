@@ -123,79 +123,72 @@ fn push_constant(
     }
 }
 
-fn count_samples(received: &[f32], value: f32) -> usize {
-    received.iter().filter(|&&x| x == value).count()
-}
-
 #[test]
 fn 混后处理_双会话求和进渲染_无串扰_无丢失() {
-    // 节奏设计：捕获 500µs/轮（≈128k 帧/s）慢于渲染消费（250µs/块 ≈256k 帧/s）
-    // ⇒ 入环与会话环全程无溢出，推入的每一帧都恰好吃到渲染（计数可精确断言；
-    //   重放确定性由 sessions 单测的混合次序断言覆盖）。
-    let s = setup_silent(Duration::from_micros(500), Duration::from_micros(250));
+    // idle 期预装两条等长时间线，避免用微秒级 sleep 假设线程调度速率。
+    // 共 18 块，小于 capture→DSP 输入环 24 块容量；即使 DSP 暂未获调度也不会溢出。
+    let s = setup_silent(Duration::ZERO, Duration::from_micros(250));
     configure_48k(&s.engine, 64);
     enable_bypass(&s.engine);
-    s.engine.start().unwrap();
     let a = open_session(&s.engine); // id 1
     assert_eq!(a, 1);
-
-    let count = |v: f32| count_samples(&s.factory.render_received.lock().unwrap(), v);
-
-    // 阶段一：仅会话 A（+0.25）→ 渲染出现 0.25，且绝无求和值 0.75（无串扰）
-    let mut seq_a = 0u64;
-    push_constant(&s.engine, a, 0.25, 200, &mut seq_a);
-    wait_until(
-        || count(0.25) >= 500,
-        Duration::from_secs(10),
-        "会话 A 独占期 0.25 到达渲染",
-    );
-    assert_eq!(count(0.75), 0, "B 未推流，不得出现 A+B 求和值");
-
-    // 阶段二：A、B 成对推流（B=+0.5）→ (0.0 回环静音 + 0.25) + 0.5 = 0.75 逐位精确
     let b = open_session(&s.engine);
     assert_eq!(b, 2);
+
+    const BLOCKS_PER_STAGE: usize = 6;
+    const FRAMES_PER_BLOCK: usize = 64;
+    const STAGES: usize = 3;
+    let expected_samples = STAGES * BLOCKS_PER_STAGE * FRAMES_PER_BLOCK * 2;
+
+    let mut seq_a = 0u64;
     let mut seq_b = 0u64;
-    for _ in 0..200 {
-        push_constant(&s.engine, a, 0.25, 1, &mut seq_a);
-        push_constant(&s.engine, b, 0.5, 1, &mut seq_b);
+    // 阶段一 A 独占；阶段二 A+B；阶段三 B 独占。零块用于保持两会话帧对齐。
+    for (value_a, value_b) in [(0.25, 0.0), (0.25, 0.5), (0.0, 0.5)] {
+        push_constant(&s.engine, a, value_a, BLOCKS_PER_STAGE, &mut seq_a);
+        push_constant(&s.engine, b, value_b, BLOCKS_PER_STAGE, &mut seq_b);
     }
+
+    s.engine.start().unwrap();
+    let stage_samples = BLOCKS_PER_STAGE * FRAMES_PER_BLOCK * 2;
+    let nonzero_count = || {
+        s.factory
+            .render_received
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|&&sample| sample != 0.0)
+            .count()
+    };
     wait_until(
-        || count(0.75) >= 500,
+        || nonzero_count() >= expected_samples,
         Duration::from_secs(10),
-        "A+B 混合值 0.75 到达渲染",
+        "三段会话时间线完整到达渲染",
     );
 
-    // 阶段三：继续单推 B；A 的存量排空后进入 B 独占区 → 0.5
-    let mut extra = 0usize;
-    for _ in 0..200 {
-        push_constant(&s.engine, b, 0.5, 1, &mut seq_b);
-        extra += 1;
-        if extra.is_multiple_of(20) {
-            std::thread::sleep(Duration::from_millis(2));
-        }
-    }
-    wait_until(
-        || count(0.5) >= 500,
-        Duration::from_secs(10),
-        "A 排空后 B 独占区 0.5 到达渲染",
-    );
-    assert!(
-        count(0.75) > 0 && count(0.25) > 0,
-        "三个区段（A 独占/求和/B 独占）都应出现过"
-    );
-
-    // 全程无溢出：会话环预算从未触顶 ⇒ xrunsIn 恒 0；渲染值域恰为 {0, 0.25, 0.5, 0.75}
+    // xrunsIn 同时统计会话背压与 capture→DSP 输入环溢出，本用例两者都不得发生。
     assert_eq!(
         s.engine.sessions().xruns_in_total(),
         0,
-        "受控速率下不应发生丢弃"
+        "有界预装输入不应发生丢弃"
     );
     let received = s.factory.render_received.lock().unwrap();
+    let mut timeline = received.iter().copied().filter(|&sample| sample != 0.0);
     assert!(
-        received
-            .iter()
-            .all(|&x| x == 0.0 || x == 0.25 || x == 0.5 || x == 0.75),
-        "渲染值域超出 {{0, 0.25, 0.5, 0.75}}，混合被污染"
+        timeline.by_ref().take(stage_samples).all(|x| x == 0.25),
+        "A 独占区被污染"
+    );
+    assert!(
+        timeline.by_ref().take(stage_samples).all(|x| x == 0.75),
+        "A+B 求和区不正确"
+    );
+    assert!(
+        timeline.by_ref().take(stage_samples).all(|x| x == 0.5),
+        "B 独占区被污染"
+    );
+    assert_eq!(
+        timeline.next(),
+        None,
+        "会话时间线结束后不得出现额外非零样本"
     );
     drop(received);
 

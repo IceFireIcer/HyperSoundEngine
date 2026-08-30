@@ -171,8 +171,8 @@ L0=+0.5、R0=−0.25、L1=+1.0、R1=0.0、L2=−1.0、R2=+0.125。
 
 ```text
 会话 A 环出队块 ─┐
-会话 B 环出队块 ─┼─ 逐样本求和 ─▶ [拆包 planar] ─▶ 试点子链 biquad→reverb-simple→limiter ─▶ 渲染
-回环捕获块(若有) ─┘   (f32 加法)
+会话 B 环出队块 ─┼─ 逐样本求和 ─▶ [拆包 planar] ─▶ EngineChainStage 第 1–21 级 ─▶ 渲染
+捕获源块(若有) ──┘   (f32 加法)
 ```
 
 1. 所有活跃输入源先求和、再一次性过链；不做逐会话独立 DSP（ADR-0002 决策 3）；
@@ -274,5 +274,5 @@ L0=+0.5、R0=−0.25、L1=+1.0、R1=0.0、L2=−1.0、R2=+0.125。
 - 控制面契约（同端口复用的另一半）：[`control-plane.md`](control-plane.md)
 - 总纲契约：[`specs/README.md`](../README.md)；术语基线：仓库根 `CONTEXT.md`
 - 决策记录：[ADR-0002 双音频入口](../../docs/adr/0002-dual-audio-ingress.md)、[ADR-0001 独立进程](../../docs/adr/0001-engine-as-independent-process.md)
-- 试点子链模块规格：[biquad](../dsp/biquad.md) ｜ [reverb-simple](../dsp/reverb-simple.md) ｜ [limiter](../dsp/limiter.md)
+- 完整链规格：[`engine-chain`](../engine/chain.md)；模块规格索引见 [`specs/README.md`](../README.md)
 - 实现落点（Phase 3）：`HyperSoundEngineRust/crates/hse-service`（会话表、分流器、混合器）

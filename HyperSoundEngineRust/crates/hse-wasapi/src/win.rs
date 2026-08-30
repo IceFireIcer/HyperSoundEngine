@@ -1,15 +1,15 @@
 //! win —— WASAPI 真实实现（Phase 2「Windows 服务进程 v1——回环拦截端到端」）。
 //!
-//! 基于 [`wasapi`] crate（CamillaDSP 作者维护，等号锁定 0.24.0）封装两条数据通路：
+//! 基于 [`wasapi`] crate（CamillaDSP 作者维护，等号锁定 0.24.0）封装三条数据通路：
 //!
 //! - [`RenderStream`]：共享模式事件驱动渲染。`push` 以交错立体声 f32 推帧，
 //!   缓冲空间不足时在小步事件等待中节流，直至全部写入完成（阻塞语义由调用
 //!   线程承担）；欠供（缓冲被完全耗尽）计入 xruns。
 //! - [`LoopbackStream`]：在渲染端点上建立 loopback 捕获流，拦截系统混音输出。
 //!   wasapi crate 的语义：渲染设备的 AudioClient 按 `Direction::Capture` 初始化
-//!   即自动附加 `AUDCLNT_STREAMFLAGS_LOOPBACK`。虚拟缆 CABLE Output 是普通捕获
-//!   端点——对它传 `device_id` 时走同一条实现的捕获路径直捕（初始化方向同为
-//!   Capture，仅设备来源不同），行为一致。
+//!   即自动附加 `AUDCLNT_STREAMFLAGS_LOOPBACK`。
+//! - [`CaptureStream`]：在捕获端点上建立普通共享模式捕获流；`device_id=None` 选择
+//!   系统默认捕获端点。它与 loopback 共用相同的读取实现，仅端点类别不同。
 //!
 //! 格式策略：优先显式协商立体声 f32（`IsFormatSupported` 共享模式查询；引擎给出
 //! 近似格式且仍为立体声 f32 时采纳之），不可行时以 `AUTOCONVERTPCM` 引擎自动
@@ -101,7 +101,30 @@ struct OpenedEndpoint {
     blockalign: usize,
 }
 
-fn open_endpoint(opts: &OpenOptions, loopback: bool) -> Result<OpenedEndpoint, BackendError> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EndpointMode {
+    Render,
+    Loopback,
+    Capture,
+}
+
+impl EndpointMode {
+    fn device_direction(self) -> Direction {
+        match self {
+            Self::Render | Self::Loopback => Direction::Render,
+            Self::Capture => Direction::Capture,
+        }
+    }
+
+    fn stream_direction(self) -> Direction {
+        match self {
+            Self::Render => Direction::Render,
+            Self::Loopback | Self::Capture => Direction::Capture,
+        }
+    }
+}
+
+fn open_endpoint(opts: &OpenOptions, mode: EndpointMode) -> Result<OpenedEndpoint, BackendError> {
     ensure_com()?;
     if opts.sample_rate == 0 {
         return Err(BackendError::Format("采样率不能为 0".into()));
@@ -109,14 +132,24 @@ fn open_endpoint(opts: &OpenOptions, loopback: bool) -> Result<OpenedEndpoint, B
 
     let enumerator = DeviceEnumerator::new()
         .map_err(|e| BackendError::Stream(format!("创建设备枚举器失败：{e}")))?;
-    // 设备来源：显式 device_id（渲染或捕获端点均可），缺省取默认渲染端点。
+    let device_direction = mode.device_direction();
     let device = match &opts.device_id {
-        Some(id) => enumerator
-            .get_device(id)
-            .map_err(|_| BackendError::DeviceNotFound(id.clone()))?,
-        None => enumerator.get_default_device(&Direction::Render).map_err(|e| {
-            BackendError::DeviceNotFound(format!("默认渲染端点不可用：{e}"))
-        })?,
+        Some(id) => {
+            let device = enumerator
+                .get_device(id)
+                .map_err(|_| BackendError::DeviceNotFound(id.clone()))?;
+            if device.get_direction() != device_direction {
+                return Err(BackendError::DeviceNotFound(format!(
+                    "设备类别不匹配：{id} 不是 {device_direction} 端点"
+                )));
+            }
+            device
+        }
+        None => enumerator
+            .get_default_device(&device_direction)
+            .map_err(|e| {
+                BackendError::DeviceNotFound(format!("默认 {device_direction} 端点不可用：{e}"))
+            })?,
     };
     let mut audio_client = to_backend(device.get_iaudioclient(), "获取 AudioClient 失败")?;
 
@@ -125,22 +158,26 @@ fn open_endpoint(opts: &OpenOptions, loopback: bool) -> Result<OpenedEndpoint, B
 
     // 缓冲时长：请求块长换算为 100ns 周期作为下限，且不低于设备默认周期的两倍，
     // 给 push 的阻塞等待留出节流余量。
-    let (default_period, _) =
-        to_backend(audio_client.get_device_period(), "获取设备周期失败")?;
+    let (default_period, _) = to_backend(audio_client.get_device_period(), "获取设备周期失败")?;
     let wanted_hns = calculate_period_100ns(
         opts.block_size_frames.max(1) as i64,
         i64::from(wave.get_samplespersec()),
     );
     let buffer_duration_hns = wanted_hns.max(default_period * 2);
 
-    // 关键分支：渲染设备的 AudioClient 按 Capture 方向初始化 = LOOPBACK 捕获；
-    // 普通捕获端点（如虚拟缆 CABLE Output）同样走 Capture 方向，由 wasapi crate
-    // 依据设备自身方向自动区分是否附加 LOOPBACK 标志。
-    let init_direction = if loopback { Direction::Capture } else { Direction::Render };
+    // 渲染设备按 Capture 初始化时，wasapi crate 自动附加 LOOPBACK 标志；捕获设备
+    // 按 Capture 初始化则是普通直捕。
+    let stream_direction = mode.stream_direction();
     let init_once =
         |ac: &mut AudioClient, fmt: &WaveFormat, convert: bool| -> Result<(), BackendError> {
-            let mode = StreamMode::EventsShared { autoconvert: convert, buffer_duration_hns };
-            to_backend(ac.initialize_client(fmt, &init_direction, &mode), "初始化音频流失败")
+            let mode = StreamMode::EventsShared {
+                autoconvert: convert,
+                buffer_duration_hns,
+            };
+            to_backend(
+                ac.initialize_client(fmt, &stream_direction, &mode),
+                "初始化音频流失败",
+            )
         };
     if init_once(&mut audio_client, &wave, autoconvert).is_err() && !autoconvert {
         // 显式协商结果被引擎拒绝：以目标格式 + 自动转换兜底重试一次。
@@ -157,8 +194,7 @@ fn open_endpoint(opts: &OpenOptions, loopback: bool) -> Result<OpenedEndpoint, B
         )));
     }
 
-    let event_handle =
-        to_backend(audio_client.set_get_eventhandle(), "设置流事件句柄失败")?;
+    let event_handle = to_backend(audio_client.set_get_eventhandle(), "设置流事件句柄失败")?;
     let buffer_frames = to_backend(audio_client.get_buffer_size(), "获取缓冲帧数失败")?;
 
     Ok(OpenedEndpoint {
@@ -195,7 +231,7 @@ pub struct RenderStream {
 
 impl RenderStream {
     pub fn open(opts: &OpenOptions) -> Result<Self, BackendError> {
-        let opened = open_endpoint(opts, false)?;
+        let opened = open_endpoint(opts, EndpointMode::Render)?;
         let render_client = to_backend(
             opened.audio_client.get_audiorenderclient(),
             "获取渲染客户端失败",
@@ -226,7 +262,8 @@ impl RenderStream {
             let bytes = space * self.blockalign;
             self.scratch[..bytes].fill(0);
             to_backend(
-                self.render_client.write_to_device(space, &self.scratch[..bytes], None),
+                self.render_client
+                    .write_to_device(space, &self.scratch[..bytes], None),
                 "预填静音失败",
             )?;
         }
@@ -268,15 +305,15 @@ impl RenderStream {
                 let bytes = writable * self.blockalign;
                 {
                     let dst = &mut self.scratch[..bytes];
-                    for (frame_dst, sample) in dst
-                        .chunks_exact_mut(4)
-                        .zip(&interleaved_in[src_lo..src_hi])
+                    for (frame_dst, sample) in
+                        dst.chunks_exact_mut(4).zip(&interleaved_in[src_lo..src_hi])
                     {
                         frame_dst.copy_from_slice(&sample.to_le_bytes());
                     }
                 }
                 to_backend(
-                    self.render_client.write_to_device(writable, &self.scratch[..bytes], None),
+                    self.render_client
+                        .write_to_device(writable, &self.scratch[..bytes], None),
                     "写入设备失败",
                 )?;
                 offset_frames += writable;
@@ -327,11 +364,10 @@ impl Drop for RenderStream {
 }
 
 // ---------------------------------------------------------------------------
-// 回环拦截流（loopback / 普通捕获端点直捕）
+// 捕获流共享实现
 // ---------------------------------------------------------------------------
 
-/// 渲染端点上的 loopback 捕获流；传入普通捕获端点 id 时即为直捕路径。
-pub struct LoopbackStream {
+struct CaptureStreamImpl {
     audio_client: AudioClient,
     capture_client: AudioCaptureClient,
     format: StreamFormat,
@@ -345,9 +381,9 @@ pub struct LoopbackStream {
     xruns: u64,
 }
 
-impl LoopbackStream {
-    pub fn open(opts: &OpenOptions) -> Result<Self, BackendError> {
-        let opened = open_endpoint(opts, true)?;
+impl CaptureStreamImpl {
+    fn open(opts: &OpenOptions, mode: EndpointMode) -> Result<Self, BackendError> {
+        let opened = open_endpoint(opts, mode)?;
         let capture_client = to_backend(
             opened.audio_client.get_audiocaptureclient(),
             "获取捕获客户端失败",
@@ -365,11 +401,11 @@ impl LoopbackStream {
     }
 
     /// 启动捕获流；返回协商后的格式。
-    pub fn start(&mut self) -> Result<StreamFormat, BackendError> {
+    fn start(&mut self) -> Result<StreamFormat, BackendError> {
         if self.started {
-            return Err(BackendError::Stream("回环流已启动，不可重复 start".into()));
+            return Err(BackendError::Stream("捕获流已启动，不可重复 start".into()));
         }
-        to_backend(self.audio_client.start_stream(), "启动回环流失败")?;
+        to_backend(self.audio_client.start_stream(), "启动捕获流失败")?;
         self.started = true;
         Ok(self.format)
     }
@@ -379,9 +415,9 @@ impl LoopbackStream {
     ///
     /// xrun 来源有二：读到数据不连续标志（上游曾断流），或单个包超出剩余输出
     /// 容量被迫截断丢弃（下游消费过慢）。
-    pub fn pull(&mut self, interleaved_out: &mut [f32]) -> Result<usize, BackendError> {
+    fn pull(&mut self, interleaved_out: &mut [f32]) -> Result<usize, BackendError> {
         if !self.started {
-            return Err(BackendError::Stream("回环流未启动".into()));
+            return Err(BackendError::Stream("捕获流未启动".into()));
         }
         if interleaved_out.is_empty() {
             return Ok(0);
@@ -395,7 +431,8 @@ impl LoopbackStream {
         let mut filled_frames = 0usize;
         while filled_frames < capacity_frames {
             let packet_frames =
-                match to_backend(self.capture_client.get_next_packet_size(), "查询包大小失败")? {
+                match to_backend(self.capture_client.get_next_packet_size(), "查询包大小失败")?
+                {
                     None | Some(0) => break,
                     Some(n) => n as usize,
                 };
@@ -407,7 +444,8 @@ impl LoopbackStream {
             }
             let need_bytes = packet_frames * self.blockalign;
             let (read_frames, info) = to_backend(
-                self.capture_client.read_from_device(&mut self.byte_scratch[..need_bytes]),
+                self.capture_client
+                    .read_from_device(&mut self.byte_scratch[..need_bytes]),
                 "读取捕获数据失败",
             )?;
             if info.flags.data_discontinuity {
@@ -435,23 +473,23 @@ impl LoopbackStream {
     }
 
     /// 停止并复位流；幂等，重复调用无害。
-    pub fn stop(&mut self) -> Result<(), BackendError> {
+    fn stop(&mut self) -> Result<(), BackendError> {
         if !self.started {
             return Ok(());
         }
         self.started = false;
-        to_backend(self.audio_client.stop_stream(), "停止回环流失败")?;
-        to_backend(self.audio_client.reset_stream(), "复位回环流失败")?;
+        to_backend(self.audio_client.stop_stream(), "停止捕获流失败")?;
+        to_backend(self.audio_client.reset_stream(), "复位捕获流失败")?;
         Ok(())
     }
 
     /// xrun（断流 + 过载丢包）计数。
-    pub fn xruns(&self) -> u64 {
+    fn xruns(&self) -> u64 {
         self.xruns
     }
 }
 
-impl Drop for LoopbackStream {
+impl Drop for CaptureStreamImpl {
     fn drop(&mut self) {
         if self.started {
             let _ = self.audio_client.stop_stream();
@@ -459,6 +497,46 @@ impl Drop for LoopbackStream {
         }
     }
 }
+
+macro_rules! capture_stream {
+    ($name:ident, $mode:expr, $doc:literal) => {
+        #[doc = $doc]
+        pub struct $name(CaptureStreamImpl);
+
+        impl $name {
+            pub fn open(opts: &OpenOptions) -> Result<Self, BackendError> {
+                CaptureStreamImpl::open(opts, $mode).map(Self)
+            }
+
+            pub fn start(&mut self) -> Result<StreamFormat, BackendError> {
+                self.0.start()
+            }
+
+            pub fn pull(&mut self, interleaved_out: &mut [f32]) -> Result<usize, BackendError> {
+                self.0.pull(interleaved_out)
+            }
+
+            pub fn stop(&mut self) -> Result<(), BackendError> {
+                self.0.stop()
+            }
+
+            pub fn xruns(&self) -> u64 {
+                self.0.xruns()
+            }
+        }
+    };
+}
+
+capture_stream!(
+    LoopbackStream,
+    EndpointMode::Loopback,
+    "系统渲染端点上的共享模式 loopback 捕获流。"
+);
+capture_stream!(
+    CaptureStream,
+    EndpointMode::Capture,
+    "系统捕获端点上的共享模式直接捕获流。"
+);
 
 // ---------------------------------------------------------------------------
 // 设备枚举
@@ -480,11 +558,21 @@ pub fn list_devices() -> Result<Vec<DeviceInfo>, BackendError> {
 
     let mut devices = Vec::new();
     for (direction, kind, default_id) in [
-        (Direction::Render, DeviceKind::Render, default_render_id.as_deref()),
-        (Direction::Capture, DeviceKind::Capture, default_capture_id.as_deref()),
+        (
+            Direction::Render,
+            DeviceKind::Render,
+            default_render_id.as_deref(),
+        ),
+        (
+            Direction::Capture,
+            DeviceKind::Capture,
+            default_capture_id.as_deref(),
+        ),
     ] {
-        let collection =
-            to_backend(enumerator.get_device_collection(&direction), "获取设备集合失败")?;
+        let collection = to_backend(
+            enumerator.get_device_collection(&direction),
+            "获取设备集合失败",
+        )?;
         let count = to_backend(collection.get_nbr_devices(), "读取设备数量失败")?;
         for index in 0..count {
             let dev = to_backend(collection.get_device_at_index(index), "读取设备失败")?;
@@ -522,14 +610,29 @@ mod tests {
     }
 
     #[test]
+    fn endpoint_modes_select_expected_device_and_stream_directions() {
+        assert_eq!(EndpointMode::Render.device_direction(), Direction::Render);
+        assert_eq!(EndpointMode::Render.stream_direction(), Direction::Render);
+        assert_eq!(EndpointMode::Loopback.device_direction(), Direction::Render);
+        assert_eq!(
+            EndpointMode::Loopback.stream_direction(),
+            Direction::Capture
+        );
+        assert_eq!(EndpointMode::Capture.device_direction(), Direction::Capture);
+        assert_eq!(EndpointMode::Capture.stream_direction(), Direction::Capture);
+    }
+
+    #[test]
     fn list_devices_finds_render_and_single_default() {
         let devices = list_devices().expect("list_devices 不应失败");
         assert!(
             !devices.is_empty(),
             "本机未枚举到任何音频端点；请在有声卡的环境运行"
         );
-        let renders: Vec<&DeviceInfo> =
-            devices.iter().filter(|d| d.kind == DeviceKind::Render).collect();
+        let renders: Vec<&DeviceInfo> = devices
+            .iter()
+            .filter(|d| d.kind == DeviceKind::Render)
+            .collect();
         assert!(!renders.is_empty(), "至少应发现一个渲染端点");
         let defaults = renders.iter().filter(|d| d.is_default).count();
         assert_eq!(defaults, 1, "渲染类别应有且仅有一个默认端点");

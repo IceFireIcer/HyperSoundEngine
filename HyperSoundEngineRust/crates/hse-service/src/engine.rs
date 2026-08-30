@@ -23,7 +23,7 @@ use crate::dsp_chain::ServiceEngineChain;
 use crate::params::{parse_pilot_params, PilotParams};
 use crate::pipeline;
 use crate::sessions::{SessionIdExhausted, SessionTable};
-use crate::state::{Phase, ServiceConfig, ServiceEvent, StatsAtomic};
+use crate::state::{CaptureConfig, Phase, ServiceConfig, ServiceEvent, StatsAtomic};
 
 /// 控制面错误（JSON-RPC 错误码 + 中文消息）。
 #[derive(Debug)]
@@ -250,56 +250,61 @@ impl EngineHandle {
     /// configure：仅 phase=idle 可调；成功后保存配置快照并回显 applied。
     /// 校验顺序对齐 control-plane 规格 GWT-CP-06/07/08：相位(-32001) → 结构(-32602) → 后端枚举(-32000)。
     pub fn configure(&self, params_obj: &Map<String, Value>) -> Result<Value, RpcFault> {
-        // 相位守卫最先：非 idle 时无论内容是否合法一律 -32001，且状态（含既有 config）不变
-        {
-            let g = self.inner.lock().unwrap();
-            if g.phase != Phase::Idle {
-                return Err(RpcFault::state_forbidden(format!(
-                    "phase={} 时禁止 configure（仅 idle 可配）",
-                    g.phase.as_str()
-                )));
-            }
-        }
-        let mode = match params_obj.get("mode").and_then(|v| v.as_str()) {
-            Some(m) => m.to_string(),
-            None => return Err(RpcFault::invalid_params("configure 缺少 mode 字符串")),
-        };
-        if mode != "loopback" {
-            return Err(RpcFault::invalid_params(format!(
-                "暂不支持 mode=\"{}\"（当前仅 loopback）",
-                mode
+        // 持锁覆盖校验与提交，保证并发 start 不会在设备枚举期间使用旧配置启动。
+        let mut g = self.inner.lock().unwrap();
+        if g.phase != Phase::Idle {
+            return Err(RpcFault::state_forbidden(format!(
+                "phase={} 时禁止 configure（仅 idle 可配）",
+                g.phase.as_str()
             )));
         }
-        let render_device_id = match params_obj.get("renderDeviceId") {
-            None | Some(Value::Null) => None,
-            Some(Value::String(s)) if !s.is_empty() => {
-                // GWT-CP-08：非 null 引用必须命中当前渲染端点枚举（后端参与校验，失败 -32000 且 config 不变）
-                let devs = self
-                    .factory
-                    .list_devices()
-                    .map_err(|e| RpcFault::backend_failed(e.to_string()))?;
-                if !devs
-                    .iter()
-                    .any(|d| d.kind == DeviceKind::Render && d.id == *s)
-                {
-                    return Err(RpcFault::backend_failed(format!(
-                        "renderDeviceId 不在当前渲染端点枚举中：{}",
-                        s
-                    )));
-                }
-                Some(s.clone())
+        let mode = match params_obj.get("mode").and_then(|v| v.as_str()) {
+            Some(m @ ("loopback" | "capture")) => m,
+            Some(m) => {
+                return Err(RpcFault::invalid_params(format!(
+                    "暂不支持 mode=\"{}\"（当前支持 loopback/capture）",
+                    m
+                )))
             }
-            Some(Value::String(_)) => {
-                return Err(RpcFault::invalid_params(
-                    "renderDeviceId 不能为空字符串（用 null 表示默认设备）",
-                ));
-            }
-            Some(_) => {
-                return Err(RpcFault::invalid_params(
-                    "renderDeviceId 必须为字符串或 null",
-                ))
+            None => return Err(RpcFault::invalid_params("configure 缺少 mode 字符串")),
+        };
+        let parse_device = |key: &str, required: bool| -> Result<Option<String>, RpcFault> {
+            match params_obj.get(key) {
+                None if required => Err(RpcFault::invalid_params(format!("configure 缺少 {key}"))),
+                None | Some(Value::Null) => Ok(None),
+                Some(Value::String(s)) if !s.is_empty() => Ok(Some(s.clone())),
+                Some(Value::String(_)) => Err(RpcFault::invalid_params(format!(
+                    "{key} 不能为空字符串（用 null 表示默认设备）"
+                ))),
+                Some(_) => Err(RpcFault::invalid_params(format!(
+                    "{key} 必须为字符串或 null"
+                ))),
             }
         };
+        let capture = match mode {
+            "loopback" => {
+                if params_obj.contains_key("captureDeviceId") {
+                    return Err(RpcFault::invalid_params(
+                        "loopback 模式不得携带 captureDeviceId",
+                    ));
+                }
+                let render_device_id = parse_device("renderDeviceId", true)?;
+                CaptureConfig::Loopback { render_device_id }
+            }
+            "capture" => {
+                if params_obj.contains_key("renderDeviceId") {
+                    return Err(RpcFault::invalid_params(
+                        "capture 模式不得携带 renderDeviceId",
+                    ));
+                }
+                let capture_device_id = parse_device("captureDeviceId", true)?;
+                CaptureConfig::Capture { capture_device_id }
+            }
+            _ => unreachable!(),
+        };
+        let output_device_id_explicit = params_obj.contains_key("outputDeviceId");
+        let output_device_id = parse_device("outputDeviceId", false)?;
+
         let sample_rate = match params_obj.get("sampleRate").and_then(|v| v.as_u64()) {
             Some(n) if n >= MIN_SAMPLE_RATE as u64 && n <= MAX_SAMPLE_RATE as u64 => n as u32,
             _ => {
@@ -319,11 +324,41 @@ impl EngineHandle {
             }
         };
 
-        // 相位已在开头守卫；控制面串行处理（规格 §九），期间相位不可能变化
-        let mut g = self.inner.lock().unwrap();
+        let explicit_device = match &capture {
+            CaptureConfig::Loopback { render_device_id } => render_device_id.is_some(),
+            CaptureConfig::Capture { capture_device_id } => capture_device_id.is_some(),
+        } || output_device_id.is_some();
+        if explicit_device {
+            let devices = self
+                .factory
+                .list_devices()
+                .map_err(|e| RpcFault::backend_failed(e.to_string()))?;
+            let validate_device = |id: &Option<String>, kind: DeviceKind, key: &str| {
+                if let Some(id) = id {
+                    if !devices.iter().any(|d| d.kind == kind && d.id == *id) {
+                        return Err(RpcFault::backend_failed(format!(
+                            "{key} 不在对应设备类别的当前枚举中：{id}"
+                        )));
+                    }
+                }
+                Ok(())
+            };
+            match &capture {
+                CaptureConfig::Loopback { render_device_id } => {
+                    validate_device(render_device_id, DeviceKind::Render, "renderDeviceId")?;
+                }
+                CaptureConfig::Capture { capture_device_id } => {
+                    validate_device(capture_device_id, DeviceKind::Capture, "captureDeviceId")?;
+                }
+            }
+            validate_device(&output_device_id, DeviceKind::Render, "outputDeviceId")?;
+        }
+
+        // 控制面请求在同一互斥区内完成相位守卫、设备校验与提交。
         let cfg = ServiceConfig {
-            mode,
-            render_device_id,
+            capture,
+            output_device_id,
+            output_device_id_explicit,
             sample_rate,
             block_size_frames,
         };
@@ -430,8 +465,17 @@ impl EngineHandle {
         (String, Vec<JoinHandle<()>>),
     > {
         let block_frames = cfg.block_size_frames as usize;
-        let opts = OpenOptions {
-            device_id: cfg.render_device_id.clone(),
+        let capture_device_id = match &cfg.capture {
+            CaptureConfig::Loopback { render_device_id } => render_device_id.clone(),
+            CaptureConfig::Capture { capture_device_id } => capture_device_id.clone(),
+        };
+        let capture_opts = OpenOptions {
+            device_id: capture_device_id,
+            sample_rate: cfg.sample_rate,
+            block_size_frames: cfg.block_size_frames,
+        };
+        let render_opts = OpenOptions {
+            device_id: cfg.output_device_id.clone(),
             sample_rate: cfg.sample_rate,
             block_size_frames: cfg.block_size_frames,
         };
@@ -445,8 +489,11 @@ impl EngineHandle {
             stats: Arc::clone(stats),
             events: self.events.clone(),
         };
-        let capture_opener = self.factory.loopback_opener(&opts);
-        let render_opener = self.factory.render_opener(&opts);
+        let capture_opener = match &cfg.capture {
+            CaptureConfig::Loopback { .. } => self.factory.loopback_opener(&capture_opts),
+            CaptureConfig::Capture { .. } => self.factory.capture_opener(&capture_opts),
+        };
+        let render_opener = self.factory.render_opener(&render_opts);
         let mut handles = pipeline::spawn_workers(
             capture_opener,
             render_opener,
@@ -479,8 +526,17 @@ impl EngineHandle {
                 std::mem::take(&mut handles.handles),
             ));
         }
+        if cap_fmt.sample_rate != cfg.sample_rate || ren_fmt.sample_rate != cfg.sample_rate {
+            return Err(fail(
+                format!(
+                    "捕获与渲染采样率必须等于配置值 {}Hz（捕获 {}Hz / 渲染 {}Hz）",
+                    cfg.sample_rate, cap_fmt.sample_rate, ren_fmt.sample_rate
+                ),
+                std::mem::take(&mut handles.handles),
+            ));
+        }
 
-        // 以渲染端协商采样率为 DSP 链基准，构建初始子链并经命令环送达 DSP 线程。
+        // 以两端一致的协商采样率为 DSP 链基准，构建初始完整链并经命令环送达 DSP 线程。
         let negotiated = ren_fmt.sample_rate as f64;
         let canonical = match pilot.to_canonical_json(wire_source, negotiated) {
             Ok(value) => value,
