@@ -128,7 +128,7 @@ for (let off = 0; off < channels[0].length; off += block) {
   engine.process([inL, inR], [outL, outR])
 }
 
-const wavBytes = encodeWav(out, sampleRate, { bitDepth: 16 })
+const wavBytes = encodeWav(out, sampleRate, { bitDepth: 16, format: 'standard' })
 await writeFile('output.wav', Buffer.from(wavBytes))
 
 console.log(engine.getStats())  // { lufsIntegrated, peakDb, ... }
@@ -237,10 +237,10 @@ bus.downmixToMono() / downmixToStereo() / writeStereo(l, r)
 ```ts
 import { encodeWav, decodeWav } from 'hypersoundengine'
 
-// 编码:非交错 Float32Array[] → ArrayBuffer
-const buf = encodeWav([left, right], 48000, { bitDepth: 16 })  // 或 32(float)
+// 编码:非交错 Float32Array[] → 标准 RIFF/WAVE ArrayBuffer
+const buf = encodeWav([left, right], 48000, { bitDepth: 16, format: 'standard' })  // 位深也可用 32(float)
 
-// 解码:ArrayBuffer/Uint8Array → 非交错 Float32Array[]
+// 解码:自动识别 standard 与 1.0.0 历史 legacy 格式
 const { sampleRate, channels, bitDepth } = decodeWav(buf)
 
 // 解码结果可直接构造 HseAudioBus
@@ -248,9 +248,10 @@ import { HseAudioBus } from 'hypersoundengine'
 const bus = new HseAudioBus(channels)
 ```
 
-- 支持 **16-bit PCM**(format=1)与 **32-bit Float**(format=3)
+- 支持 **16-bit PCM**(formatTag=1)与 **32-bit Float**(formatTag=3)
+- 编码缺省 `legacy` 仅用于旧字节契约兼容；文件交换与播放器导出应显式选择 `standard`
+- 解码自动识别两种模式；standard 文件执行严格 RIFF/fmt/data 一致性校验
 - 多通道直接对应 HseAudioBus 非交错布局
-- **防注入**:坏魔数 / 缺 chunk / 块不对齐 / 0 声道 / 不支持位深 → 一律抛 `Error`
 
 ---
 
@@ -479,7 +480,7 @@ host.dispose(): void
 host.engine: AudioEngine
 
 // WAV
-encodeWav(channels, sampleRate, opts?): ArrayBuffer
+encodeWav(channels, sampleRate, { bitDepth?, format?: 'legacy' | 'standard' }): ArrayBuffer
 decodeWav(buffer): { sampleRate, channels, bitDepth }
 
 // 多通道

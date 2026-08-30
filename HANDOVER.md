@@ -5,18 +5,18 @@
 
 ## 一、当前版本与阶段
 
-当前收尾版本为 **1.0.0**，npm 与 Cargo workspace 版本同步。
+当前收尾版本为 **1.1.0**，npm 与 Cargo workspace 版本同步。
 
 | 阶段 | 状态 | 当前结论 |
 |---|---|---|
-| Phase 0 规格基建 | 完成 | 20 份共享核心规格（17 DSP + engine-chain + params + scenes），72 组音频冻结向量 / 144 文件，另有 3 个结构化夹具 |
+| Phase 0 规格基建 | 完成 | 21 份共享规格（17 DSP + engine-chain + params + scenes + WAV），72 组音频冻结向量 / 144 文件，另有 3 个参数/场景结构化夹具与 1 个 standard WAV 共享夹具 |
 | Phase 1 Rust 核心骨架 | 完成 | `hse-core` Stage 抽象、对拍门禁与 criterion 基准 |
 | Phase 2 服务进程 | 完成 | `hse-wasapi` + `hse-service` + WebSocket JSON-RPC + 推流协议，真机验收 14/14 |
 | Phase 3 双支线原生化 | 完成 | 17 个 DSP 模块及 Rust 1–21 级 `EngineChainStage` 全链对拍，72/72 PASS |
 | Phase 4 性能冲刺 | 指标完成 | 离线、默认链、最重场景指标均达标；仅余 8h 真机压测 |
 | Phase 5 可选扩展 | 部分完成 | wasm32 单 Biquad 最小试点完成；Rust `hrtf-core` 未启动 |
 
-1.0.0 已完成破坏性范围收敛：移除 MIDI 公共 API/UI/Rust 模块，明确不支持 ASIO，并将 `hse-service` 从旧子链迁移到 Rust 1–21 级完整 `EngineChainStage`。
+1.1.0 在 1.0.0 全链收口基础上新增 WAV 双模式兼容：默认 legacy 字节保持不变，显式 standard 生成标准小端 RIFF，解码自动识别两者，WaveForge 导出统一走 standard。
 
 ## 二、双支线现状
 
@@ -34,13 +34,13 @@
 - `hse-service`：WASAPI 捕获/渲染、Rust 1–21 级完整 `EngineChainStage`、控制面、二进制 PCM 推流与背压。
 - `hse-wasapi`：共享模式渲染与 loopback 捕获；真机出声测试需 `HSE_ALLOW_REAL_AUDIO=1`。
 - `hse-wasm`：仅暴露单个 `HseBiquad`，通过预分配 planar 缓冲接入独立 AudioWorklet 示例；不替换 TS worklet，也不代表完整 Rust 全链 wasm 化。
-- 六个 workspace 包 `hse-benches` / `hse-core` / `hse-parity` / `hse-service` / `hse-wasapi` / `hse-wasm` 均为 1.0.0。
+- 六个 workspace 包 `hse-benches` / `hse-core` / `hse-parity` / `hse-service` / `hse-wasapi` / `hse-wasm` 均为 1.1.0。
 
 ### 共享规格
 
 - 17 份 DSP 规格：biquad、limiter、reverb-simple、compressor、bass-enhancer、mid-side、eq-chain、fdn-reverb、deesser、loudness-comp、dynamic-eq、mod-effects、fft、convolver、modulation-matrix、hse-stretch、lufs-meter。
-- 1 份引擎链规格：`specs/engine/chain.md`。
-- 72 组冻结向量，每组 `.json` + `.f32`，共 144 文件；既有期望值不得修改。
+- 1 份引擎链规格、2 份引擎结构规格与 1 份 WAV I/O 规格。
+- 72 组冻结音频向量，每组 `.json` + `.f32`，共 144 文件；另有 3 个引擎结构夹具与 1 个 standard WAV 夹具，既有期望值不得修改。
 
 ## 三、性能与剩余项
 

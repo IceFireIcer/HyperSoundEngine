@@ -101,7 +101,7 @@
 - **Sidechain UI 开关**：Compressor/Deesser 弹窗新增外部 Sidechain 开关。
 
 已落地 **WAV 文件 I/O** ✅：
-- **WAV**：`src/io/wav.ts` `encodeWav/decodeWav`（16-bit PCM / 32-bit Float，多通道，严格 RIFF 校验）。
+- **WAV**：`src/io/wav.ts` `encodeWav/decodeWav`（16-bit PCM / 32-bit Float，多通道，legacy/standard 双模式；standard 严格 RIFF 校验）。
 
 已落地 **算法创新与优化** ✅：
 - **Convolver 非均匀分区卷积**：两级分区（512/4096），长 IR 每块耗时降约 77%，延迟语义不变（test/convolver.test.ts 新增非均匀用例）。

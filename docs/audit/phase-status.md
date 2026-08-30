@@ -7,16 +7,18 @@
 
 | 阶段 | 状态 | 证据与残留 |
 |---|---|---|
-| **Phase 0** 规格基建 | 完成 | 20 份核心规格（17 DSP + engine-chain + params + scenes）；72 组音频冻结向量 / 144 文件和 3 个结构化夹具；TS 导出器、Schema 与 Rust parity 门禁齐备 |
+| **Phase 0** 规格基建 | 完成 | 21 份共享规格（17 DSP + engine-chain + params + scenes + WAV）；72 组音频冻结向量 / 144 文件、3 个引擎结构夹具与 1 个 standard WAV 夹具；TS 与 Rust 门禁齐备 |
 | **Phase 1** Rust 核心骨架 | 完成 | `hse-core` Stage 抽象、`hse-parity` 与 criterion 基准 |
 | **Phase 2** 服务进程 | 完成 | `hse-wasapi` + `hse-service` + 控制面 + CLI + 推流；真机 GWT 14/14；8h 长跑归入 Phase 4 残留 |
 | **Phase 3** 双支线原生化 | **完成** | 17 个 DSP 模块双绿；WAV、ShareCodec Rust 解析、服务链完成；`EngineChainStage` 固化 1–21 级组装行为，`cargo run -q -p hse-parity` 为 **72/72 PASS** |
 | **Phase 4** 性能冲刺 | 指标完成 | 基准矩阵与 SIMD 评估已留档；全链离线 0.546% realtime、默认链 0.546%、最重场景 10.7%，均达标；**仅余 8h 真机压测** |
 | **Phase 5** 可选扩展 | 部分完成 | `hse-wasm` 单 Biquad + 独立 AudioWorklet 最小试点完成；Rust `hrtf-core` 未启动 |
 
-## 二、1.0.0 全链契约
+## 二、1.1.0 全链与 WAV 契约
 
 Rust `EngineChainStage` 对齐 TS HyperSoundEngine 第 1–21 级：响度归一化、Surround3D、M/S、Pre-EQ、Deesser、Compressor、NightMode、五种调制效果、混响、BassEnhancer、LoudnessComp、IEQ、analysis、DynamicEq、LUFS、调制主增益与 Limiter。
+
+WAV I/O 在不改变 1.0.0 legacy 字节契约的前提下新增 standard 小端 RIFF 编码与自动双模式解码；standard 共享夹具由 TS/Rust 共同消费，WaveForge 离线导出使用 standard。
 
 第 22 级空间音频不在本批实现范围。`specs/engine/chain.md` 与 5 组 engine-chain 向量都要求 `spatial.mode='off'`；Rust 参数构造对非 off 值直接报错。因此“Phase 3 全链完成”准确含义是 **1–21 级全链完成，空间级以 off 契约封口**，不代表 Rust HRTF 已实现。
 
@@ -24,12 +26,12 @@ Rust `EngineChainStage` 对齐 TS HyperSoundEngine 第 1–21 级：响度归一
 
 ## 三、验证口径
 
-| 门禁 | 1.0.0 口径 |
+| 门禁 | 1.1.0 口径 |
 |---|---|
-| npm 版本 | `package.json` 与 package lock 根包均为 1.0.0；锁文件无 Meyda 残留 |
-| TS 全量测试 | 50 文件 / 660 passed / 4 skipped |
+| npm 版本 | `package.json` 与 package lock 根包均为 1.1.0；锁文件无 Meyda 残留 |
+| TS 全量测试 | 50 文件 / 666 passed / 4 skipped |
 | 冻结向量 | 72 个 JSON + 72 个 f32 |
-| Rust workspace | 六个包，均解析为 1.0.0 |
+| Rust workspace | 六个包，均解析为 1.1.0 |
 | Rust 对拍 | `cargo run -q -p hse-parity`，**72/72 PASS** |
 | wasm 试点 | `hse-wasm` native 单测、`hse-core`/`hse-wasm` wasm32 release 构建 |
 

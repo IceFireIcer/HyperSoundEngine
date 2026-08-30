@@ -11,7 +11,7 @@
  */
 
 import { HyperSoundEngineHost } from '../../src/browser'
-import { createDefaultParams } from '../../src/index'
+import { createDefaultParams, encodeWav } from '../../src/index'
 import { HyperSoundEngine } from '../../src/engine/HyperSoundEngine'
 import type { AudioEngine } from '../../src/interfaces'
 import type { HyperSoundEngineParams } from '../../src/types'
@@ -314,41 +314,6 @@ export function setSystemVolume(volumePercent: number): void {
   wrappedBridge.setParams(next)
 }
 
-/** 16-bit PCM WAV 编码 */
-function encodeWav(channels: Float32Array[], sampleRate: number): Blob {
-  const numChannels = channels.length
-  const frames = channels[0].length
-  const bytesPerSample = 2
-  const dataBytes = frames * numChannels * bytesPerSample
-  const buffer = new ArrayBuffer(44 + dataBytes)
-  const view = new DataView(buffer)
-  const writeString = (offset: number, text: string) => {
-    for (let i = 0; i < text.length; i += 1) view.setUint8(offset + i, text.charCodeAt(i))
-  }
-  writeString(0, 'RIFF')
-  view.setUint32(4, 36 + dataBytes, true)
-  writeString(8, 'WAVE')
-  writeString(12, 'fmt ')
-  view.setUint32(16, 16, true)
-  view.setUint16(20, 1, true)            // PCM
-  view.setUint16(22, numChannels, true)
-  view.setUint32(24, sampleRate, true)
-  view.setUint32(28, sampleRate * numChannels * bytesPerSample, true)
-  view.setUint16(32, numChannels * bytesPerSample, true)
-  view.setUint16(34, 16, true)
-  writeString(36, 'data')
-  view.setUint32(40, dataBytes, true)
-  let offset = 44
-  for (let i = 0; i < frames; i += 1) {
-    for (let ch = 0; ch < numChannels; ch += 1) {
-      const s = Math.max(-1, Math.min(1, channels[ch][i]))
-      view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true)
-      offset += 2
-    }
-  }
-  return new Blob([buffer], { type: 'audio/wav' })
-}
-
 /**
  * 离线导出：解码源音频 → 独立 HyperSoundEngine 分块处理（与实时链同一内核，逐样本一致）
  * → 16-bit WAV 下载。尾部以 1s 静音冲刷卷积混响/限幅器 lookahead 余量。
@@ -427,7 +392,8 @@ export async function exportWav(sourceUrl: string, durationSeconds: number): Pro
     finalR = res.r
   }
 
-  const wavBlob = encodeWav([finalL, finalR], fs)
+  const wavBytes = encodeWav([finalL, finalR], fs, { bitDepth: 16, format: 'standard' })
+  const wavBlob = new Blob([wavBytes], { type: 'audio/wav' })
   const url = URL.createObjectURL(wavBlob)
   const a = document.createElement('a')
   a.href = url

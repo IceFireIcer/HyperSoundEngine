@@ -179,13 +179,18 @@ engine.registerStage(gainStage)
 ### WAV 文件 I/O（`io/wav.ts`）
 
 ```ts
-encodeWav(channels: Float32Array[], sampleRate: number, opts?: { bitDepth?: 16 | 32 }): ArrayBuffer
+encodeWav(
+  channels: Float32Array[],
+  sampleRate: number,
+  opts?: { bitDepth?: 16 | 32; format?: 'legacy' | 'standard' },
+): ArrayBuffer
 decodeWav(buffer: ArrayBuffer | Uint8Array): { sampleRate: number; channels: Float32Array[]; bitDepth: 16 | 32 }
 ```
 
-- 16-bit PCM（format=1）/ 32-bit Float（format=3），标准 RIFF/WAVE 头。
+- 16-bit PCM（formatTag=1）/ 32-bit Float（formatTag=3），支持多通道。
+- 编码默认 `format: 'legacy'`，保留 1.0.0 及更早版本的大端数值头字节契约；对外交换文件应显式使用 `format: 'standard'`，生成标准小端 RIFF/WAVE。
+- 解码自动识别 legacy 与 standard；standard 路径严格校验 RIFF/data 长度、采样率、byteRate 与 blockAlign。
 - 多通道直接对应 `HseAudioBus` 非交错布局，解码结果可零拷贝进入 `processBus`。
-- 畸形输入（坏魔数 / 缺 chunk / 块不对齐 / 0 声道 / 不支持位深）一律抛错（防注入）。
 
 ---
 

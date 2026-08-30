@@ -1,17 +1,15 @@
-//! wav —— 标准（+ 双支线共同约定的变体）RIFF/WAVE 文件编解码（Phase 3 批次三 · 第 2 项）。
+//! wav —— 标准（+ 双支线共同约定的 legacy 变体）RIFF/WAVE 文件编解码。
 //!
 //! 行为事实标准：仓库根 `src/io/wav.ts`（`encodeWav` / `decodeWav`）；规格：
-//! `specs/io/wav.md`。本模块为其逐字节移植：编码输出与 TS 对相同输入**逐字节一致**
-//! （golden 对拍冻结在 `GOLDENS_JSON`，由 node esbuild 打包 TS 源生成）；解码校验
+//! `specs/io/wav.md`。本模块为其逐字节移植：两种编码输出与 TS 对相同输入**逐字节一致**
+//! （legacy golden 对拍冻结在 `GOLDENS_JSON`，standard 对拍读取共享 fixture）；解码校验
 //! 与错误消息逐字对齐（含 node 对畸形输入抛出的原话）。
 //!
-//! # 与标准 RIFF 的差异（双支线共同契约，改前先读 specs/io/wav.md）
+//! # 容器格式
 //!
-//! TS 实现的全部头部数值字段（chunk size、formatTag、声道数、采样率、byteRate、
-//! blockAlign、bitsPerSample、data size）按**大端**写入/读取（`DataView` 的
-//! `littleEndian=false`），与 RIFF 标准的小端头字段不同；**样本数据**仍为小端
-//! （PCM16 有符号小端 / IEEE-754 float32 小端）。两侧实现一致即契约，解码端
-//! 只承诺识别**本模块编码端**产出的文件形态。
+//! [`WavContainerFormat::Legacy`] 保留早期实现的大端数值头字段；
+//! [`WavContainerFormat::Standard`] 使用 RIFF 标准要求的小端数值头字段。chunk ID
+//! 始终是 ASCII 原文，样本数据在两种模式下始终为小端。解码端自动识别两种格式。
 //!
 //! # 数值语义（与 TS 逐一对齐）
 //!
@@ -65,6 +63,21 @@ pub enum WavBitDepth {
     Float32,
 }
 
+/// WAV 容器头字段格式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WavContainerFormat {
+    /// HyperSoundEngine 1.0 及更早版本冻结的大端数值头格式。
+    Legacy,
+    /// 标准 RIFF/WAVE 小端数值头格式。
+    Standard,
+}
+
+impl Default for WavContainerFormat {
+    fn default() -> Self {
+        Self::Legacy
+    }
+}
+
 /// 编码选项（镜像 TS `WavEncodeOptions`）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WavEncodeOptions {
@@ -74,19 +87,48 @@ pub struct WavEncodeOptions {
 
 impl Default for WavEncodeOptions {
     fn default() -> Self {
-        Self { bit_depth: WavBitDepth::Pcm16 }
+        Self {
+            bit_depth: WavBitDepth::Pcm16,
+        }
     }
 }
 
 /// 解码结果（镜像 TS `WavDecodeResult`；声道为非交叠 f32 向量，可直接进引擎链）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct WavData {
-    /// 采样率 Hz（头部原样透传，解码端不做范围校验——与 TS 一致）。
+    /// 采样率 Hz；legacy 头部原样透传，standard 要求大于 0。
     pub sample_rate: u32,
     /// 非交叠声道样本（每声道 `frames` 个）。
     pub channels: Vec<Vec<f32>>,
     /// 位深（16 或 32）。
     pub bit_depth: u16,
+}
+
+fn validate_standard_layout(
+    channels: usize,
+    frames: usize,
+    sample_rate: u32,
+    bytes_per_sample: u64,
+) -> Result<(), String> {
+    if channels > u16::MAX as usize {
+        return Err("encodeWav: channel count exceeds WAV limit".to_string());
+    }
+    let block_align = (channels as u64)
+        .checked_mul(bytes_per_sample)
+        .ok_or_else(|| "encodeWav: blockAlign exceeds WAV limit".to_string())?;
+    if block_align > u16::MAX as u64 {
+        return Err("encodeWav: blockAlign exceeds WAV limit".to_string());
+    }
+    if sample_rate as u64 * block_align > u32::MAX as u64 {
+        return Err("encodeWav: byteRate exceeds WAV limit".to_string());
+    }
+    let data_size = (frames as u64)
+        .checked_mul(block_align)
+        .ok_or_else(|| "encodeWav: data size exceeds RIFF limit".to_string())?;
+    if data_size > u32::MAX as u64 || HEADER_SIZE as u64 + data_size - 8 > u32::MAX as u64 {
+        return Err("encodeWav: data size exceeds RIFF limit".to_string());
+    }
+    Ok(())
 }
 
 /// 编码多通道音频为 WAV 字节流（TS `encodeWav` 的逐字节移植）。
@@ -97,7 +139,24 @@ pub struct WavData {
 /// - 输出布局：44 字节头（大端字段，见模块注释）+ 交叠样本（小端）。
 ///
 /// 错误消息与 TS `encodeWav` 逐字一致。
-pub fn encode_wav(channels: &[&[f32]], sample_rate: u32, opts: &WavEncodeOptions) -> Result<Vec<u8>, String> {
+pub fn encode_wav(
+    channels: &[&[f32]],
+    sample_rate: u32,
+    opts: &WavEncodeOptions,
+) -> Result<Vec<u8>, String> {
+    encode_wav_with_format(channels, sample_rate, opts, WavContainerFormat::Legacy)
+}
+
+/// 按指定容器格式编码多通道音频为 WAV 字节流。
+///
+/// legacy 与 [`encode_wav`] 逐字节一致；standard 的全部数值头字段为小端。
+/// 两种格式的 PCM16 与 Float32 样本均为小端。
+pub fn encode_wav_with_format(
+    channels: &[&[f32]],
+    sample_rate: u32,
+    opts: &WavEncodeOptions,
+    format: WavContainerFormat,
+) -> Result<Vec<u8>, String> {
     // TS L50: if (!channels || channels.length < 1) throw …
     if channels.is_empty() {
         return Err("encodeWav: at least one channel required".to_string());
@@ -115,37 +174,50 @@ pub fn encode_wav(channels: &[&[f32]], sample_rate: u32, opts: &WavEncodeOptions
     if sample_rate == 0 {
         return Err("encodeWav: invalid sampleRate".to_string());
     }
-    // TS L57–58: 位深由类型收窄（非法位深在 Rust 端不可表达）
+    // 位深由类型收窄，非法位深在 Rust 端不可表达。
     let (format_tag, bits, bytes_per_sample): (u16, u16, u64) = match opts.bit_depth {
         WavBitDepth::Pcm16 => (1, 16, 2),
         WavBitDepth::Float32 => (3, 32, 4),
     };
+    if format == WavContainerFormat::Standard {
+        validate_standard_layout(cc, frames, sample_rate, bytes_per_sample)?;
+    }
     // TS L59–63：blockAlign / dataSize / bufferSize（f64 乘法 → u64 乘法，
-    // 头部字段写出走 ToUint32 模 2^32 环绕，与 TS writeU32 的 `>>> 0` 一致）
+    // legacy 头部字段写出走 ToUint32 模 2^32 环绕，与 TS writeU32 的 `>>> 0` 一致）
     let block_align: u64 = cc as u64 * bytes_per_sample;
     let data_size: u64 = frames as u64 * block_align;
     let buffer_size: u64 = HEADER_SIZE as u64 + data_size;
 
     let mut out = vec![0u8; buffer_size as usize];
 
-    // RIFF header（TS L69–72）
+    // RIFF header（chunk ID 保持 ASCII 原文，数值字段按容器格式写入）
     write_u32_be(&mut out, 0, RIFF_MAGIC);
-    write_u32_be(&mut out, 4, ((buffer_size - 8) & 0xffff_ffff) as u32); // chunk size
+    write_u32(
+        &mut out,
+        4,
+        ((buffer_size - 8) & 0xffff_ffff) as u32,
+        format,
+    );
     write_u32_be(&mut out, 8, WAVE_MAGIC);
 
-    // fmt chunk（TS L74–82）
+    // fmt chunk
     write_u32_be(&mut out, 12, FMT_CHUNK);
-    write_u32_be(&mut out, 16, 16); // fmt chunk size
-    write_u16_be(&mut out, 20, format_tag);
-    write_u16_be(&mut out, 22, cc as u16); // TS writeU16 的 & 0xffff 掩码 = 模 2^16 截断
-    write_u32_be(&mut out, 24, sample_rate);
-    write_u32_be(&mut out, 28, ((sample_rate as u64 * block_align) & 0xffff_ffff) as u32); // byte rate
-    write_u16_be(&mut out, 32, (block_align & 0xffff) as u16);
-    write_u16_be(&mut out, 34, bits);
+    write_u32(&mut out, 16, 16, format);
+    write_u16(&mut out, 20, format_tag, format);
+    write_u16(&mut out, 22, cc as u16, format);
+    write_u32(&mut out, 24, sample_rate, format);
+    write_u32(
+        &mut out,
+        28,
+        ((sample_rate as u64 * block_align) & 0xffff_ffff) as u32,
+        format,
+    );
+    write_u16(&mut out, 32, (block_align & 0xffff) as u16, format);
+    write_u16(&mut out, 34, bits, format);
 
-    // data chunk header（TS L85–86）
+    // data chunk header
     write_u32_be(&mut out, 36, DATA_CHUNK);
-    write_u32_be(&mut out, 40, (data_size & 0xffff_ffff) as u32);
+    write_u32(&mut out, 40, (data_size & 0xffff_ffff) as u32, format);
 
     // 交叠写入样本（TS L89–111）
     let mut off = HEADER_SIZE;
@@ -155,7 +227,13 @@ pub fn encode_wav(channels: &[&[f32]], sample_rate: u32, opts: &WavEncodeOptions
                 for ch in channels {
                     let s = f64::from(ch[i]);
                     // TS L94–96：钳制到 [-1, 1]（NaN 两比较皆 false → 保持 NaN）
-                    let s = if s > 1.0 { 1.0 } else if s < -1.0 { -1.0 } else { s };
+                    let s = if s > 1.0 {
+                        1.0
+                    } else if s < -1.0 {
+                        -1.0
+                    } else {
+                        s
+                    };
                     // TS L97：Math.round(s * 32767)；NaN 经 ToInt32 落 0
                     let v = js_round(s * 32767.0);
                     let v_i16: i16 = if v.is_nan() { 0 } else { v as i16 };
@@ -168,8 +246,14 @@ pub fn encode_wav(channels: &[&[f32]], sample_rate: u32, opts: &WavEncodeOptions
         WavBitDepth::Float32 => {
             for i in 0..frames {
                 for ch in channels {
-                    // TS L107：view.setFloat32(off, v, true) —— f32 位模式原样小端
-                    out[off..off + 4].copy_from_slice(&ch[i].to_le_bytes());
+                    let mut bits = ch[i].to_bits();
+                    if format == WavContainerFormat::Standard
+                        && ch[i].is_nan()
+                        && bits & 0x0040_0000 == 0
+                    {
+                        bits |= 0x0040_0000;
+                    }
+                    out[off..off + 4].copy_from_slice(&bits.to_le_bytes());
                     off += 4;
                 }
             }
@@ -182,7 +266,8 @@ pub fn encode_wav(channels: &[&[f32]], sample_rate: u32, opts: &WavEncodeOptions
 /// 解码 WAV 字节流为非交叠 f32 声道（TS `decodeWav` 的逐语义移植）。
 ///
 /// 扫描 chunk（跳过未知 chunk 如 LIST/INFO，chunk 按 2 字节对齐推进），取
-/// fmt 与 data；`dataLen` 声明值可大于实际可用字节（按可用帧数截断，与 TS 一致）。
+/// fmt 与 data。legacy 延续 dataLen 超出实际字节时按可用帧数截断的行为；standard
+/// 严格要求 RIFF 总长和 data chunk 结尾与文件长度一致。
 /// 畸形输入返回 `Err`，消息与 node 实测抛错逐字一致（含 DataView 越界的
 /// RangeError 原话）。
 pub fn decode_wav(bytes: &[u8]) -> Result<WavData, String> {
@@ -198,28 +283,56 @@ pub fn decode_wav(bytes: &[u8]) -> Result<WavData, String> {
         return Err("decodeWav: bad WAVE magic".to_string());
     }
 
-    // TS L131–157：扫描 chunk（fmt 与 data；跳过未知 chunk，data 处 break）
+    // 与 TS 一致：优先以 RIFF 总长判定；总长均不匹配时，以首 chunk 的 size
+    // 是否能容纳于文件中消歧。只有识别为 standard 后才严格拒绝 RIFF 长度不符。
+    let declared_size = bytes.len() - 8;
+    let legacy_riff_size = read_u32_be(bytes, 4)? as usize;
+    let standard_riff_size = read_u32_le(bytes, 4)? as usize;
+    let legacy_size_matches = legacy_riff_size == declared_size;
+    let standard_size_matches = standard_riff_size == declared_size;
+    let legacy_plausible = has_plausible_fmt(bytes, WavContainerFormat::Legacy);
+    let standard_plausible = has_plausible_fmt(bytes, WavContainerFormat::Standard);
+    let format = if standard_size_matches {
+        if !legacy_size_matches || (standard_plausible && !legacy_plausible) {
+            WavContainerFormat::Standard
+        } else {
+            WavContainerFormat::Legacy
+        }
+    } else if !legacy_size_matches && standard_plausible && !legacy_plausible {
+        WavContainerFormat::Standard
+    } else {
+        WavContainerFormat::Legacy
+    };
+    if format == WavContainerFormat::Standard && standard_riff_size != declared_size {
+        return Err("decodeWav: RIFF size does not match file length".to_string());
+    }
+
+    // 扫描 chunk（fmt 与 data；跳过未知 chunk，data 处 break）
     let mut off: usize = 12;
     let mut format_tag: u16 = 0;
     let mut channels: u16 = 0;
     let mut sample_rate: u32 = 0;
+    let mut byte_rate: u32 = 0;
+    let mut header_block_align: u16 = 0;
     let mut bits_per_sample: u16 = 0;
     let mut data_off: Option<usize> = None;
     let mut data_len: u32 = 0;
 
     while off + 8 <= bytes.len() {
         let id = read_u32_be(bytes, off)?;
-        let size = read_u32_be(bytes, off + 4)?;
+        let size = read_u32(bytes, off + 4, format)?;
         let body = off + 8;
         if id == FMT_CHUNK {
             // TS L145
             if size < 16 {
                 return Err("decodeWav: fmt chunk too small".to_string());
             }
-            format_tag = read_u16_be(bytes, body)?;
-            channels = read_u16_be(bytes, body + 2)?;
-            sample_rate = read_u32_be(bytes, body + 4)?;
-            bits_per_sample = read_u16_be(bytes, body + 14)?;
+            format_tag = read_u16(bytes, body, format)?;
+            channels = read_u16(bytes, body + 2, format)?;
+            sample_rate = read_u32(bytes, body + 4, format)?;
+            byte_rate = read_u32(bytes, body + 8, format)?;
+            header_block_align = read_u16(bytes, body + 12, format)?;
+            bits_per_sample = read_u16(bytes, body + 14, format)?;
         } else if id == DATA_CHUNK {
             data_off = Some(body);
             data_len = size;
@@ -241,7 +354,10 @@ pub fn decode_wav(bytes: &[u8]) -> Result<WavData, String> {
         return Err("decodeWav: channel count must be >= 1".to_string());
     }
     if bits_per_sample != 16 && bits_per_sample != 32 {
-        return Err(format!("decodeWav: unsupported bit depth {}", bits_per_sample));
+        return Err(format!(
+            "decodeWav: unsupported bit depth {}",
+            bits_per_sample
+        ));
     }
     if format_tag == 1 && bits_per_sample != 16 {
         return Err("decodeWav: PCM format requires 16-bit".to_string());
@@ -256,6 +372,20 @@ pub fn decode_wav(bytes: &[u8]) -> Result<WavData, String> {
     // TS L167–169：blockAlign 与 data 长度对齐校验
     let bytes_per_sample: usize = (bits_per_sample / 8) as usize;
     let block_align: usize = channels as usize * bytes_per_sample;
+    if format == WavContainerFormat::Standard {
+        if sample_rate == 0 {
+            return Err("decodeWav: invalid sampleRate".to_string());
+        }
+        if header_block_align as usize != block_align {
+            return Err("decodeWav: blockAlign does not match format".to_string());
+        }
+        if byte_rate as u64 != sample_rate as u64 * block_align as u64 {
+            return Err("decodeWav: byteRate does not match format".to_string());
+        }
+        if data_off + data_len as usize != bytes.len() {
+            return Err("decodeWav: data chunk size does not match file length".to_string());
+        }
+    }
     if data_len as usize % block_align != 0 {
         return Err("decodeWav: data length not aligned to block size".to_string());
     }
@@ -273,7 +403,11 @@ pub fn decode_wav(bytes: &[u8]) -> Result<WavData, String> {
                 for ch in &mut out {
                     let v = i16::from_le_bytes([bytes[p], bytes[p + 1]]);
                     // TS L183：v / 32767（f64 除法后存入 Float32Array 收窄到 f32）
-                    ch.push((f64::from(v) / 32767.0) as f32);
+                    ch.push(if format == WavContainerFormat::Standard && v == i16::MIN {
+                        -1.0
+                    } else {
+                        (f64::from(v) / 32767.0) as f32
+                    });
                     p += 2;
                 }
             }
@@ -282,26 +416,47 @@ pub fn decode_wav(bytes: &[u8]) -> Result<WavData, String> {
             let mut p = data_off;
             for _ in 0..frames {
                 for ch in &mut out {
-                    ch.push(f32::from_le_bytes([bytes[p], bytes[p + 1], bytes[p + 2], bytes[p + 3]]));
+                    ch.push(f32::from_le_bytes([
+                        bytes[p],
+                        bytes[p + 1],
+                        bytes[p + 2],
+                        bytes[p + 3],
+                    ]));
                     p += 4;
                 }
             }
         }
     }
 
-    Ok(WavData { sample_rate, channels: out, bit_depth: bits_per_sample })
+    Ok(WavData {
+        sample_rate,
+        channels: out,
+        bit_depth: bits_per_sample,
+    })
 }
 
 // ---------------------------------------------------------------------------
-// 大端字段读写（对齐 TS readU32/writeU32/writeU16 的 `littleEndian=false`）
+// 头字段读写（chunk ID 固定大端比较，数值字段按容器格式）
 // ---------------------------------------------------------------------------
 
 fn write_u32_be(out: &mut [u8], off: usize, v: u32) {
     out[off..off + 4].copy_from_slice(&v.to_be_bytes());
 }
 
-fn write_u16_be(out: &mut [u8], off: usize, v: u16) {
-    out[off..off + 2].copy_from_slice(&v.to_be_bytes());
+fn write_u32(out: &mut [u8], off: usize, v: u32, format: WavContainerFormat) {
+    let bytes = match format {
+        WavContainerFormat::Legacy => v.to_be_bytes(),
+        WavContainerFormat::Standard => v.to_le_bytes(),
+    };
+    out[off..off + 4].copy_from_slice(&bytes);
+}
+
+fn write_u16(out: &mut [u8], off: usize, v: u16, format: WavContainerFormat) {
+    let bytes = match format {
+        WavContainerFormat::Legacy => v.to_be_bytes(),
+        WavContainerFormat::Standard => v.to_le_bytes(),
+    };
+    out[off..off + 2].copy_from_slice(&bytes);
 }
 
 fn read_u32_be(bytes: &[u8], off: usize) -> Result<u32, String> {
@@ -309,7 +464,12 @@ fn read_u32_be(bytes: &[u8], off: usize) -> Result<u32, String> {
         // 对齐 JS DataView 越界读取抛出的 RangeError 原话（node 实测）
         return Err("Offset is outside the bounds of the DataView".to_string());
     }
-    Ok(u32::from_be_bytes([bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3]]))
+    Ok(u32::from_be_bytes([
+        bytes[off],
+        bytes[off + 1],
+        bytes[off + 2],
+        bytes[off + 3],
+    ]))
 }
 
 fn read_u16_be(bytes: &[u8], off: usize) -> Result<u16, String> {
@@ -317,6 +477,74 @@ fn read_u16_be(bytes: &[u8], off: usize) -> Result<u16, String> {
         return Err("Offset is outside the bounds of the DataView".to_string());
     }
     Ok(u16::from_be_bytes([bytes[off], bytes[off + 1]]))
+}
+
+fn read_u32_le(bytes: &[u8], off: usize) -> Result<u32, String> {
+    if off + 4 > bytes.len() {
+        return Err("Offset is outside the bounds of the DataView".to_string());
+    }
+    Ok(u32::from_le_bytes([
+        bytes[off],
+        bytes[off + 1],
+        bytes[off + 2],
+        bytes[off + 3],
+    ]))
+}
+
+fn read_u32(bytes: &[u8], off: usize, format: WavContainerFormat) -> Result<u32, String> {
+    match format {
+        WavContainerFormat::Legacy => read_u32_be(bytes, off),
+        WavContainerFormat::Standard => read_u32_le(bytes, off),
+    }
+}
+
+fn read_u16(bytes: &[u8], off: usize, format: WavContainerFormat) -> Result<u16, String> {
+    match format {
+        WavContainerFormat::Legacy => read_u16_be(bytes, off),
+        WavContainerFormat::Standard => {
+            if off + 2 > bytes.len() {
+                return Err("Offset is outside the bounds of the DataView".to_string());
+            }
+            Ok(u16::from_le_bytes([bytes[off], bytes[off + 1]]))
+        }
+    }
+}
+
+fn has_plausible_fmt(bytes: &[u8], format: WavContainerFormat) -> bool {
+    let mut off = 12usize;
+    while off.checked_add(8).is_some_and(|end| end <= bytes.len()) {
+        let Ok(id) = read_u32_be(bytes, off) else {
+            return false;
+        };
+        let Ok(size) = read_u32(bytes, off + 4, format) else {
+            return false;
+        };
+        let body = off + 8;
+        let size = size as usize;
+        if size > bytes.len() - body {
+            return false;
+        }
+        if id == FMT_CHUNK {
+            if size < 16 || body + 16 > bytes.len() {
+                return false;
+            }
+            let Ok(format_tag) = read_u16(bytes, body, format) else {
+                return false;
+            };
+            let Ok(bits) = read_u16(bytes, body + 14, format) else {
+                return false;
+            };
+            return (format_tag == 1 && bits == 16) || (format_tag == 3 && bits == 32);
+        }
+        let Some(next) = body
+            .checked_add(size)
+            .and_then(|value| value.checked_add(size % 2))
+        else {
+            return false;
+        };
+        off = next;
+    }
+    false
 }
 
 #[cfg(test)]
@@ -333,8 +561,15 @@ mod tests {
     /// f32 一律以 8 位十六进制位模式传递，杜绝十进制解析歧义。
     const GOLDENS_JSON: &str = r##"{"enc":[{"name":"enc_2ch_pcm16_sine","channels":[["00000000","3ec5e757","3f175d76","3f0496c6","3e4dd115","be57856e","bf05dfc1","bf16e79c","bec1ecd4","3c254991","3ec9d387","3f17c85b","3f034432","3e440dd5","be612a2f","bf071f0b"],["3ecccccd","3ec3a725","3ea9075b","3e7e9c88","3e146bf7","3ce7caaa","bdba1fbc","be4ec8f3","be9704ab","beb9276b","becac01e","beca3c61","beb7a7f8","be94abc2","be48cf93","bdacaf15"]],"sampleRate":48000,"bitDepth":16,"kind":"ok","want":"524946460000006457415645666d742000000010000100020000bb800002ee00000400106461746100000040000033337931e930ae4b422a4b42d31fba198d1210e59f0311bd5ef48db427e685cf3fda4b01b7d1743250cde44b71cda24116d28218d5dadbe3e6e671bc35f5"},{"name":"enc_2ch_f32_sine","channels":[["00000000","3ec5e757","3f175d76","3f0496c6","3e4dd115","be57856e","bf05dfc1","bf16e79c","bec1ecd4","3c254991","3ec9d387","3f17c85b","3f034432","3e440dd5","be612a2f","bf071f0b"],["3ecccccd","3ec3a725","3ea9075b","3e7e9c88","3e146bf7","3ce7caaa","bdba1fbc","be4ec8f3","be9704ab","beb9276b","becac01e","beca3c61","beb7a7f8","be94abc2","be48cf93","bdacaf15"]],"sampleRate":48000,"bitDepth":32,"kind":"ok","want":"52494646000000a457415645666d742000000010000300020000bb800005dc0000080020646174610000008000000000cdcccc3e57e7c53e25a7c33e765d173f5b07a93ec696043f889c7e3e15d14d3ef76b143e6e8557beaacae73cc1df05bfbc1fbabd9ce716bff3c84ebed4ecc1beab0497be9149253c6b27b9be87d3c93e1ec0cabe5bc8173f613ccabe3244033ff8a7b7bed50d443ec2ab94be2f2a61be93cf48be0b1f07bf15afacbd"},{"name":"enc_1ch_pcm16_default","channels":[["00000000","3f000000","bf000000","3e800000","be800000","00000000","3f800000","bf800000"]],"sampleRate":44100,"bitDepth":null,"kind":"ok","want":"524946460000003457415645666d742000000010000100010000ac44000158880002001064617461000000100000004001c0002000e00000ff7f0180"},{"name":"enc_1ch_pcm16_edge","channels":[["40000000","c0000000","3fc00000","3f7ffffe","bf800001","3f800000","bf800000","37800100","b7800100","b7000100","7fc00000","7f800000","ff800000","3f7ffff7","bf7ffff7"]],"sampleRate":8000,"bitDepth":16,"kind":"ok","want":"524946460000004257415645666d7420000000100001000100001f4000003e8000020010646174610000001eff7f0180ff7fff7f0180ff7f01800000000000000000ff7f0180ff7f0180"},{"name":"enc_odd_2ch_pcm16","channels":[["3dcccccd","bf666666","3f333333"],["3ea8f5c3","3f0ccccd","bf733333"]],"sampleRate":22050,"bitDepth":16,"kind":"ok","want":"524946460000003057415645666d74200000001000010002000056220001588800040010646174610000000ccd0c3d2ace8c664699596786"},{"name":"enc_odd_2ch_f32","channels":[["3dcccccd","bf666666","3f333333"],["3ea8f5c3","3f0ccccd","bf733333"]],"sampleRate":22050,"bitDepth":32,"kind":"ok","want":"524946460000003c57415645666d74200000001000030002000056220002b110000800206461746100000018cdcccc3dc3f5a83e666666bfcdcc0c3f3333333f333373bf"},{"name":"enc_6ch_f32_51","channels":[["3dcccccd","3dcccccd","3dcccccd","3dcccccd"],["3e4ccccd","3e4ccccd","3e4ccccd","3e4ccccd"],["3e99999a","3e99999a","3e99999a","3e99999a"],["3ecccccd","3ecccccd","3ecccccd","3ecccccd"],["3f000000","3f000000","3f000000","3f000000"],["3f19999a","3f19999a","3f19999a","3f19999a"]],"sampleRate":48000,"bitDepth":32,"kind":"ok","want":"524946460000008457415645666d742000000010000300060000bb8000119400001800206461746100000060cdcccc3dcdcc4c3e9a99993ecdcccc3e0000003f9a99193fcdcccc3dcdcc4c3e9a99993ecdcccc3e0000003f9a99193fcdcccc3dcdcc4c3e9a99993ecdcccc3e0000003f9a99193fcdcccc3dcdcc4c3e9a99993ecdcccc3e0000003f9a99193f"},{"name":"enc_zero_frames_1ch","channels":[[]],"sampleRate":48000,"bitDepth":null,"kind":"ok","want":"524946460000002457415645666d742000000010000100010000bb8000017700000200106461746100000000"},{"name":"enc_zero_frames_2ch_f32","channels":[[],[]],"sampleRate":48000,"bitDepth":32,"kind":"ok","want":"524946460000002457415645666d742000000010000300020000bb800005dc00000800206461746100000000"},{"name":"enc_f32_special","channels":[["7fc00000","00000001","80000001","80000000","7f7fc99e","00800000","ff7fffff"]],"sampleRate":48000,"bitDepth":32,"kind":"ok","want":"524946460000004057415645666d742000000010000300010000bb800002ee0000040020646174610000001c0000c07f0100000001000080000000809ec97f7f00008000ffff7fff"},{"name":"enc_err_empty_channels","channels":[],"sampleRate":48000,"bitDepth":16,"kind":"err","want":"encodeWav: at least one channel required"},{"name":"enc_err_unequal_lengths","channels":[["3f800000","40000000","40400000"],["3f800000","40000000"]],"sampleRate":48000,"bitDepth":16,"kind":"err","want":"encodeWav: all channels must have equal length"},{"name":"enc_err_sample_rate_zero","channels":[["3f000000"]],"sampleRate":0,"bitDepth":16,"kind":"err","want":"encodeWav: invalid sampleRate"}],"dec":[{"name":"err_too_short","input":"0000000000000000000000000000000000000000","kind":"err","want":"decodeWav: file too short (<44 bytes)"},{"name":"err_too_short_43","input":"524946460000002657415645666d742000000010000100010000bb80000000000000001064617461000000","kind":"err","want":"decodeWav: file too short (<44 bytes)"},{"name":"err_bad_riff_zero","input":"0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000","kind":"err","want":"decodeWav: bad RIFF magic"},{"name":"err_bad_riff_xfer","input":"584645520000002857415645666d742000000010000100010000bb800000000000000010646174610000000400000000","kind":"err","want":"decodeWav: bad RIFF magic"},{"name":"err_bad_wave","input":"524946460000002858585858666d742000000010000100010000bb800000000000000010646174610000000400000000","kind":"err","want":"decodeWav: bad WAVE magic"},{"name":"err_missing_fmt","input":"524946460000002857415645646174610000000400000000000000000000000000000000000000000000000000000000","kind":"err","want":"decodeWav: missing fmt chunk"},{"name":"err_missing_data","input":"524946460000002857415645666d742000000010000100010000bb800000000000000010000000000000000000000000","kind":"err","want":"decodeWav: missing data chunk"},{"name":"err_zero_channels","input":"524946460000002457415645666d742000000010000100000000bb8000000000000000106461746100000000","kind":"err","want":"decodeWav: channel count must be >= 1"},{"name":"err_bit_depth_24","input":"524946460000002a57415645666d742000000010000100010000bb8000000000000000186461746100000006000000000000","kind":"err","want":"decodeWav: unsupported bit depth 24"},{"name":"err_pcm_32bit","input":"524946460000002c57415645666d742000000010000100010000bb80000000000000002064617461000000080000000000000000","kind":"err","want":"decodeWav: PCM format requires 16-bit"},{"name":"err_float_16bit","input":"524946460000002857415645666d742000000010000300010000bb800000000000000010646174610000000400000000","kind":"err","want":"decodeWav: float format requires 32-bit"},{"name":"err_tag_2","input":"524946460000002857415645666d742000000010000200010000bb800000000000000010646174610000000400000000","kind":"err","want":"decodeWav: unsupported format tag 2"},{"name":"err_tag_0","input":"524946460000002857415645666d742000000010000000010000bb800000000000000010646174610000000400000000","kind":"err","want":"decodeWav: missing fmt chunk"},{"name":"err_data_not_aligned","input":"524946460000002a57415645666d742000000010000100020000bb8000000000000000106461746100000006000000000000","kind":"err","want":"decodeWav: data length not aligned to block size"},{"name":"err_fmt_too_small","input":"524946460000002457415645666d74200000000c000100010000bb8000000000646174610000000400000000","kind":"err","want":"decodeWav: fmt chunk too small"},{"name":"err_truncated_fmt_body_at_bits","input":"5249464600000030574156454a554e4b0000000c000000000000000000000000666d742000000010000100020000bb8000000000","kind":"err","want":"Offset is outside the bounds of the DataView"},{"name":"err_truncated_fmt_body_at_rate","input":"5249464600000030574156454a554e4b0000000c000000000000000000000000666d74200000001000010002","kind":"err","want":"Offset is outside the bounds of the DataView"},{"name":"ok_data_declared_larger","input":"524946460000002c57415645666d742000000010000100010000bb80000000000000001064617461000000200000ff3f00c00180","kind":"ok","want":{"sampleRate":48000,"bitDepth":16,"channels":[["00000000","3efffe00","bf000100","bf800000"]]}},{"name":"ok_data_declared_smaller","input":"524946460000006457415645666d74200000001000030002000177000000000000000020646174610000000800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000","kind":"ok","want":{"sampleRate":96000,"bitDepth":32,"channels":[["00000000"],["00000000"]]}},{"name":"ok_list_chunk_skip","input":"524946460000004857415645666d742000000010000100020000bb8000000000000000104c49535400000007494e464f616263004a554e4b0000000378797a006461746100000008ff7f018000000100","kind":"ok","want":{"sampleRate":48000,"bitDepth":16,"channels":[["3f800000","00000000"],["bf800000","38000100"]]}},{"name":"ok_fmt_size_18","input":"524946460000002a57415645666d742000000012000100010000ac44000000000000001000026461746100000004004000c0","kind":"ok","want":{"sampleRate":44100,"bitDepth":16,"channels":[["3f000100","bf000100"]]}},{"name":"ok_two_fmt_chunks","input":"524946460000004457415645666d742000000010000100010000bb800000000000000010666d7420000000100003000200017700000000000000002064617461000000080000000000000000","kind":"ok","want":{"sampleRate":96000,"bitDepth":32,"channels":[["00000000"],["00000000"]]}},{"name":"ok_roundtrip_from_encode_f32","input":"52494646000000a457415645666d742000000010000300020000bb800005dc0000080020646174610000008000000000cdcccc3e57e7c53e25a7c33e765d173f5b07a93ec696043f889c7e3e15d14d3ef76b143e6e8557beaacae73cc1df05bfbc1fbabd9ce716bff3c84ebed4ecc1beab0497be9149253c6b27b9be87d3c93e1ec0cabe5bc8173f613ccabe3244033ff8a7b7bed50d443ec2ab94be2f2a61be93cf48be0b1f07bf15afacbd","kind":"ok","want":{"sampleRate":48000,"bitDepth":32,"channels":[["00000000","3ec5e757","3f175d76","3f0496c6","3e4dd115","be57856e","bf05dfc1","bf16e79c","bec1ecd4","3c254991","3ec9d387","3f17c85b","3f034432","3e440dd5","be612a2f","bf071f0b"],["3ecccccd","3ec3a725","3ea9075b","3e7e9c88","3e146bf7","3ce7caaa","bdba1fbc","be4ec8f3","be9704ab","beb9276b","becac01e","beca3c61","beb7a7f8","be94abc2","be48cf93","bdacaf15"]]}},{"name":"ok_roundtrip_from_encode_pcm16","input":"524946460000003457415645666d742000000010000100010000ac44000158880002001064617461000000100000004001c0002000e00000ff7f0180","kind":"ok","want":{"sampleRate":44100,"bitDepth":16,"channels":[["00000000","3f000100","befffe00","3e800100","be800100","00000000","3f800000","bf800000"]]}}]}"##;
 
+    const STANDARD_VECTORS_JSON: &str =
+        include_str!("../../../../specs/io/vectors/wav-standard.json");
+
     fn goldens() -> Value {
         serde_json::from_str(GOLDENS_JSON).expect("golden JSON 必须可解析")
+    }
+
+    fn standard_vectors() -> Value {
+        serde_json::from_str(STANDARD_VECTORS_JSON).expect("standard WAV 向量 JSON 必须可解析")
     }
 
     fn hex_to_bytes(hex: &str) -> Vec<u8> {
@@ -361,17 +596,173 @@ mod tests {
             .as_array()
             .expect("channels 数组")
             .iter()
-            .map(|c| c.as_array().unwrap().iter().map(|h| hex_to_f32_bits(h.as_str().unwrap())).collect())
+            .map(|c| {
+                c.as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|h| hex_to_f32_bits(h.as_str().unwrap()))
+                    .collect()
+            })
             .collect()
     }
 
     fn opts_of(case: &Value) -> WavEncodeOptions {
         match &case["bitDepth"] {
-            Value::Number(n) if n.as_u64() == Some(32) => WavEncodeOptions { bit_depth: WavBitDepth::Float32 },
-            Value::Number(n) if n.as_u64() == Some(16) => WavEncodeOptions { bit_depth: WavBitDepth::Pcm16 },
+            Value::Number(n) if n.as_u64() == Some(32) => WavEncodeOptions {
+                bit_depth: WavBitDepth::Float32,
+            },
+            Value::Number(n) if n.as_u64() == Some(16) => WavEncodeOptions {
+                bit_depth: WavBitDepth::Pcm16,
+            },
             Value::Null => WavEncodeOptions::default(), // TS 不传 opts → 默认 16
             other => panic!("非法 bitDepth golden 字段: {:?}", other),
         }
+    }
+
+    #[test]
+    fn standard_encode_与冻结向量逐字节一致() {
+        for case in standard_vectors()["encode"]
+            .as_array()
+            .expect("encode 数组")
+        {
+            let name = case["name"].as_str().unwrap();
+            let chans = build_channels(case);
+            let refs: Vec<&[f32]> = chans.iter().map(Vec::as_slice).collect();
+            let got = encode_wav_with_format(
+                &refs,
+                case["sampleRate"].as_u64().unwrap() as u32,
+                &opts_of(case),
+                WavContainerFormat::Standard,
+            )
+            .unwrap_or_else(|e| panic!("case {} 应编码成功，实际 Err({})", name, e));
+            assert_eq!(
+                bytes_to_hex(&got),
+                case["wantHex"].as_str().unwrap(),
+                "case {} 编码字节不一致",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn standard_decode_与冻结向量一致() {
+        for case in standard_vectors()["decode"]
+            .as_array()
+            .expect("decode 数组")
+        {
+            let name = case["name"].as_str().unwrap();
+            let input = hex_to_bytes(case["inputHex"].as_str().unwrap());
+            if let Some(error) = case.get("error") {
+                assert_eq!(
+                    decode_wav(&input).unwrap_err(),
+                    error.as_str().unwrap(),
+                    "case {} 错误消息不一致",
+                    name
+                );
+                continue;
+            }
+
+            let got = decode_wav(&input)
+                .unwrap_or_else(|e| panic!("case {} 应解码成功，实际 Err({})", name, e));
+            let want = &case["want"];
+            assert_eq!(
+                got.sample_rate,
+                want["sampleRate"].as_u64().unwrap() as u32,
+                "case {} 采样率不一致",
+                name
+            );
+            assert_eq!(
+                got.bit_depth,
+                want["bitDepth"].as_u64().unwrap() as u16,
+                "case {} 位深不一致",
+                name
+            );
+            let want_channels = want["channels"].as_array().unwrap();
+            assert_eq!(
+                got.channels.len(),
+                want_channels.len(),
+                "case {} 声道数不一致",
+                name
+            );
+            for (channel, (got_samples, want_samples)) in
+                got.channels.iter().zip(want_channels).enumerate()
+            {
+                let want_samples = want_samples.as_array().unwrap();
+                assert_eq!(
+                    got_samples.len(),
+                    want_samples.len(),
+                    "case {} 声道 {} 帧数不一致",
+                    name,
+                    channel
+                );
+                for (frame, (got, want)) in got_samples.iter().zip(want_samples).enumerate() {
+                    assert_eq!(
+                        got.to_bits(),
+                        hex_to_f32_bits(want.as_str().unwrap()).to_bits(),
+                        "case {} 声道 {} 样本 {} 位模式不一致",
+                        name,
+                        channel,
+                        frame
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn standard_总长字段字节回文时仍能自动识别() {
+        let samples = vec![0.0_f32; 32_878];
+        let encoded = encode_wav_with_format(
+            &[&samples],
+            48_000,
+            &WavEncodeOptions::default(),
+            WavContainerFormat::Standard,
+        )
+        .unwrap();
+        assert_eq!(&encoded[4..8], &[0x00, 0x01, 0x01, 0x00]);
+        assert_eq!(decode_wav(&encoded).unwrap().channels[0].len(), 32_878);
+    }
+
+    #[test]
+    fn standard_编码拒绝头字段溢出() {
+        let empty: &[f32] = &[];
+        let too_many_channels = vec![empty; u16::MAX as usize + 1];
+        assert_eq!(
+            encode_wav_with_format(
+                &too_many_channels,
+                48_000,
+                &WavEncodeOptions::default(),
+                WavContainerFormat::Standard,
+            )
+            .unwrap_err(),
+            "encodeWav: channel count exceeds WAV limit"
+        );
+
+        let block_align_overflow = vec![empty; 32_768];
+        assert_eq!(
+            encode_wav_with_format(
+                &block_align_overflow,
+                48_000,
+                &WavEncodeOptions::default(),
+                WavContainerFormat::Standard,
+            )
+            .unwrap_err(),
+            "encodeWav: blockAlign exceeds WAV limit"
+        );
+        assert_eq!(
+            encode_wav_with_format(
+                &[empty],
+                u32::MAX,
+                &WavEncodeOptions::default(),
+                WavContainerFormat::Standard,
+            )
+            .unwrap_err(),
+            "encodeWav: byteRate exceeds WAV limit"
+        );
+        assert_eq!(
+            validate_standard_layout(1, 2_147_483_648, 48_000, 2).unwrap_err(),
+            "encodeWav: data size exceeds RIFF limit"
+        );
     }
 
     // ------------------------- golden 对拍：编码（逐字节） -------------------------
@@ -390,7 +781,12 @@ mod tests {
                     assert_eq!(result.as_ref(), Ok(&want), "case {} 编码字节不一致", name);
                 }
                 "err" => {
-                    assert_eq!(result.unwrap_err(), case["want"].as_str().unwrap(), "case {} 错误消息不一致", name);
+                    assert_eq!(
+                        result.unwrap_err(),
+                        case["want"].as_str().unwrap(),
+                        "case {} 错误消息不一致",
+                        name
+                    );
                 }
                 other => panic!("非法 kind: {}", other),
             }
@@ -407,19 +803,52 @@ mod tests {
             }
             let name = case["name"].as_str().unwrap();
             let input = hex_to_bytes(case["input"].as_str().unwrap());
-            let got = decode_wav(&input).unwrap_or_else(|e| panic!("case {} 应解码成功，实际 Err({})", name, e));
+            let got = decode_wav(&input)
+                .unwrap_or_else(|e| panic!("case {} 应解码成功，实际 Err({})", name, e));
             let want = &case["want"];
-            assert_eq!(got.sample_rate, want["sampleRate"].as_u64().unwrap() as u32, "case {} 采样率不一致", name);
-            assert_eq!(got.bit_depth, want["bitDepth"].as_u64().unwrap() as u16, "case {} 位深不一致", name);
+            assert_eq!(
+                got.sample_rate,
+                want["sampleRate"].as_u64().unwrap() as u32,
+                "case {} 采样率不一致",
+                name
+            );
+            assert_eq!(
+                got.bit_depth,
+                want["bitDepth"].as_u64().unwrap() as u16,
+                "case {} 位深不一致",
+                name
+            );
             let want_chs = want["channels"].as_array().unwrap();
-            assert_eq!(got.channels.len(), want_chs.len(), "case {} 声道数不一致", name);
+            assert_eq!(
+                got.channels.len(),
+                want_chs.len(),
+                "case {} 声道数不一致",
+                name
+            );
             for (c, (got_ch, want_ch)) in got.channels.iter().zip(want_chs).enumerate() {
-                let want_samples: Vec<f32> =
-                    want_ch.as_array().unwrap().iter().map(|h| hex_to_f32_bits(h.as_str().unwrap())).collect();
-                assert_eq!(got_ch.len(), want_samples.len(), "case {} 声道 {} 帧数不一致", name, c);
+                let want_samples: Vec<f32> = want_ch
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|h| hex_to_f32_bits(h.as_str().unwrap()))
+                    .collect();
+                assert_eq!(
+                    got_ch.len(),
+                    want_samples.len(),
+                    "case {} 声道 {} 帧数不一致",
+                    name,
+                    c
+                );
                 for (i, (g, w)) in got_ch.iter().zip(want_samples.iter()).enumerate() {
                     // 位模式精确比较（NaN 亦按位；golden 输入仅含 canonical NaN）
-                    assert_eq!(f32_bits(*g), f32_bits(*w), "case {} 声道 {} 样本 {} 位模式不一致", name, c, i);
+                    assert_eq!(
+                        f32_bits(*g),
+                        f32_bits(*w),
+                        "case {} 声道 {} 样本 {} 位模式不一致",
+                        name,
+                        c,
+                        i
+                    );
                 }
             }
         }
@@ -433,8 +862,15 @@ mod tests {
             }
             let name = case["name"].as_str().unwrap();
             let input = hex_to_bytes(case["input"].as_str().unwrap());
-            let msg = decode_wav(&input).err().unwrap_or_else(|| panic!("case {} 应抛错，实际成功", name));
-            assert_eq!(msg, case["want"].as_str().unwrap(), "case {} 错误消息不一致", name);
+            let msg = decode_wav(&input)
+                .err()
+                .unwrap_or_else(|| panic!("case {} 应抛错，实际成功", name));
+            assert_eq!(
+                msg,
+                case["want"].as_str().unwrap(),
+                "case {} 错误消息不一致",
+                name
+            );
         }
     }
 
@@ -444,7 +880,14 @@ mod tests {
     fn float32_往返_单声道电平与长度一致() {
         // 镜像 TS 测试 1：单声道 8 样本 f32 往返逐位一致
         let mono: Vec<f32> = vec![0.0, 0.5, -0.5, 0.25, -0.25, 0.0, 1.0, -1.0];
-        let buf = encode_wav(&[&mono], 48000, &WavEncodeOptions { bit_depth: WavBitDepth::Float32 }).unwrap();
+        let buf = encode_wav(
+            &[&mono],
+            48000,
+            &WavEncodeOptions {
+                bit_depth: WavBitDepth::Float32,
+            },
+        )
+        .unwrap();
         let res = decode_wav(&buf).unwrap();
         assert_eq!(res.bit_depth, 32);
         assert_eq!(res.sample_rate, 48000);
@@ -458,8 +901,24 @@ mod tests {
     #[test]
     fn float32_特殊位模式往返保留() {
         // denormal / -0 / Infinity 位模式全程保留（canonical NaN 按位一致）
-        let samples = [0.0_f32, 1e-45, -1e-45, -0.0, f32::INFINITY, f32::NEG_INFINITY, f32::MIN, f32::MAX];
-        let buf = encode_wav(&[&samples], 48000, &WavEncodeOptions { bit_depth: WavBitDepth::Float32 }).unwrap();
+        let samples = [
+            0.0_f32,
+            1e-45,
+            -1e-45,
+            -0.0,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::MIN,
+            f32::MAX,
+        ];
+        let buf = encode_wav(
+            &[&samples],
+            48000,
+            &WavEncodeOptions {
+                bit_depth: WavBitDepth::Float32,
+            },
+        )
+        .unwrap();
         let res = decode_wav(&buf).unwrap();
         for (g, w) in res.channels[0].iter().zip(samples.iter()) {
             assert_eq!(f32_bits(*g), f32_bits(*w));
@@ -470,7 +929,10 @@ mod tests {
     fn pcm16_往返_量化误差在容忍范围内() {
         // 镜像 TS 测试 2：256 点正弦 ×0.8，量化步长 ~3.05e-5，半步误差 ≈ 1.5e-5
         let fs = 44100_u32;
-        let ch: Vec<f32> = (0..256).map(|i| (f64::from(i) * 0.1).sin() * 0.8).map(|x| x as f32).collect();
+        let ch: Vec<f32> = (0..256)
+            .map(|i| (f64::from(i) * 0.1).sin() * 0.8)
+            .map(|x| x as f32)
+            .collect();
         let buf = encode_wav(&[&ch], fs, &WavEncodeOptions::default()).unwrap();
         let res = decode_wav(&buf).unwrap();
         assert_eq!(res.bit_depth, 16);
@@ -531,7 +993,14 @@ mod tests {
         let n = 128;
         let channels: Vec<Vec<f32>> = (0..6).map(|c| vec![(c as f32 + 1.0) * 0.1; n]).collect();
         let refs: Vec<&[f32]> = channels.iter().map(|v| v.as_slice()).collect();
-        let buf = encode_wav(&refs, 48000, &WavEncodeOptions { bit_depth: WavBitDepth::Float32 }).unwrap();
+        let buf = encode_wav(
+            &refs,
+            48000,
+            &WavEncodeOptions {
+                bit_depth: WavBitDepth::Float32,
+            },
+        )
+        .unwrap();
         let res = decode_wav(&buf).unwrap();
         assert_eq!(res.channels.len(), 6);
         for (c, ch) in res.channels.iter().enumerate() {
@@ -597,7 +1066,10 @@ mod tests {
             encode_wav(&[&ch, &ch2], 48000, &WavEncodeOptions::default()).unwrap_err(),
             "encodeWav: all channels must have equal length"
         );
-        assert_eq!(encode_wav(&[&ch], 0, &WavEncodeOptions::default()).unwrap_err(), "encodeWav: invalid sampleRate");
+        assert_eq!(
+            encode_wav(&[&ch], 0, &WavEncodeOptions::default()).unwrap_err(),
+            "encodeWav: invalid sampleRate"
+        );
     }
 
     #[test]
@@ -658,7 +1130,10 @@ mod tests {
         let mut bad = encode_wav(&[&ch], 48000, &WavEncodeOptions::default()).unwrap();
         bad[20] = 0; // formatTag 高字节（大端 0x0001 → 0x0000）
         bad[21] = 0;
-        assert_eq!(decode_wav(&bad).unwrap_err(), "decodeWav: missing fmt chunk");
+        assert_eq!(
+            decode_wav(&bad).unwrap_err(),
+            "decodeWav: missing fmt chunk"
+        );
     }
 
     #[test]
@@ -666,10 +1141,20 @@ mod tests {
         // TS：v / 32767 在 f64 完成后存入 Float32Array 收窄；位模式必须逐位等于
         // 该路径（f32 直除可能在末位产生不同位模式）
         for v in [1_i16, -1, 12345, -12345, 32767, -32767, 8192, -8192] {
-            let buf = encode_wav(&[&[(v as f64 / 32767.0) as f32]], 48000, &WavEncodeOptions::default()).unwrap();
+            let buf = encode_wav(
+                &[&[(v as f64 / 32767.0) as f32]],
+                48000,
+                &WavEncodeOptions::default(),
+            )
+            .unwrap();
             let res = decode_wav(&buf).unwrap();
             let expected = (f64::from(v) / 32767.0) as f32;
-            assert_eq!(f32_bits(res.channels[0][0]), f32_bits(expected), "v = {}", v);
+            assert_eq!(
+                f32_bits(res.channels[0][0]),
+                f32_bits(expected),
+                "v = {}",
+                v
+            );
         }
     }
 }

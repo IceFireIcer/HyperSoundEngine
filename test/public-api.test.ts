@@ -20,6 +20,8 @@ describe('public API (standalone core)', () => {
     expect(typeof core.HyperSoundEngine).toBe('function')
     expect(typeof core.SCENE_PRESETS).toBe('object')
     expect(typeof core.encodeShareCode).toBe('function')
+    expect(typeof core.encodeWav).toBe('function')
+    expect(typeof core.decodeWav).toBe('function')
     expect(typeof core.SpectrumAnalyzer).toBe('function')
   })
 

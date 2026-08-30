@@ -52,8 +52,9 @@ HyperSoundEngine 是一个**双支线实现的实时音频效果引擎**：TS �
 
 ### 四、WAV 文件 I/O
 
-- **encodeWav / decodeWav**:16-bit PCM 与 32-bit Float,多通道,标准 RIFF/WAVE
-- 严格校验(坏魔数/缺 chunk/块不对齐/0 声道一律抛错,防注入)
+- **encodeWav / decodeWav**:16-bit PCM 与 32-bit Float，多通道；编码支持 legacy/standard 双模式，解码自动识别
+- 对外交换显式使用 standard 小端 RIFF/WAVE；默认 legacy 仅保留旧字节契约
+- standard 严格校验 RIFF/data 长度、采样率、byteRate 与 blockAlign
 - 解码结果为非交错 Float32Array[],可直接构造 HseAudioBus 进入处理链
 
 ### 五、Sidechain

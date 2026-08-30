@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "encode": [
+    {
+      "name": "standard-pcm16-mono-boundaries",
+      "sampleRate": 48000,
+      "bitDepth": 16,
+      "channels": [["bf800000", "00000000", "3f800000"]],
+      "wantHex": "524946462a00000057415645666d7420100000000100010080bb00000077010002001000646174610600000001800000ff7f"
+    },
+    {
+      "name": "standard-float32-signaling-nan",
+      "sampleRate": 48000,
+      "bitDepth": 32,
+      "channels": [["7fa12345"]],
+      "wantHex": "524946462800000057415645666d7420100000000300010080bb000000ee02000400200064617461040000004523e17f"
+    },
+    {
+      "name": "standard-pcm16-six-channel",
+      "sampleRate": 48000,
+      "bitDepth": 16,
+      "channels": [["00000000"], ["3dcccccd"], ["3e4ccccd"], ["3e99999a"], ["3ecccccd"], ["3f000000"]],
+      "wantHex": "524946463000000057415645666d7420100000000100060080bb000000ca08000c001000646174610c0000000000cd0c9919662633330040"
+    }
+  ],
+  "decode": [
+    {
+      "name": "standard-pcm16-minimum",
+      "inputHex": "524946462600000057415645666d7420100000000100010080bb0000007701000200100064617461020000000080",
+      "want": { "sampleRate": 48000, "bitDepth": 16, "channels": [["bf800000"]] }
+    },
+    {
+      "name": "standard-pcm16-minimum-with-odd-chunk",
+      "inputHex": "524946463200000057415645666d7420100000000100010080bb000000770100020010004a554e4b0300000078797a0064617461020000000080",
+      "want": { "sampleRate": 48000, "bitDepth": 16, "channels": [["bf800000"]] }
+    },
+    {
+      "name": "standard-truncated-data",
+      "inputHex": "524946462800000057415645666d7420100000000100010080bb0000007701000200100064617461040000000000",
+      "error": "decodeWav: RIFF size does not match file length"
+    },
+    {
+      "name": "standard-data-size-does-not-reach-file-end",
+      "inputHex": "524946462800000057415645666d7420100000000100010080bb00000077010002001000646174610200000000000000",
+      "error": "decodeWav: data chunk size does not match file length"
+    },
+    {
+      "name": "standard-zero-sample-rate",
+      "inputHex": "524946462600000057415645666d7420100000000100010000000000000000000200100064617461020000000000",
+      "error": "decodeWav: invalid sampleRate"
+    },
+    {
+      "name": "standard-invalid-block-align",
+      "inputHex": "524946462600000057415645666d7420100000000100010080bb0000007701000400100064617461020000000000",
+      "error": "decodeWav: blockAlign does not match format"
+    },
+    {
+      "name": "standard-invalid-byte-rate",
+      "inputHex": "524946462600000057415645666d7420100000000100010080bb0000017701000200100064617461020000000000",
+      "error": "decodeWav: byteRate does not match format"
+    }
+  ]
+}

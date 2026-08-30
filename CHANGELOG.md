@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-08
+
+### Added
+- **WAV 双模式兼容**：TS/Rust 核心新增显式 `standard` RIFF/WAVE 小端编码，解码自动识别 standard 与 1.0.0 历史 `legacy` 格式；共享手工标准夹具覆盖 PCM16、Float32 与严格头校验，WaveForge 离线导出统一复用核心 standard 编码。无 format 的编码继续输出 legacy，既有 37 个 golden 保持不变。
+
+### Fixed
+- **标准 WAV 输入校验**：standard 路径拒绝截断 RIFF/data、无效采样率及不一致的 byteRate/blockAlign，并将外部 PCM16 最小码 `-32768` 正确解码为 `-1.0`；legacy 路径保留原兼容语义。
+
 ## [1.0.0] - 2026-08
 
 ### Added

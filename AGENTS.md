@@ -12,7 +12,7 @@
 - `CONTEXT.md` — 领域术语表（ubiquitous language），改模型前先读
 - `原生化双支线与Windows音频接入规划书.md` — 当前主线执行规划
 - `空间音频实现规划书.md` — 空间音频规格输入（§3.2 契约、§八性能目标有效）
-- `specs/` — 双支线共享规格 + 冻结测试向量（总纲 `specs/README.md`、向量 JSON Schema `specs/schema/vector-case.schema.json`、**20 份核心规格：17 DSP + engine-chain + params + scenes**、**72 组音频冻结向量 / 144 文件**，另有 3 个参数/场景结构化夹具；Rust 对拍 **72/72 PASS**；向量 schema 支持计量型 `moduleKind`/`readings` 标量读数；engine-chain 固化 1–21 级，要求 `spatial.mode='off'`）；服务层规格 `specs/service/`：control-plane 控制面契约、push-stream 推流协议。**改动前先读 `specs/README.md`**；音频基线唯一生成入口是 `scripts/export-vectors.mjs`（重跑逐字节比对，不一致拒写）
+- `specs/` — 双支线共享规格 + 冻结测试向量（总纲 `specs/README.md`、向量 JSON Schema `specs/schema/vector-case.schema.json`、**21 份共享规格：17 DSP + engine-chain + params + scenes + WAV**、**72 组音频冻结向量 / 144 文件**，另有 3 个参数/场景结构化夹具与 1 个 standard WAV 共享夹具；Rust 对拍 **72/72 PASS**；向量 schema 支持计量型 `moduleKind`/`readings` 标量读数；engine-chain 固化 1–21 级，要求 `spatial.mode='off'`）；服务层规格 `specs/service/`：control-plane 控制面契约、push-stream 推流协议。**改动前先读 `specs/README.md`**；音频基线唯一生成入口是 `scripts/export-vectors.mjs`（重跑逐字节比对，不一致拒写）
 - `HyperSoundEngineRust/` — **Rust 支线**：`hse-core` 已完成 17 个 DSP 模块与 `EngineChainStage` 1–21 级主链，冻结向量 **72/72 PASS**；`hse-parity` 为共享规格门禁；`hse-wasapi` 提供 WASAPI 共享模式渲染 + loopback 捕获（`wasapi` crate 精确锁版 `=0.24.0`）；`hse-service` 提供捕获→DSP→渲染三线程、rtrb 双环、localhost WebSocket JSON-RPC（默认 `ws://127.0.0.1:4780/`）与推流协议；`hse-wasm` 已完成单 Biquad + 独立 AudioWorklet 的 wasm32 最小试点，不是完整引擎替换；`hse-napi` 仍为占位，未入 workspace members。Windows 音频后端固定为 WASAPI，不提供 MIDI 或 ASIO；Phase 3 已全链收口；Phase 4 指标达标，仅余 8h 真机压测；Phase 5 的 Rust `hrtf-core` 尚未启动
 
 > 规则：README/AGENTS 等仓库文档只描述已跟踪文件，**不得引用 .gitignore 排除的路径**（本地参考资料、草稿目录等不入文档）。

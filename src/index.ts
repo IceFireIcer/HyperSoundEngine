@@ -33,7 +33,7 @@ export type { SeparationStem, StemSeparatorAdapter, SeparationTask } from './off
 
 // —— WAV 文件 I/O（核心包内置；WaveForge 适配层复用） ——
 export { encodeWav, decodeWav } from './io/wav'
-export type { WavDecodeResult, WavEncodeOptions } from './io/wav'
+export type { WavContainerFormat, WavDecodeResult, WavEncodeOptions } from './io/wav'
 
 // —— dsp 全部模块 ——
 export * from './dsp/fft'

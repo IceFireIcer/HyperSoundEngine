@@ -1,5 +1,5 @@
 /**
- * WAV 编解码 —— 标准多通道 PCM/Float WAV 文件 I/O
+ * WAV 编解码 —— legacy 兼容与标准 RIFF/WAVE 多通道文件 I/O
  *
  * 用途：
  * - 核心包内置音频文件读写（WaveForge 适配层复用本模块，不再内嵌实现）；
@@ -18,8 +18,11 @@ export interface WavDecodeResult {
   bitDepth: 16 | 32
 }
 
+export type WavContainerFormat = 'legacy' | 'standard'
+
 export interface WavEncodeOptions {
   bitDepth?: 16 | 32
+  format?: WavContainerFormat
 }
 
 const RIFF_MAGIC = 0x52494646 // 'RIFF'
@@ -27,16 +30,34 @@ const WAVE_MAGIC = 0x57415645 // 'WAVE'
 const FMT_CHUNK = 0x666d7420 // 'fmt '
 const DATA_CHUNK = 0x64617461 // 'data'
 
-function readU32(view: DataView, off: number): number {
-  return view.getUint32(off, false) // RIFF 字节序为大端四字符 + 小端数值
+function readU32(view: DataView, off: number, littleEndian: boolean): number {
+  return view.getUint32(off, littleEndian)
 }
 
-function writeU32(view: DataView, off: number, val: number): void {
-  view.setUint32(off, val >>> 0, false)
+function writeU32(view: DataView, off: number, val: number, littleEndian = false): void {
+  view.setUint32(off, val >>> 0, littleEndian)
 }
 
-function writeU16(view: DataView, off: number, val: number): void {
-  view.setUint16(off, val & 0xffff, false)
+function writeU16(view: DataView, off: number, val: number, littleEndian = false): void {
+  view.setUint16(off, val & 0xffff, littleEndian)
+}
+
+function hasPlausibleFmt(view: DataView, length: number, littleEndian: boolean): boolean {
+  let off = 12
+  while (off + 8 <= length) {
+    const id = readU32(view, off, false)
+    const size = readU32(view, off + 4, littleEndian)
+    const body = off + 8
+    if (size > length - body) return false
+    if (id === FMT_CHUNK) {
+      if (size < 16 || body + 16 > length) return false
+      const formatTag = view.getUint16(body, littleEndian)
+      const bits = view.getUint16(body + 14, littleEndian)
+      return (formatTag === 1 && bits === 16) || (formatTag === 3 && bits === 32)
+    }
+    off = body + size + (size % 2)
+  }
+  return false
 }
 
 /**
@@ -44,7 +65,8 @@ function writeU16(view: DataView, off: number, val: number): void {
  * @param channels 非交错 Float32Array[]（声道数 ≥1，各通道等长）
  * @param sampleRate 采样率 Hz
  * @param opts.bitDepth 16=PCM（默认）/ 32=Float
- * @returns ArrayBuffer（标准 RIFF/WAVE）
+ * @param opts.format legacy=历史兼容格式（默认）/ standard=标准 RIFF 小端格式
+ * @returns WAV 文件 ArrayBuffer
  */
 export function encodeWav(channels: Float32Array[], sampleRate: number, opts?: WavEncodeOptions): ArrayBuffer {
   if (!channels || channels.length < 1) throw new Error('encodeWav: at least one channel required')
@@ -56,11 +78,23 @@ export function encodeWav(channels: Float32Array[], sampleRate: number, opts?: W
   if (!Number.isFinite(sampleRate) || sampleRate <= 0) throw new Error('encodeWav: invalid sampleRate')
   const bitDepth = opts?.bitDepth ?? 16
   if (bitDepth !== 16 && bitDepth !== 32) throw new Error('encodeWav: bitDepth must be 16 or 32')
+  const format = opts?.format ?? 'legacy'
+  if (format !== 'legacy' && format !== 'standard') throw new Error('encodeWav: format must be legacy or standard')
+  const littleEndian = format === 'standard'
+  if (littleEndian && (!Number.isInteger(sampleRate) || sampleRate > 0xffff_ffff)) {
+    throw new Error('encodeWav: invalid sampleRate')
+  }
+  if (littleEndian && cc > 0xffff) throw new Error('encodeWav: channel count exceeds WAV limit')
   const formatTag = bitDepth === 16 ? 1 : 3 // PCM=1, IEEE float=3
   const bytesPerSample = bitDepth / 8
   const blockAlign = cc * bytesPerSample
+  if (littleEndian && blockAlign > 0xffff) throw new Error('encodeWav: blockAlign exceeds WAV limit')
+  if (littleEndian && sampleRate * blockAlign > 0xffff_ffff) throw new Error('encodeWav: byteRate exceeds WAV limit')
   const dataSize = frames * blockAlign
   const bufferSize = 44 + dataSize // 12(RIFF) + 24(fmt) + 8(data header) + data
+  if (littleEndian && (dataSize > 0xffff_ffff || bufferSize - 8 > 0xffff_ffff)) {
+    throw new Error('encodeWav: data size exceeds RIFF limit')
+  }
 
   const buf = new ArrayBuffer(bufferSize)
   const view = new DataView(buf)
@@ -68,22 +102,22 @@ export function encodeWav(channels: Float32Array[], sampleRate: number, opts?: W
 
   // RIFF header
   writeU32(view, 0, RIFF_MAGIC)
-  writeU32(view, 4, bufferSize - 8) // chunk size
+  writeU32(view, 4, bufferSize - 8, littleEndian) // chunk size
   writeU32(view, 8, WAVE_MAGIC)
 
   // fmt chunk
   writeU32(view, 12, FMT_CHUNK)
-  writeU32(view, 16, 16) // fmt chunk size
-  writeU16(view, 20, formatTag)
-  writeU16(view, 22, cc)
-  writeU32(view, 24, sampleRate)
-  writeU32(view, 28, sampleRate * blockAlign) // byte rate
-  writeU16(view, 32, blockAlign)
-  writeU16(view, 34, bitDepth)
+  writeU32(view, 16, 16, littleEndian) // fmt chunk size
+  writeU16(view, 20, formatTag, littleEndian)
+  writeU16(view, 22, cc, littleEndian)
+  writeU32(view, 24, sampleRate, littleEndian)
+  writeU32(view, 28, sampleRate * blockAlign, littleEndian) // byte rate
+  writeU16(view, 32, blockAlign, littleEndian)
+  writeU16(view, 34, bitDepth, littleEndian)
 
   // data chunk
   writeU32(view, 36, DATA_CHUNK)
-  writeU32(view, 40, dataSize)
+  writeU32(view, 40, dataSize, littleEndian)
 
   // 交错写入样本
   let off = 44
@@ -115,7 +149,7 @@ export function encodeWav(channels: Float32Array[], sampleRate: number, opts?: W
 
 /**
  * 解码 WAV 文件为非交错 Float32Array[]。
- * @param buffer ArrayBuffer 或 Uint8Array（标准 RIFF/WAVE）
+ * @param buffer ArrayBuffer 或 Uint8Array（自动识别 legacy / standard）
  * @returns { sampleRate, channels, bitDepth }
  * @throws 畸形输入（坏魔数 / 坏 chunk / 块不对齐 / 0 声道 / 不支持位深）一律抛错
  */
@@ -125,28 +159,45 @@ export function decodeWav(buffer: ArrayBuffer | Uint8Array): WavDecodeResult {
   const view = new DataView(u8.buffer, u8.byteOffset, u8.byteLength)
 
   // RIFF / WAVE 魔数校验
-  if (readU32(view, 0) !== RIFF_MAGIC) throw new Error('decodeWav: bad RIFF magic')
-  if (readU32(view, 8) !== WAVE_MAGIC) throw new Error('decodeWav: bad WAVE magic')
+  if (readU32(view, 0, false) !== RIFF_MAGIC) throw new Error('decodeWav: bad RIFF magic')
+  if (readU32(view, 8, false) !== WAVE_MAGIC) throw new Error('decodeWav: bad WAVE magic')
+  const declaredSize = u8.length - 8
+  const legacyRiffSize = readU32(view, 4, false)
+  const standardRiffSize = readU32(view, 4, true)
+  const legacySizeMatches = legacyRiffSize === declaredSize
+  const standardSizeMatches = standardRiffSize === declaredSize
+  const legacyPlausible = hasPlausibleFmt(view, u8.length, false)
+  const standardPlausible = hasPlausibleFmt(view, u8.length, true)
+  const littleEndian = standardSizeMatches
+    ? !legacySizeMatches || standardPlausible && !legacyPlausible
+    : !legacySizeMatches && standardPlausible && !legacyPlausible
+  if (littleEndian && standardRiffSize !== declaredSize) {
+    throw new Error('decodeWav: RIFF size does not match file length')
+  }
 
   // 扫描 chunk：fmt 与 data（跳过未知 chunk，如 LIST/INFO）
   let off = 12
   let formatTag = 0
   let channels = 0
   let sampleRate = 0
+  let byteRate = 0
+  let headerBlockAlign = 0
   let bitsPerSample = 0
   let dataOff = -1
   let dataLen = 0
 
   while (off + 8 <= u8.length) {
-    const id = readU32(view, off)
-    const size = readU32(view, off + 4)
+    const id = readU32(view, off, false)
+    const size = readU32(view, off + 4, littleEndian)
     const body = off + 8
     if (id === FMT_CHUNK) {
       if (size < 16) throw new Error('decodeWav: fmt chunk too small')
-      formatTag = view.getUint16(body, false)
-      channels = view.getUint16(body + 2, false)
-      sampleRate = view.getUint32(body + 4, false)
-      bitsPerSample = view.getUint16(body + 14, false)
+      formatTag = view.getUint16(body, littleEndian)
+      channels = view.getUint16(body + 2, littleEndian)
+      sampleRate = view.getUint32(body + 4, littleEndian)
+      byteRate = view.getUint32(body + 8, littleEndian)
+      headerBlockAlign = view.getUint16(body + 12, littleEndian)
+      bitsPerSample = view.getUint16(body + 14, littleEndian)
     } else if (id === DATA_CHUNK) {
       dataOff = body
       dataLen = size
@@ -166,6 +217,12 @@ export function decodeWav(buffer: ArrayBuffer | Uint8Array): WavDecodeResult {
 
   const bytesPerSample = bitsPerSample / 8
   const blockAlign = channels * bytesPerSample
+  if (littleEndian) {
+    if (sampleRate === 0) throw new Error('decodeWav: invalid sampleRate')
+    if (headerBlockAlign !== blockAlign) throw new Error('decodeWav: blockAlign does not match format')
+    if (byteRate !== sampleRate * blockAlign) throw new Error('decodeWav: byteRate does not match format')
+    if (dataOff + dataLen !== u8.length) throw new Error('decodeWav: data chunk size does not match file length')
+  }
   if (dataLen % blockAlign !== 0) throw new Error('decodeWav: data length not aligned to block size')
 
   // 实际可用样本帧数（dataLen 可能超过实际 buffer，取较小者）
@@ -180,7 +237,7 @@ export function decodeWav(buffer: ArrayBuffer | Uint8Array): WavDecodeResult {
     for (let i = 0; i < frames; i++) {
       for (let c = 0; c < channels; c++) {
         const v = view.getInt16(p, true)
-        out[c][i] = v / 32767
+        out[c][i] = littleEndian && v === -32768 ? -1 : v / 32767
         p += 2
       }
     }
