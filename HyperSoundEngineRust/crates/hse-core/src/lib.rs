@@ -24,8 +24,8 @@ pub mod deesser;
 pub mod dynamic_eq;
 pub mod engine_chain;
 pub mod eq_chain;
-pub mod fft;
 pub mod fdn_reverb;
+pub mod fft;
 pub mod hse_stretch;
 pub mod limiter;
 pub mod loudness_comp;
@@ -34,7 +34,9 @@ pub mod mid_side;
 pub mod midi;
 pub mod mod_effects;
 pub mod modulation_matrix;
+pub mod params;
 pub mod reverb_simple;
+pub mod scenes;
 pub mod share_codec;
 pub mod wav;
 
@@ -117,7 +119,11 @@ impl Stage for StageChain {
     }
 
     fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
-        debug_assert_eq!(left.len(), right.len(), "左右声道块长必须一致（Stage 契约）");
+        debug_assert_eq!(
+            left.len(),
+            right.len(),
+            "左右声道块长必须一致（Stage 契约）"
+        );
         for stage in self.stages.iter_mut() {
             stage.process(left, right);
         }

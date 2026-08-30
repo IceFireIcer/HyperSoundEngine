@@ -1,0 +1,389 @@
+{
+  "schemaVersion": 1,
+  "sampleRate": 48000,
+  "params": {
+    "sampleRate": 48000,
+    "eq": {
+      "enabled": true,
+      "mode": "pro",
+      "simpleBands": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "proBands": [
+        {
+          "frequency": 31.5,
+          "gain": 0,
+          "q": 1.1
+        },
+        {
+          "frequency": 63,
+          "gain": 0,
+          "q": 1.1
+        },
+        {
+          "frequency": 125,
+          "gain": 0,
+          "q": 1.1
+        },
+        {
+          "frequency": 250,
+          "gain": 0,
+          "q": 1.1
+        },
+        {
+          "frequency": 500,
+          "gain": 0,
+          "q": 1.1
+        },
+        {
+          "frequency": 1000,
+          "gain": 0,
+          "q": 1.1
+        },
+        {
+          "frequency": 2000,
+          "gain": 0,
+          "q": 1.1
+        },
+        {
+          "frequency": 4000,
+          "gain": 0,
+          "q": 1.1
+        },
+        {
+          "frequency": 8000,
+          "gain": 0,
+          "q": 1.1
+        },
+        {
+          "frequency": 16000,
+          "gain": 0,
+          "q": 1.1
+        }
+      ],
+      "bandCount": 10,
+      "qCompensation": true,
+      "locked": false
+    },
+    "deesser": {
+      "enabled": false,
+      "centerHz": 6000,
+      "q": 0.7,
+      "thresholdDb": -30,
+      "ratio": 8,
+      "attackMs": 1,
+      "releaseMs": 80,
+      "splitBand": true,
+      "mix": 1,
+      "sidechainEnabled": false
+    },
+    "compressor": {
+      "enabled": false,
+      "thresholdDb": -20,
+      "ratio": 4,
+      "kneeDb": 6,
+      "attackMs": 10,
+      "releaseMs": 150,
+      "makeupDb": 0,
+      "outputGain": 1,
+      "sidechainEnabled": false
+    },
+    "nightMode": {
+      "enabled": false,
+      "amount": 0
+    },
+    "bassEnhancer": {
+      "enabled": false,
+      "cutoffHz": 90,
+      "q": 0.7,
+      "harmonicType": "odd",
+      "harmonicGain": 0.6,
+      "mix": 0.5,
+      "levelDb": 0,
+      "lowBoostDb": 0
+    },
+    "reverb": {
+      "enabled": false,
+      "mode": "algorithmic",
+      "algorithmic": {
+        "type": "hall",
+        "roomSize": 0.5,
+        "damping": 0.5,
+        "wet": 0.3,
+        "dry": 0.7,
+        "preDelayMs": 0,
+        "width": 1
+      },
+      "convolution": {
+        "ir": null,
+        "irName": null,
+        "mix": 0.3,
+        "preDelayMs": 0,
+        "dePeriodize": true
+      }
+    },
+    "surround3d": {
+      "enabled": false,
+      "distance": 0.5,
+      "speed": 1,
+      "angle": 0,
+      "direction": 1
+    },
+    "loudnessCompensation": {
+      "enabled": false,
+      "mode": "auto",
+      "preset": "flat",
+      "bands": [],
+      "volumePercent": 80,
+      "maxBoostDb": 12,
+      "smoothingSeconds": 0.2
+    },
+    "loudnessNormalization": {
+      "enabled": false,
+      "targetLufs": -14,
+      "maxGainDb": 9,
+      "minGainDb": -9,
+      "useRealtimeMeter": true,
+      "externalGainDb": 0
+    },
+    "limiter": {
+      "enabled": true,
+      "thresholdDb": -1,
+      "lookaheadMs": 5,
+      "attackMs": 0.5,
+      "releaseMs": 150,
+      "truePeak": true
+    },
+    "ieq": {
+      "enabled": false,
+      "strength": 0.5,
+      "targetCurve": "flat",
+      "timeConstantSec": 3
+    },
+    "dynamicEq": {
+      "enabled": false,
+      "strength": 0.5,
+      "thresholdDb": -20,
+      "ratio": 2,
+      "attackMs": 20,
+      "releaseMs": 200,
+      "bands": [
+        {
+          "enabled": true,
+          "targetGainDb": 0
+        },
+        {
+          "enabled": true,
+          "targetGainDb": 0
+        },
+        {
+          "enabled": true,
+          "targetGainDb": 0
+        },
+        {
+          "enabled": true,
+          "targetGainDb": 0
+        },
+        {
+          "enabled": true,
+          "targetGainDb": 0
+        }
+      ]
+    },
+    "pitch": {
+      "enabled": false,
+      "semitones": 0,
+      "rate": 1,
+      "voiceBalance": 0
+    },
+    "modulation": {
+      "enabled": false,
+      "lfo": {
+        "enabled": false,
+        "shape": "sine",
+        "rateHz": 1,
+        "depth": 0.5
+      },
+      "envelope": {
+        "enabled": false,
+        "attackMs": 10,
+        "releaseMs": 200,
+        "amount": 0.5
+      },
+      "routes": []
+    },
+    "modEffects": {
+      "delay": {
+        "enabled": false,
+        "delayMs": 250,
+        "feedback": 0.3,
+        "mix": 0.3
+      },
+      "chorus": {
+        "enabled": false,
+        "rateHz": 1,
+        "depthMs": 3,
+        "mix": 0.4
+      },
+      "flanger": {
+        "enabled": false,
+        "rateHz": 0.5,
+        "depthMs": 2,
+        "feedback": 0.4,
+        "mix": 0.5
+      },
+      "phaser": {
+        "enabled": false,
+        "rateHz": 0.5,
+        "depth": 0.5,
+        "feedback": 0.4,
+        "mix": 0.5,
+        "stages": 4
+      },
+      "tremolo": {
+        "enabled": false,
+        "rateHz": 5,
+        "depth": 0.5,
+        "mix": 1
+      }
+    },
+    "hearing": {
+      "enabled": false
+    },
+    "spatial": {
+      "mode": "off",
+      "masterGain": 0.9,
+      "instant": {
+        "spreadDeg": 60,
+        "amount": 0.7,
+        "room": "studio",
+        "roomAmount": 0.15,
+        "multichannelAuto": false
+      },
+      "headLocked": {
+        "layout": "51",
+        "speakers": [
+          {
+            "azimuthDeg": 0,
+            "elevationDeg": 0,
+            "distance": 1.5,
+            "gain": 1,
+            "size": 0
+          },
+          {
+            "azimuthDeg": -30,
+            "elevationDeg": 0,
+            "distance": 1.5,
+            "gain": 1,
+            "size": 0
+          },
+          {
+            "azimuthDeg": 30,
+            "elevationDeg": 0,
+            "distance": 1.5,
+            "gain": 1,
+            "size": 0
+          },
+          {
+            "azimuthDeg": -110,
+            "elevationDeg": 0,
+            "distance": 1.5,
+            "gain": 1,
+            "size": 0
+          },
+          {
+            "azimuthDeg": 110,
+            "elevationDeg": 0,
+            "distance": 1.5,
+            "gain": 1,
+            "size": 0
+          }
+        ],
+        "heightLayer": true,
+        "bottomLayer": true,
+        "routes": []
+      },
+      "world": {
+        "moveSpeed": 2,
+        "listener": {
+          "position": {
+            "x": 0,
+            "y": 1.6,
+            "z": 0
+          },
+          "yaw": 0,
+          "pitch": 0,
+          "roll": 0
+        },
+        "sources": [
+          {
+            "id": "vocal",
+            "position": {
+              "x": -2,
+              "y": 1.6,
+              "z": 4
+            },
+            "gain": 1,
+            "size": 0
+          },
+          {
+            "id": "guitar",
+            "position": {
+              "x": -5,
+              "y": 1.6,
+              "z": 6
+            },
+            "gain": 1,
+            "size": 0
+          },
+          {
+            "id": "drums",
+            "position": {
+              "x": 3,
+              "y": 1.6,
+              "z": 7
+            },
+            "gain": 1,
+            "size": 0
+          },
+          {
+            "id": "ambience",
+            "position": {
+              "x": 0,
+              "y": 2.5,
+              "z": 10
+            },
+            "gain": 0.6,
+            "size": 0.5
+          }
+        ],
+        "playhead": 0,
+        "trajectories": [],
+        "occlusion": 0
+      },
+      "stage": {
+        "preset": "stage",
+        "seat": "middle",
+        "roomSize": 1,
+        "reverbAmount": 0.35,
+        "customSources": []
+      },
+      "ambience": {
+        "enabled": false,
+        "amount": 0.3
+      },
+      "convolution": "partitioned",
+      "hrtfInterp": "nearest",
+      "distanceModel": "inverse",
+      "refDistance": 1,
+      "maxDistance": 50
+    },
+    "stereoWidth": 1,
+    "sceneId": null,
+    "customized": false
+  }
+}

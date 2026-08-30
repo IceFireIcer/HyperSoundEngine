@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- **参数/场景共享契约与 Rust 双向分享能力**：新增 `specs/engine/params.md`、`scenes.md` 及 3 个由 TS 事实源生成的结构化冻结夹具，固定完整默认参数、12 个内置场景和 14 个 HSE2 编码 case；Rust 新增默认参数/场景生成 API 与 HSE2 encode，覆盖固定键序、Crockford Base32、UTF-16 FNV、未知字段、非 ASCII、负零和“编码保留原值、解码再 clamp”的跨语言逐字符契约。
+
 ### Fixed
 - **服务控制面契约与实时安全加固**：JSON-RPC 显式非法 `id`/`params` 在分派前拒绝且无副作用；start/stop 的 phase 通知在请求连接上严格先于响应，并向其他连接广播一次；`setParams` 运行态候选构链、命令投递与规范化 `lastParams` 改为事务提交，非运行态保留延迟构链兼容语义；公开 stop 不再接受 starting 状态。
 - **稳态零分配机械门禁**：Convolver 固定容量 pending 队列移除处理期扩容，服务热换旧链经 SPSC 回收环转交专用非实时线程析构；Rust 分配器测试同时统计 alloc/realloc/dealloc，覆盖卷积、默认链和代表性全开链；TS 调制矩阵新增 `processBlockInto` 供引擎复用预分配结果，同时保留公开 `processBlock` 的独立快照语义。

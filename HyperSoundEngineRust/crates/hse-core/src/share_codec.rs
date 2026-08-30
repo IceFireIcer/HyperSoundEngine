@@ -1,9 +1,8 @@
-//! share_codec —— 分享串**解码**管线（Phase 3 批次二 · 第 4 项：旧分享串在 Rust 支线可解析）。
+//! share_codec —— 分享串编解码管线（Phase 3 批次二）。
 //!
 //! 行为事实标准是 TS 支线 `src/engine/ShareCodec.ts` 的解码路径（`decodeShareCode`），
-//! 本模块为其逐语义移植：两代传输 + 信封布局 + 校验和 + 差异载荷还原（rehydrate）
-//! + `sanitizeParams` 全量白名单清洗（含 spatial 深度清洗），错误消息逐字对齐。
-//! 编码端（encode）不在此模块范围——Rust 支线当前只有解码需求（旧分享串导入）。
+//! 本模块为其逐语义移植：v2 编码、两代传输解码、信封布局、校验和、差异载荷还原
+//! （rehydrate）+ `sanitizeParams` 全量白名单清洗（含 spatial 深度清洗），错误消息逐字对齐。
 //!
 //! # 序列化格式（两代并存，解码端全收；与 TS 头注释一致）
 //!
@@ -123,7 +122,10 @@ fn base64url_to_bytes(s: &str) -> Result<Vec<u8>, String> {
     for g in padded.chunks(4) {
         let idx = |ch: char| -> i32 {
             // JS：B64_ALPHABET.indexOf——'=' 不在字母表 → -1（错误）
-            B64_ALPHABET.iter().position(|&b| b == ch as u8).map_or(-1, |p| p as i32)
+            B64_ALPHABET
+                .iter()
+                .position(|&b| b == ch as u8)
+                .map_or(-1, |p| p as i32)
         };
         let c0 = idx(g[0]);
         let c1 = idx(g[1]);
@@ -151,10 +153,44 @@ fn base64url_to_bytes(s: &str) -> Result<Vec<u8>, String> {
 fn is_js_regex_whitespace(c: char) -> bool {
     matches!(
         c,
-        '\t' | '\n' | '\u{b}' | '\u{c}' | '\r' | ' ' | '\u{a0}' | '\u{1680}'
-            | '\u{2000}'..='\u{200a}' | '\u{2028}' | '\u{2029}' | '\u{202f}' | '\u{205f}'
-            | '\u{3000}' | '\u{feff}'
+        '\t' | '\n' | '\u{b}' | '\u{c}' | '\r' | ' ' | '\u{a0}' | '\u{1680}' | '\u{2000}'
+            ..='\u{200a}'
+                | '\u{2028}'
+                | '\u{2029}'
+                | '\u{202f}'
+                | '\u{205f}'
+                | '\u{3000}'
+                | '\u{feff}'
     )
+}
+
+fn bytes_to_base32_crockford(bytes: &[u8]) -> String {
+    let mut acc: u32 = 0;
+    let mut bits = 0u32;
+    let mut out = String::new();
+    for &byte in bytes {
+        acc = (acc << 8) | u32::from(byte);
+        bits += 8;
+        while bits >= 5 {
+            out.push(B32_ALPHABET[((acc >> (bits - 5)) & 0x1f) as usize] as char);
+            bits -= 5;
+        }
+    }
+    if bits > 0 {
+        out.push(B32_ALPHABET[((acc << (5 - bits)) & 0x1f) as usize] as char);
+    }
+    out
+}
+
+fn group_code(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + s.len() / 5);
+    for (i, ch) in s.chars().enumerate() {
+        if i > 0 && i % 5 == 0 {
+            out.push('-');
+        }
+        out.push(ch);
+    }
+    out
 }
 
 /// Crockford Base32 → 字节；剥离由调用方完成，这里做大小写归一
@@ -189,6 +225,342 @@ fn base32_crockford_to_bytes(s: &str) -> Result<Vec<u8>, String> {
 // ---------------------------------------------------------------------------
 // 差异载荷还原（shareRehydrate）
 // ---------------------------------------------------------------------------
+
+fn share_delta(base: &Value, full: &Value) -> Option<Value> {
+    match (base, full) {
+        (Value::Object(b), Value::Object(f)) => {
+            let mut out = Map::new();
+            for (k, fv) in f {
+                match b.get(k).and_then(|bv| share_delta(bv, fv)) {
+                    Some(delta) => {
+                        out.insert(k.clone(), delta);
+                    }
+                    None if !b.contains_key(k) => {
+                        out.insert(k.clone(), fv.clone());
+                    }
+                    None => {}
+                }
+            }
+            (!out.is_empty()).then_some(Value::Object(out))
+        }
+        _ if js_json_equal(base, full) => None,
+        _ => Some(full.clone()),
+    }
+}
+
+fn js_json_equal(a: &Value, b: &Value) -> bool {
+    js_stringify(a) == js_stringify(b)
+}
+
+fn ordered_keys(path: &[&str]) -> Option<&'static [&'static str]> {
+    Some(match path {
+        [] => &[
+            "sampleRate",
+            "eq",
+            "deesser",
+            "compressor",
+            "nightMode",
+            "bassEnhancer",
+            "reverb",
+            "surround3d",
+            "loudnessCompensation",
+            "loudnessNormalization",
+            "limiter",
+            "ieq",
+            "dynamicEq",
+            "pitch",
+            "modulation",
+            "modEffects",
+            "hearing",
+            "spatial",
+            "stereoWidth",
+            "sceneId",
+            "customized",
+        ],
+        ["eq"] => &[
+            "enabled",
+            "mode",
+            "simpleBands",
+            "proBands",
+            "bandCount",
+            "qCompensation",
+            "locked",
+        ],
+        ["eq", "proBands", "*"] => &["frequency", "gain", "q"],
+        ["deesser"] => &[
+            "enabled",
+            "centerHz",
+            "q",
+            "thresholdDb",
+            "ratio",
+            "attackMs",
+            "releaseMs",
+            "splitBand",
+            "mix",
+            "sidechainEnabled",
+        ],
+        ["compressor"] => &[
+            "enabled",
+            "thresholdDb",
+            "ratio",
+            "kneeDb",
+            "attackMs",
+            "releaseMs",
+            "makeupDb",
+            "outputGain",
+            "sidechainEnabled",
+        ],
+        ["nightMode"] => &["enabled", "amount"],
+        ["bassEnhancer"] => &[
+            "enabled",
+            "cutoffHz",
+            "q",
+            "harmonicType",
+            "harmonicGain",
+            "mix",
+            "levelDb",
+            "lowBoostDb",
+        ],
+        ["reverb"] => &["enabled", "mode", "algorithmic", "convolution"],
+        ["reverb", "algorithmic"] => &[
+            "type",
+            "roomSize",
+            "damping",
+            "wet",
+            "dry",
+            "preDelayMs",
+            "width",
+        ],
+        ["reverb", "convolution"] => &["irName", "mix", "preDelayMs", "dePeriodize"],
+        ["surround3d"] => &["enabled", "distance", "speed", "angle", "direction"],
+        ["loudnessCompensation"] => &[
+            "enabled",
+            "mode",
+            "preset",
+            "bands",
+            "volumePercent",
+            "maxBoostDb",
+            "smoothingSeconds",
+        ],
+        ["loudnessCompensation", "bands", "*"] => &["frequency", "gain"],
+        ["loudnessNormalization"] => &[
+            "enabled",
+            "targetLufs",
+            "maxGainDb",
+            "minGainDb",
+            "useRealtimeMeter",
+            "externalGainDb",
+        ],
+        ["limiter"] => &[
+            "enabled",
+            "thresholdDb",
+            "lookaheadMs",
+            "attackMs",
+            "releaseMs",
+            "truePeak",
+        ],
+        ["ieq"] => &["enabled", "strength", "targetCurve", "timeConstantSec"],
+        ["dynamicEq"] => &[
+            "enabled",
+            "strength",
+            "thresholdDb",
+            "ratio",
+            "attackMs",
+            "releaseMs",
+            "bands",
+        ],
+        ["dynamicEq", "bands", "*"] => &["enabled", "targetGainDb"],
+        ["pitch"] => &["enabled", "semitones", "rate", "voiceBalance"],
+        ["modulation"] => &["enabled", "lfo", "envelope", "routes"],
+        ["modulation", "lfo"] => &["enabled", "shape", "rateHz", "depth"],
+        ["modulation", "envelope"] => &["enabled", "attackMs", "releaseMs", "amount"],
+        ["modulation", "routes", "*"] => &["source", "target", "amount", "offset"],
+        ["modEffects"] => &["delay", "chorus", "flanger", "phaser", "tremolo"],
+        ["modEffects", "delay"] => &["enabled", "delayMs", "feedback", "mix"],
+        ["modEffects", "chorus"] => &["enabled", "rateHz", "depthMs", "mix"],
+        ["modEffects", "flanger"] => &["enabled", "rateHz", "depthMs", "feedback", "mix"],
+        ["modEffects", "phaser"] => &["enabled", "rateHz", "depth", "feedback", "mix", "stages"],
+        ["modEffects", "tremolo"] => &["enabled", "rateHz", "depth", "mix"],
+        ["hearing"] => &["enabled"],
+        ["spatial"] => &[
+            "mode",
+            "masterGain",
+            "instant",
+            "headLocked",
+            "world",
+            "stage",
+            "ambience",
+            "convolution",
+            "hrtfInterp",
+            "distanceModel",
+            "refDistance",
+            "maxDistance",
+        ],
+        ["spatial", "instant"] => &[
+            "spreadDeg",
+            "amount",
+            "room",
+            "roomAmount",
+            "multichannelAuto",
+        ],
+        ["spatial", "headLocked"] => {
+            &["layout", "speakers", "heightLayer", "bottomLayer", "routes"]
+        }
+        ["spatial", "headLocked", "speakers", "*"] => &[
+            "azimuthDeg",
+            "elevationDeg",
+            "distance",
+            "gain",
+            "size",
+            "muted",
+        ],
+        ["spatial", "world"] => &[
+            "moveSpeed",
+            "listener",
+            "sources",
+            "playhead",
+            "trajectories",
+            "occlusion",
+        ],
+        ["spatial", "world", "listener"] => &["position", "yaw", "pitch", "roll"],
+        ["spatial", "world", "listener", "position"] => &["x", "y", "z"],
+        ["spatial", "world", "sources", "*"] | ["spatial", "stage", "customSources", "*"] => {
+            &["id", "position", "gain", "size"]
+        }
+        ["spatial", "world", "sources", "*", "position"]
+        | ["spatial", "stage", "customSources", "*", "position"] => &["x", "y", "z"],
+        ["spatial", "world", "trajectories", "*"] => &["sourceId", "keyframes"],
+        ["spatial", "world", "trajectories", "*", "keyframes", "*"] => &["t", "position"],
+        ["spatial", "world", "trajectories", "*", "keyframes", "*", "position"] => &["x", "y", "z"],
+        ["spatial", "stage"] => &[
+            "preset",
+            "seat",
+            "roomSize",
+            "reverbAmount",
+            "customSources",
+        ],
+        ["spatial", "ambience"] => &["enabled", "amount"],
+        _ => return None,
+    })
+}
+
+fn write_js_json(value: &Value, path: &mut Vec<&'static str>, out: &mut String) {
+    match value {
+        Value::Null => out.push_str("null"),
+        Value::Bool(v) => out.push_str(if *v { "true" } else { "false" }),
+        Value::Number(n) => {
+            let x = n.as_f64().unwrap_or(0.0);
+            if x == 0.0 {
+                out.push('0');
+            } else {
+                out.push_str(&n.to_string());
+            }
+        }
+        Value::String(s) => {
+            out.push_str(&serde_json::to_string(s).expect("字符串 JSON 序列化不可失败"))
+        }
+        Value::Array(values) => {
+            out.push('[');
+            for (i, item) in values.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                path.push("*");
+                write_js_json(item, path, out);
+                path.pop();
+            }
+            out.push(']');
+        }
+        Value::Object(obj) => {
+            out.push('{');
+            let mut first = true;
+            let path_slice = path.as_slice();
+            if let Some(keys) = ordered_keys(path_slice) {
+                for key in keys {
+                    if let Some(item) = obj.get(*key) {
+                        if !first {
+                            out.push(',');
+                        }
+                        first = false;
+                        out.push_str(&serde_json::to_string(key).unwrap());
+                        out.push(':');
+                        path.push(key);
+                        write_js_json(item, path, out);
+                        path.pop();
+                    }
+                }
+            } else {
+                for (key, item) in obj {
+                    if !first {
+                        out.push(',');
+                    }
+                    first = false;
+                    out.push_str(&serde_json::to_string(key).unwrap());
+                    out.push(':');
+                    write_js_json(item, path, out);
+                }
+            }
+            out.push('}');
+        }
+    }
+}
+
+fn js_stringify(value: &Value) -> String {
+    let mut out = String::new();
+    write_js_json(value, &mut Vec::new(), &mut out);
+    out
+}
+
+fn js_stringify_delta(value: &Value) -> String {
+    let Some(obj) = value.as_object() else {
+        return js_stringify(value);
+    };
+    let mut out = String::from("{");
+    let mut first = true;
+    for key in ordered_keys(&[]).expect("顶层键序已定义") {
+        if *key == "sampleRate" {
+            continue;
+        }
+        if let Some(item) = obj.get(*key) {
+            if !first {
+                out.push(',');
+            }
+            first = false;
+            out.push_str(&serde_json::to_string(key).unwrap());
+            out.push(':');
+            write_js_json(item, &mut vec![key], &mut out);
+        }
+    }
+    if let Some(sample_rate) = obj.get("sampleRate") {
+        if !first {
+            out.push(',');
+        }
+        out.push_str("\"sampleRate\":");
+        write_js_json(sample_rate, &mut vec!["sampleRate"], &mut out);
+    }
+    out.push('}');
+    out
+}
+
+fn to_share_object(params: &Value) -> Result<Value, String> {
+    let sample_rate = params
+        .get("sampleRate")
+        .and_then(Value::as_f64)
+        .filter(|x| x.is_finite())
+        .unwrap_or(48_000.0);
+    let skeleton = default_params_skeleton(sample_rate);
+    let mut share = share_rehydrate(&skeleton, params);
+    if let Some(spatial) = params.get("spatial") {
+        share["spatial"] = spatial.clone();
+    }
+    if let Some(conv) = share
+        .pointer_mut("/reverb/convolution")
+        .and_then(Value::as_object_mut)
+    {
+        conv.remove("ir");
+    }
+    Ok(share)
+}
 
 /// 差异载荷还原：以 base（默认参数骨架）为底、delta 覆盖；数组与叶子整体替换；
 /// 未知键与 v1 白名单语义一致——静默丢弃（篡改另有校验和兜底）。
@@ -235,7 +607,13 @@ fn jnum(x: f64) -> Value {
 fn clamp_num(v: Option<&Value>, min: f64, max: f64, def: f64) -> Value {
     match v.and_then(Value::as_f64) {
         Some(x) if x.is_finite() => {
-            let c = if x < min { min } else if x > max { max } else { x };
+            let c = if x < min {
+                min
+            } else if x > max {
+                max
+            } else {
+                x
+            };
             jnum(c)
         }
         _ => jnum(def),
@@ -298,7 +676,13 @@ fn num_array(v: Option<&Value>, min: f64, max: f64, def: &[f64], max_len: usize)
                     break;
                 }
                 if let Some(xv) = x.as_f64().filter(|f| f.is_finite()) {
-                    let c = if xv < min { min } else if xv > max { max } else { xv };
+                    let c = if xv < min {
+                        min
+                    } else if xv > max {
+                        max
+                    } else {
+                        xv
+                    };
                     out.push(jnum(c));
                 }
             }
@@ -310,14 +694,20 @@ fn num_array(v: Option<&Value>, min: f64, max: f64, def: &[f64], max_len: usize)
 
 /// 专业 10 段默认频点（与 src/types.ts PRO_EQ_DEFAULT_BANDS 一致）。
 fn default_eq_pro_bands() -> Vec<Value> {
-    [31.5, 63.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0]
-        .iter()
-        .map(|&f| json!({ "frequency": jnum(f), "gain": jnum(0.0), "q": jnum(1.1) }))
-        .collect()
+    [
+        31.5, 63.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0,
+    ]
+    .iter()
+    .map(|&f| json!({ "frequency": jnum(f), "gain": jnum(0.0), "q": jnum(1.1) }))
+    .collect()
 }
 
 /// 取 section：raw[key] 为对象则返回之，否则返回空对象（TS `isObj(raw.x) ? raw.x : {}`）。
-fn sec<'a>(obj: &'a Map<String, Value>, empty: &'a Map<String, Value>, key: &str) -> &'a Map<String, Value> {
+fn sec<'a>(
+    obj: &'a Map<String, Value>,
+    empty: &'a Map<String, Value>,
+    key: &str,
+) -> &'a Map<String, Value> {
     obj.get(key).and_then(Value::as_object).unwrap_or(empty)
 }
 
@@ -375,12 +765,8 @@ fn deep_sanitize_spatial(v: &Value, depth: usize) -> Option<Value> {
 /// hrtfInterp='nearest'、distanceModel='inverse'、refDistance=1、maxDistance=50；
 /// headLocked 默认 5.1 布局扬声器表（layouts.ts 单事实源，距离 1.5m）。
 pub fn default_spatial_settings() -> Value {
-    let speaker = |az: f64| {
-        json!({ "azimuthDeg": jnum(az), "elevationDeg": jnum(0.0), "distance": jnum(1.5), "gain": jnum(1.0), "size": jnum(0.0) })
-    };
-    let source = |id: &str, x: f64, y: f64, z: f64, gain: f64, size: f64| {
-        json!({ "id": id, "position": { "x": jnum(x), "y": jnum(y), "z": jnum(z) }, "gain": jnum(gain), "size": jnum(size) })
-    };
+    let speaker = |az: f64| json!({ "azimuthDeg": jnum(az), "elevationDeg": jnum(0.0), "distance": jnum(1.5), "gain": jnum(1.0), "size": jnum(0.0) });
+    let source = |id: &str, x: f64, y: f64, z: f64, gain: f64, size: f64| json!({ "id": id, "position": { "x": jnum(x), "y": jnum(y), "z": jnum(z) }, "gain": jnum(gain), "size": jnum(size) });
     json!({
         "mode": "off",
         "masterGain": jnum(0.9),
@@ -449,7 +835,11 @@ pub fn decode_spatial(raw: &Value) -> Value {
     let Some(Value::Object(o)) = deep_sanitize_spatial(raw, 0) else {
         return default_spatial_settings();
     };
-    let mode = one_of_str(o.get("mode"), &["off", "instant", "headLocked", "world", "stage"], "off");
+    let mode = one_of_str(
+        o.get("mode"),
+        &["off", "instant", "headLocked", "world", "stage"],
+        "off",
+    );
     // 关键子对象存在性校验：缺任一 → 默认（防半残结构进入引擎）
     for k in ["instant", "headLocked", "world", "stage", "ambience"] {
         if !matches!(o.get(k), Some(Value::Object(_))) {
@@ -469,11 +859,19 @@ pub fn decode_spatial(raw: &Value) -> Value {
     );
     for k in ["instant", "headLocked", "world", "stage", "ambience"] {
         let sub = o[k].as_object().expect("子对象存在性已校验");
-        out.insert(k.to_string(), merge_spread(d[k].as_object().expect("默认子对象"), sub));
+        out.insert(
+            k.to_string(),
+            merge_spread(d[k].as_object().expect("默认子对象"), sub),
+        );
     }
     out.insert(
         "convolution".to_string(),
-        one_of_str(o.get("convolution"), &["partitioned", "time"], "partitioned").into(),
+        one_of_str(
+            o.get("convolution"),
+            &["partitioned", "time"],
+            "partitioned",
+        )
+        .into(),
     );
     out.insert(
         "hrtfInterp".to_string(),
@@ -481,10 +879,21 @@ pub fn decode_spatial(raw: &Value) -> Value {
     );
     out.insert(
         "distanceModel".to_string(),
-        one_of_str(o.get("distanceModel"), &["inverse", "linear", "exponential"], "inverse").into(),
+        one_of_str(
+            o.get("distanceModel"),
+            &["inverse", "linear", "exponential"],
+            "inverse",
+        )
+        .into(),
     );
-    out.insert("refDistance".to_string(), clamp_num(o.get("refDistance"), 0.1, 100.0, 1.0));
-    out.insert("maxDistance".to_string(), clamp_num(o.get("maxDistance"), 1.0, 200.0, 50.0));
+    out.insert(
+        "refDistance".to_string(),
+        clamp_num(o.get("refDistance"), 0.1, 100.0, 1.0),
+    );
+    out.insert(
+        "maxDistance".to_string(),
+        clamp_num(o.get("maxDistance"), 1.0, 200.0, 50.0),
+    );
     Value::Object(out)
 }
 
@@ -702,7 +1111,13 @@ pub fn sanitize_params(raw: &Value) -> Result<Value, String> {
     };
 
     // eq.simpleBands：5 段，缺失补 0
-    let mut simple = num_array(eq_raw.get("simpleBands"), -20.0, 20.0, &[0.0, 0.0, 0.0, 0.0, 0.0], 5);
+    let mut simple = num_array(
+        eq_raw.get("simpleBands"),
+        -20.0,
+        20.0,
+        &[0.0, 0.0, 0.0, 0.0, 0.0],
+        5,
+    );
     while simple.len() < 5 {
         simple.push(jnum(0.0));
     }
@@ -963,10 +1378,39 @@ pub fn sanitize_params(raw: &Value) -> Result<Value, String> {
     }))
 }
 
+// ---------------------------------------------------------------------------
+// 公开 API：v2 编码 + v1/v2 解码
+// ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// 公开 API：解码
-// ---------------------------------------------------------------------------
+/// 序列化为 v2 分享串。v1 保持只解码，不提供编码入口。
+pub fn encode_share_code(params: &Value) -> Result<String, String> {
+    let full = to_share_object(params)?;
+    let sample_rate = full
+        .get("sampleRate")
+        .and_then(Value::as_f64)
+        .unwrap_or(48_000.0);
+    let base = default_params_skeleton(sample_rate);
+    let mut delta = share_delta(&base, &full)
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default();
+    let sample_rate = full
+        .get("sampleRate")
+        .cloned()
+        .unwrap_or_else(|| jnum(48_000.0));
+    delta.insert("sampleRate".to_string(), sample_rate);
+    let json = js_stringify_delta(&Value::Object(delta));
+    let payload = format!(
+        "{}:{}:{}",
+        SHARE_CODEC_VERSION,
+        checksum_of("2", &json),
+        json
+    );
+    Ok(format!(
+        "{}-{}",
+        SHARE_CODE_PREFIX,
+        group_code(&bytes_to_base32_crockford(payload.as_bytes()))
+    ))
+}
 
 /// 反序列化：HSE2（v2 差异载荷）与 v1 旧串（base64url 全量载荷）双路全收；
 /// 版本/校验和验证 + 白名单字段 + 数值 clamp；非法输入返回 Err（消息与 TS 逐字一致）。
@@ -983,7 +1427,10 @@ pub fn decode_share_code(s: &str) -> Result<Value, String> {
     let text: String = if chars.len() >= 4 && is_hse2_prefix(&chars[..4]) {
         // v2 传输：HSE2- 分组 Crockford（剥前缀与全部分隔符/空白）
         let rest: String = chars[4..].iter().collect();
-        let stripped: String = rest.chars().filter(|c| *c != '-' && !is_js_regex_whitespace(*c)).collect();
+        let stripped: String = rest
+            .chars()
+            .filter(|c| *c != '-' && !is_js_regex_whitespace(*c))
+            .collect();
         let bytes = base32_crockford_to_bytes(&stripped)?;
         String::from_utf8_lossy(&bytes).into_owned()
     } else {
@@ -1005,9 +1452,15 @@ pub fn decode_share_code(s: &str) -> Result<Value, String> {
     }
     let bytes = text.as_bytes();
     let cs_start = first_colon + 1;
-    let checksum: &[u8] = if bytes.len() >= cs_start + 8 { &bytes[cs_start..cs_start + 8] } else { &[] };
-    let checksum_valid =
-        checksum.len() == 8 && checksum.iter().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+    let checksum: &[u8] = if bytes.len() >= cs_start + 8 {
+        &bytes[cs_start..cs_start + 8]
+    } else {
+        &[]
+    };
+    let checksum_valid = checksum.len() == 8
+        && checksum
+            .iter()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
     if !checksum_valid {
         return Err("invalid share code: bad checksum format".to_string());
     }
@@ -1077,7 +1530,8 @@ mod tests {
             }
             (Value::Object(x), Value::Object(y)) => {
                 x.len() == y.len()
-                    && x.iter().all(|(k, v)| y.get(k).map_or(false, |w| json_eq(v, w)))
+                    && x.iter()
+                        .all(|(k, v)| y.get(k).map_or(false, |w| json_eq(v, w)))
             }
             (Value::Null, Value::Null) => true,
             (Value::Bool(x), Value::Bool(y)) => x == y,
@@ -1095,7 +1549,10 @@ mod tests {
         assert_eq!(fnv1a32_utf16(""), 0x811c_9dc5);
         assert_eq!(fnv1a32_utf16("hello"), 0x4f9f_2cab);
         assert_eq!(fnv1a32_utf16("2:{\"sampleRate\":48000}"), 0x9edd_696f);
-        assert_eq!(fnv1a32_utf16("2:{\"sceneId\":\"爵士 Club 🎵\"}"), 0xa3fd_9a03);
+        assert_eq!(
+            fnv1a32_utf16("2:{\"sceneId\":\"爵士 Club 🎵\"}"),
+            0xa3fd_9a03
+        );
         assert_eq!(fnv1a32_utf16("1:{\"sampleRate\":48000,\"deesser\":{\"enabled\":true,\"thresholdDb\":-40},\"limiter\":{\"thresholdDb\":-0.5}}"), 0xd2e2_cebb);
     }
 
@@ -1116,7 +1573,10 @@ mod tests {
         // "10" → 5+5 位取 8 位：acc=(1<<5)|0=32 → (32>>2)&0xff = 8
         assert_eq!(base32_crockford_to_bytes("10").unwrap(), vec![8u8]);
         // 大小写不敏感 + I/L→1、O→0、U→V
-        assert_eq!(base32_crockford_to_bytes("iLoU").unwrap(), base32_crockford_to_bytes("110V").unwrap());
+        assert_eq!(
+            base32_crockford_to_bytes("iLoU").unwrap(),
+            base32_crockford_to_bytes("110V").unwrap()
+        );
         assert!(base32_crockford_to_bytes("!!!!").is_err());
         assert_eq!(
             base32_crockford_to_bytes("übel").unwrap_err(),
@@ -1155,7 +1615,10 @@ mod tests {
     }
 
     fn case(id: &str) -> Value {
-        goldens().get(id).cloned().unwrap_or_else(|| panic!("缺少 golden case: {}", id))
+        goldens()
+            .get(id)
+            .cloned()
+            .unwrap_or_else(|| panic!("缺少 golden case: {}", id))
     }
 
     fn assert_ok_case(id: &str) {
@@ -1179,7 +1642,12 @@ mod tests {
             Ok(v) => panic!("[{}] 应报错，实际解码成功: {}", id, v),
             Err(msg) => {
                 // 错误消息与 node decodeShareCode 逐字对齐（golden want 即 node 真实消息）
-                assert_eq!(msg, c["want"].as_str().unwrap(), "[{}] 错误消息与 TS 不一致", id);
+                assert_eq!(
+                    msg,
+                    c["want"].as_str().unwrap(),
+                    "[{}] 错误消息与 TS 不一致",
+                    id
+                );
             }
         }
     }
@@ -1276,7 +1744,13 @@ mod tests {
         assert_ok_case("v1_truncate");
         assert_ok_case("v1_emoji_truncate");
         let got = decode_share_code(case("v1_truncate")["code"].as_str().unwrap()).unwrap();
-        assert!(got["reverb"]["convolution"]["irName"].as_str().unwrap().len() <= 256);
+        assert!(
+            got["reverb"]["convolution"]["irName"]
+                .as_str()
+                .unwrap()
+                .len()
+                <= 256
+        );
         // 40 个 emoji（80 个 UTF-16 码元）截到 64 码元 = 32 个 emoji
         let got2 = decode_share_code(case("v1_emoji_truncate")["code"].as_str().unwrap()).unwrap();
         assert_eq!(got2["sceneId"].as_str().unwrap().chars().count(), 32);
@@ -1331,14 +1805,25 @@ mod tests {
         assert_ok_case("v1_spatial_null_in_array");
         assert_ok_case("v1_spatial_nonobj");
         assert_ok_case("v1_spatial_missing_sub");
-        let got = decode_share_code(case("v1_spatial_null_in_array")["code"].as_str().unwrap()).unwrap();
+        let got =
+            decode_share_code(case("v1_spatial_null_in_array")["code"].as_str().unwrap()).unwrap();
         let def = default_spatial_settings();
-        assert!(json_eq(&got["spatial"], &def), "整体非法的 spatial 应回落默认 off");
+        assert!(
+            json_eq(&got["spatial"], &def),
+            "整体非法的 spatial 应回落默认 off"
+        );
 
         let rich = decode_share_code(case("v1_spatial_rich")["code"].as_str().unwrap()).unwrap();
         assert_eq!(rich["spatial"]["mode"].as_str(), Some("stage"));
-        assert_eq!(rich["spatial"]["instant"]["extraKey"].as_str(), Some("kept"), "子对象额外键保留");
-        assert!(rich["spatial"]["instant"].get("constructor").is_none(), "危险键丢弃");
+        assert_eq!(
+            rich["spatial"]["instant"]["extraKey"].as_str(),
+            Some("kept"),
+            "子对象额外键保留"
+        );
+        assert!(
+            rich["spatial"]["instant"].get("constructor").is_none(),
+            "危险键丢弃"
+        );
         assert!(rich["spatial"].get("extraTop").is_none(), "顶层额外键丢弃");
     }
 
@@ -1351,7 +1836,13 @@ mod tests {
         let got = decode_share_code(case("v1_probands_25")["code"].as_str().unwrap()).unwrap();
         assert_eq!(got["eq"]["proBands"].as_array().unwrap().len(), 20);
         let got2 = decode_share_code(case("v1_lc_bands_40")["code"].as_str().unwrap()).unwrap();
-        assert_eq!(got2["loudnessCompensation"]["bands"].as_array().unwrap().len(), 32);
+        assert_eq!(
+            got2["loudnessCompensation"]["bands"]
+                .as_array()
+                .unwrap()
+                .len(),
+            32
+        );
         let got3 = decode_share_code(case("v1_routes_20")["code"].as_str().unwrap()).unwrap();
         assert_eq!(got3["modulation"]["routes"].as_array().unwrap().len(), 16);
     }
@@ -1362,7 +1853,10 @@ mod tests {
         assert_ok_case("v1_multibyte_fnv");
         let got = decode_share_code(case("v1_multibyte_fnv")["code"].as_str().unwrap()).unwrap();
         assert_eq!(got["sceneId"].as_str(), Some("爵士 Club 🎵"));
-        assert_eq!(got["reverb"]["convolution"]["irName"].as_str(), Some("教堂·hall"));
+        assert_eq!(
+            got["reverb"]["convolution"]["irName"].as_str(),
+            Some("教堂·hall")
+        );
     }
 
     /// dynamicEq bands：非对象元素按默认带处理、超出 5 带截断、缺字段回落
@@ -1373,10 +1867,89 @@ mod tests {
         let got = decode_share_code(case("v1_clamps_edge")["code"].as_str().unwrap()).unwrap();
         let bands = got["dynamicEq"]["bands"].as_array().unwrap();
         assert_eq!(bands.len(), 5);
-        assert!(bands[0]["enabled"].as_bool().unwrap(), "null 元素 → 默认带 enabled=true");
+        assert!(
+            bands[0]["enabled"].as_bool().unwrap(),
+            "null 元素 → 默认带 enabled=true"
+        );
         assert!(!bands[1]["enabled"].as_bool().unwrap());
         assert_eq!(bands[3]["targetGainDb"].as_f64(), Some(-12.0), "越界钳制");
     }
+
+    #[test]
+    fn v2编码_默认与未知字段_逐字符命中ts_golden() {
+        const DEFAULT: &str = "HSE2-68X3J-SB4CG-V3JDK-679XJ-4WV1D-NR6RS-AJC5T-6A8HT-6GW30-C1GFM";
+        let p = crate::params::default_params(48_000.0);
+        assert_eq!(encode_share_code(&p).unwrap(), DEFAULT);
+        assert!(json_eq(&decode_share_code(DEFAULT).unwrap(), &p));
+
+        let mut with_unknown = p;
+        with_unknown["unknownTop"] = json!(123);
+        with_unknown["eq"]["unknownNested"] = json!("x");
+        assert_eq!(encode_share_code(&with_unknown).unwrap(), DEFAULT);
+    }
+
+    #[test]
+    fn v2编码_非ascii与负零_逐字符命中ts_golden() {
+        const UNICODE: &str = "HSE2-68X38-D35CS-H64RB-579XJ-4WV3C-NQ6AJ-B448X-25SW8-PQJT7-AS08D-P7ARH-0Y2FR-XD925-GH66X-BKEHQ-PTTBT-CNJ24-EKME9-TPAB1-2EDGP-TW3CC-N962X-3548X-38E1G-60R7T";
+        let mut unicode = crate::params::default_params(48_000.0);
+        unicode["customized"] = json!(true);
+        unicode["sceneId"] = json!("爵士 Club 🎵");
+        assert_eq!(encode_share_code(&unicode).unwrap(), UNICODE);
+        assert!(json_eq(&decode_share_code(UNICODE).unwrap(), &unicode));
+
+        const EDGES: &str = "HSE2-68X30-C9P71-K3ECV-179XJ-4SBH4-8X7P8-KKD5P-Q0V35-89GPW-S3K48-X5PB9-J60P3-4C1C6-0P30B-1K5RT-NTZ9C-49P6J-VB9EH-JQ48H-TFCH7-8T3JC-NSPGV-VCCH2-648HT-5MV30-Z9C49-SQ8SB-JCNQN-ETB4E-HM24E-HG5GH-76RBD-E1P6A-MK1EH-JJ4EH-R60R3-0Z8";
+        let mut edges = crate::params::default_params(8_000.0);
+        edges["stereoWidth"] = json!(-0.0);
+        edges["surround3d"]["angle"] = json!(-0.0);
+        edges["eq"]["simpleBands"] = json!([-20, 20, 0, -0.0, 3.5]);
+        edges["limiter"]["thresholdDb"] = json!(-60);
+        assert_eq!(encode_share_code(&edges).unwrap(), EDGES);
+        let decoded = decode_share_code(EDGES).unwrap();
+        assert_eq!(decoded["sampleRate"], 8_000);
+        assert_eq!(decoded["stereoWidth"].as_f64(), Some(0.0));
+        assert_eq!(decoded["limiter"]["thresholdDb"], -60);
+    }
+
+    #[test]
+    fn v2编码_越界原值保留到解码阶段再钳制() {
+        const RAW: &str = "HSE2-68X3J-C9H6G-VK6D1-P79XJ-4V39D-NMQ8S-BJ48X-7P8KM-D1S6A-WV8DX-P68H3-248X2-TE9SF-MP24W-VMCNS-6AVTQ-D5J78-T1278-WJR8K-KC5PQ-0V35A-9GQ8S-9278W-KJE9S-74WQT";
+        let mut params = crate::params::default_params(48_000.0);
+        params["sampleRate"] = json!(999_999);
+        params["stereoWidth"] = json!(9);
+        params["limiter"]["thresholdDb"] = json!(-99);
+        assert_eq!(encode_share_code(&params).unwrap(), RAW);
+
+        let decoded = decode_share_code(RAW).unwrap();
+        assert_eq!(decoded["sampleRate"], 192_000);
+        assert_eq!(decoded["stereoWidth"], 2);
+        assert_eq!(decoded["limiter"]["thresholdDb"], -60);
+    }
+
+    #[test]
+    fn v2现有ts_golden_解码后重编码逐字符稳定() {
+        for id in [
+            "v2_default_44100",
+            "v2_default_48000",
+            "v2_neg_zero",
+            "v2_rich",
+        ] {
+            let original = case(id)["code"].as_str().unwrap().to_string();
+            let decoded = decode_share_code(&original).unwrap();
+            assert_eq!(encode_share_code(&decoded).unwrap(), original, "{id}");
+        }
+    }
+
+    #[test]
+    fn 十二场景_v2编码后往返() {
+        for scene in crate::scenes::builtin_scenes() {
+            let params = &scene["params"];
+            let code = encode_share_code(params).unwrap();
+            assert!(code.starts_with("HSE2-"));
+            assert!(
+                json_eq(&decode_share_code(&code).unwrap(), params),
+                "场景 {} 往返失败",
+                scene["id"]
+            );
+        }
+    }
 }
-
-

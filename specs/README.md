@@ -4,8 +4,9 @@
 > 位于仓库根，不属于任何单一支线。术语基线见仓库根 `CONTEXT.md`；
 > 行为事实标准当前为 TS 支线源码；本总纲与其下规格文档使用同一套领域语言。
 >
-> 当前基线：**18 份规格（17 DSP + 1 engine-chain）、72 组冻结向量 / 144 文件**；
-> Rust `hse-parity` 对拍门禁 **72/72 PASS**。
+> 当前基线：**20 份双支线核心规格（17 DSP + 3 engine）**，其中 18 份纳入音频对拍；
+> 音频冻结向量 **72 组 / 144 文件**，另有参数/场景结构化契约夹具 **3 个 JSON**；
+> Rust `hse-parity` 音频对拍门禁 **72/72 PASS**。
 
 ---
 
@@ -51,7 +52,10 @@ specs/
         ├── <dsp-module>.<case>.json / <dsp-module>.<case>.f32
         └── engine-chain.<case>.json / engine-chain.<case>.f32
 └── engine/
-    └── chain.md                     ← 引擎层规格：1–21 级主链；spatial.mode='off'
+    ├── chain.md                     ← 引擎层规格：1–21 级主链；spatial.mode='off'
+    ├── params.md                    ← 完整参数快照与默认值兼容契约
+    ├── scenes.md                    ← 12 个内置场景与分享串契约
+    └── vectors/                     ← 3 个结构化 JSON 夹具（默认参数/场景/分享串）
 ```
 
 ---
@@ -247,6 +251,6 @@ specs/
 - DSP 实现契约（TS 侧）：`src/dsp/API_SPEC.md`
 - 向量 Schema：[specs/schema/vector-case.schema.json](schema/vector-case.schema.json)
 - 模块规格：[biquad](dsp/biquad.md) ｜ [limiter](dsp/limiter.md) ｜ [reverb-simple](dsp/reverb-simple.md) ｜ [compressor](dsp/compressor.md) ｜ [bass-enhancer](dsp/bass-enhancer.md) ｜ [mid-side](dsp/mid-side.md) ｜ [eq-chain](dsp/eq-chain.md) ｜ [fdn-reverb](dsp/fdn-reverb.md) ｜ [deesser](dsp/deesser.md) ｜ [loudness-comp](dsp/loudness-comp.md) ｜ [dynamic-eq](dsp/dynamic-eq.md) ｜ [mod-effects](dsp/mod-effects.md) ｜ [fft](dsp/fft.md) ｜ [convolver](dsp/convolver.md) ｜ [modulation-matrix](dsp/modulation-matrix.md) ｜ [hse-stretch](dsp/hse-stretch.md) ｜ [lufs-meter](dsp/lufs-meter.md)
-- 引擎链规格：[engine-chain](engine/chain.md)（第 1–21 级；`spatial.mode='off'`）
+- 引擎规格：[engine-chain](engine/chain.md)（第 1–21 级；`spatial.mode='off'`）｜[params](engine/params.md)（完整参数快照）｜[scenes](engine/scenes.md)（12 个内置场景与分享串）
 - 服务层·控制面契约：[service/control-plane.md](service/control-plane.md)
 - 服务层·推流协议设计：[service/push-stream.md](service/push-stream.md)

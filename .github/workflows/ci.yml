@@ -18,6 +18,8 @@ jobs:
       - run: npm run typecheck
       - run: npm run typecheck:ui
       - run: npm test
+      - name: 引擎参数与场景契约幂等门禁
+        run: node scripts/export-engine-contracts.mjs
       - run: npm run build
 
   rust:
