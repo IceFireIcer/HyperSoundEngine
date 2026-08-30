@@ -2,10 +2,17 @@
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08
+
 ### Added
-- **Phase 3 收官：LufsMeter 双绿 + 向量 schema 计量读数演进（批次八）**：`specs/schema/vector-case.schema.json` 加性演进（moduleKind stream|meter 双向绑定 + readings 标量读数 {want, tol}，哨兵 "NaN"/"±Infinity" 等值判定）；`hse-core/src/lufs_meter.rs` 移植（K 加权两级 TDF2、BS.1770 双门限、LRA 直方图、4×/24 抽头真峰值多相核；f32 滑窗落盘/f64 统计的精度纪律逐字对齐；7 项规格外 TS 事实固化）；parity harness 扩展 meter 类型（两段输入布局 + readings 绝对容差/哨兵等值判定）。对拍门禁 63→**67 case 全 PASS**（LufsMeter 六读数最大偏差 3.55e-15，比最紧容差低 13 个数量级）。**至此 Phase 3 全部完成**（规划书 §五第 1-4 项；仅 8h 压测属 Phase 4）。
-- **Phase 4 启动：基准矩阵 + SIMD 评估 + 指标留档**：
-- **Phase 4 启动：基准矩阵 + SIMD 评估 + 指标留档**：16 个 criterion bench（全 12 已移植模块 × 块长矩阵 + 全链 60s 离线 + fft/convolver/midi/wav/share_codec）+ `docs/audit/phase4-bench-matrix.md`（热点排名：convolver 385 ns/帧断层第一）+ `docs/audit/phase4-simd-eval.md`（逐位对拍约束分析：零期望样本须逐位、非零样本余量仅 8–10 f32 ulp → 仅通道级 SIMD 安全；自动向量化实测 +6–10%）。**§三指标全部达标**：全链离线 0.546% realtime = TS 基线的 9.7–10.2×（目标 ≥3×）；默认链 CPU 0.546%（≤5%）；最重场景 10.7%（≤25%）。SIMD 实施与 8h 压测按评估结论显式缓办（Convolver 1.8–2.0× 潜力为未来 64 对象场景储备；8h 压测需真机长跑）。
+- **Phase 3 真正全链收口**：新增 `specs/engine/chain.md`，以 5 组 `engine-chain` 冻结向量固化 HyperSoundEngine 第 1–21 级组装行为；Rust `EngineChainStage` 完成响度归一化、Surround3D、NightMode、IEQ、分析/LUFS 取样、调制主增益及既有 DSP 模块的全链编排。第 22 级空间音频明确为 `spatial.mode='off'` 契约，不纳入本轮 Rust 全链。共享规格现为 **18 份（17 DSP + 1 engine-chain）**，冻结向量 **72 组 / 144 文件**，Rust 对拍门禁 **72/72 PASS**。
+- **Phase 5 wasm32 最小试点**：新增 `hse-wasm` workspace 成员，以 `wasm-bindgen` 暴露单个 `HseBiquad`，使用预分配 planar 缓冲与指针边界接入独立 AudioWorklet 示例；不替换现有 TS worklet，不代表完整 Rust 引擎链 wasm 化。配置消息使用 `requestId` 成功/失败回执；CI 锁定 `wasm-bindgen-cli 0.2.127`，实际生成 web glue 并执行 browser-platform 打包、wasm magic 与 Node builtin 隔离门禁。ASIO 与 Rust `hrtf-core` 尚未启动。
+- **Phase 3 收官：LufsMeter 双绿 + 向量 schema 计量读数演进（批次八）**：`specs/schema/vector-case.schema.json` 加性演进（moduleKind stream|meter 双向绑定 + readings 标量读数 {want, tol}，哨兵 "NaN"/"±Infinity" 等值判定）；`hse-core/src/lufs_meter.rs` 移植（K 加权两级 TDF2、BS.1770 双门限、LRA 直方图、4×/24 抽头真峰值多相核；f32 滑窗落盘/f64 统计的精度纪律逐字对齐；7 项规格外 TS 事实固化）；parity harness 扩展 meter 类型（两段输入布局 + readings 绝对容差/哨兵等值判定）。对拍门禁 63→**67 case 全 PASS**（LufsMeter 六读数最大偏差 3.55e-15，比最紧容差低 13 个数量级）。**至此 Phase 3 模块级工作完成**；本版本再以 engine-chain 向量完成 1–21 级组装收口。
+- **Phase 4 基准矩阵 + SIMD 评估 + 指标留档**：16 个 criterion bench（全 12 已移植模块 × 块长矩阵 + 全链 60s 离线 + fft/convolver/midi/wav/share_codec）+ `docs/audit/phase4-bench-matrix.md`（热点排名：convolver 385 ns/帧断层第一）+ `docs/audit/phase4-simd-eval.md`（逐位对拍约束分析：零期望样本须逐位、非零样本余量仅 8–10 f32 ulp → 仅通道级 SIMD 安全；自动向量化实测 +6–10%）。**§三指标全部达标**：全链离线 0.546% realtime = TS 基线的 9.7–10.2×（目标 ≥3×）；默认链 CPU 0.546%（≤5%）；最重场景 10.7%（≤25%）。SIMD 实施缓办；仅 8h 真机压测仍待长跑。
+
+### Fixed
+- **整链 sidechain 语义对齐 TS**：普通双声道 `process` 即使快照开启 `sidechainEnabled` 也保持内部检测；新增显式 `process_with_sidechain`，仅在调用方真实提供外部侧链时驱动 Compressor/Deesser，NightMode 永远使用内部检测。
+- **整链卷积路由与参数错误收敛**：`reverb.mode='convolution'` 在无/空 IR 时按 TS 回退算法混响，有效 IR 接入 `ConvolverStage` 并应用 mix/preDelay/dePeriodize；非法 IR 与嵌套参数类型错误返回带路径的 `Err`，不再 panic 或静默换效果。
 
 ## [0.6.0] - 2026-08
 

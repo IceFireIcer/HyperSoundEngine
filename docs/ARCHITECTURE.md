@@ -117,14 +117,23 @@ interface ProcessingStage {
 > `mode:'perChannelPair'` 时按立体声对逐对独立处理（每对独立子引擎），适合 5.1/7.1 各通道独立 DSP；
 > MIDI：`sendMidi()` 事件入预分配环形队列，`process()` 块头消费，按 MIDI Learn 绑定（`AutomationTarget` 白名单路径）映射到参数并经一阶平滑应用（防 zipper）。
 
-## 5. 独立包与适配层
+## 5. Rust 支线边界
+
+Rust workspace 与 TS 支线零代码依赖，由 `specs/` 共享行为契约：
+
+- `hse-core::engine_chain::EngineChainStage` 镜像 TS 主链第 1–21 级，包含链内组合级与分析/计量状态；它实现 `Stage`，以 `prepare` 预分配并通过 `process` 原位处理。
+- 第 22 级空间音频不在当前 Rust 主链内。`EngineChainParams::from_overrides` 强制 `spatial.mode='off'`，非 off 参数直接拒绝；因此 72/72 对拍结论不包含 Rust HRTF 实现。
+- `hse-wasm` 是依赖 `hse-core` 的边界 crate，当前只导出 `HseBiquad`。宿主经左右 planar 缓冲指针与 `process(frames)` 原位交换数据，构造时按 `maxFrames` 预分配。
+- wasm 试点使用独立 AudioWorklet 示例，不导入或替换现有 TS worklet，也不暴露 `EngineChainStage`。依赖方向仅为 `hse-wasm -> hse-core`，核心不得反向依赖 wasm/浏览器 API。
+
+## 6. 独立包与适配层
 
 - `src/`：独立引擎包（构建为 `dist/`）；
 - `adapters/waveforge/`：WaveForge 专属接线，不属于核心包；
 - `ui/`：可选 React 调音室，不参与核心构建；
 - 其他软件接入时只依赖 `hypersoundengine` 与 `hypersoundengine/browser`。
 
-## 6. 关键设计决策
+## 7. 关键设计决策
 
 1. **纯 TS 内核而非 Web Audio 节点图**：双路径一致、可测试、可进 AudioWorklet；
 2. **参数快照语义**：`setParams` 整体替换、`getParams` 返回深拷贝，避免状态分叉；

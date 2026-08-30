@@ -1,8 +1,11 @@
 # specs/ —— HyperSoundEngine 双支线共享规格总纲
 
-> **归属**：本目录由 **TS 支线（`src/`）与 Rust 支线（`HyperSoundEngineRust/`，规划中）共同所有**，
+> **归属**：本目录由 **TS 支线（`src/`）与 Rust 支线（`HyperSoundEngineRust/`）共同所有**，
 > 位于仓库根，不属于任何单一支线。术语基线见仓库根 `CONTEXT.md`；
 > 行为事实标准当前为 TS 支线源码；本总纲与其下规格文档使用同一套领域语言。
+>
+> 当前基线：**18 份规格（17 DSP + 1 engine-chain）、72 组冻结向量 / 144 文件**；
+> Rust `hse-parity` 对拍门禁 **72/72 PASS**。
 
 ---
 
@@ -43,10 +46,12 @@ specs/
     ├── convolver.md                 ← 模块规格：convolver
     ├── modulation-matrix.md         ← 模块规格：modulation-matrix（控制率驱动）
     ├── hse-stretch.md               ← 模块规格：hse-stretch（块窗映射驱动）
-    └── vectors/                     ← 冻结测试向量（.json 元数据 + .f32 数据成对出现）
-        ├── biquad.<case>.json / biquad.<case>.f32
-        ├── limiter.<case>.json / limiter.<case>.f32
-        └── reverb-simple.<case>.json / reverb-simple.<case>.f32
+    ├── lufs-meter.md                ← 模块规格：lufs-meter（计量型）
+    └── vectors/                     ← 72 组冻结向量（.json + .f32，共 144 文件）
+        ├── <dsp-module>.<case>.json / <dsp-module>.<case>.f32
+        └── engine-chain.<case>.json / engine-chain.<case>.f32
+└── engine/
+    └── chain.md                     ← 引擎层规格：1–21 级主链；spatial.mode='off'
 ```
 
 ---
@@ -84,8 +89,10 @@ specs/
 
 - 元数据：`specs/dsp/vectors/<module>.<case>.json`
 - 数据：`specs/dsp/vectors/<module>.<case>.f32`（与 .json 同名、成对出现，缺一即无效）
-- `<module>` 为 kebab-case 模块 id，当前仅限：`biquad` / `limiter` / `reverb-simple`
-  （后续模块命名约定见 §六）；
+- `<module>` 为 kebab-case 模块 id，当前合法值为：`biquad` / `limiter` / `reverb-simple` /
+  `compressor` / `bass-enhancer` / `mid-side` / `eq-chain` / `fdn-reverb` / `deesser` /
+  `loudness-comp` / `dynamic-eq` / `mod-effects` / `fft` / `convolver` /
+  `modulation-matrix` / `hse-stretch` / `lufs-meter` / `engine-chain`；
 - `<case>` 为小写字母数字与连字符组成的用例名（推荐 `case<N>` 编号形态，如 `case1`）；
 - 文件编码：.json 为 UTF-8；.f32 为原始二进制。
 
@@ -183,7 +190,7 @@ specs/
 | 支线 | 门禁命令 | 判定内容 |
 |---|---|---|
 | TS 支线 | `npx vitest run test/spec-vectors.test.ts` | 遍历 `specs/dsp/vectors/` 全部夹具，按 §3.4 分块驱动 `src/` 实现，按 §3.5 判定 |
-| Rust 支线 | `cargo test -p hse-parity` | 同一批夹具、同一公式，驱动 `HyperSoundEngineRust/` 实现 |
+| Rust 支线 | `cd HyperSoundEngineRust && cargo run -q -p hse-parity` | 同一批夹具、同一公式，驱动 `hse-core` 模块与 `EngineChainStage`；72/72 PASS 才通过 |
 
 补充规则：
 
@@ -196,11 +203,26 @@ specs/
 
 ## 六、模块 id 映射表
 
-| 规格 id | TS 事实源码 | 参数快照字段来源 | Rust 目标（规划中） | 模块规格 |
+| 规格 id | 层级 | TS 事实源码 | Rust 对拍实现 | 模块规格 |
 |---|---|---|---|---|
-| `biquad` | `src/dsp/biquad.ts` | `setParams(type, f0, q, gainDb)` 形参（立体声映射规则见模块规格 §五） | `HyperSoundEngineRust` 内对应模块 | [specs/dsp/biquad.md](dsp/biquad.md) |
-| `limiter` | `src/dsp/Limiter.ts` | `LimiterSettings` 接口字段 | 同上 | [specs/dsp/limiter.md](dsp/limiter.md) |
-| `reverb-simple` | `src/dsp/ReverbSimple.ts` | `ReverbSimpleParams` 接口字段 | 同上 | [specs/dsp/reverb-simple.md](dsp/reverb-simple.md) |
+| `biquad` | DSP | `src/dsp/biquad.ts` | `hse-core::biquad` | [biquad.md](dsp/biquad.md) |
+| `limiter` | DSP | `src/dsp/Limiter.ts` | `hse-core::limiter` | [limiter.md](dsp/limiter.md) |
+| `reverb-simple` | DSP | `src/dsp/ReverbSimple.ts` | `hse-core::reverb_simple` | [reverb-simple.md](dsp/reverb-simple.md) |
+| `compressor` | DSP | `src/dsp/Compressor.ts` | `hse-core::compressor` | [compressor.md](dsp/compressor.md) |
+| `bass-enhancer` | DSP | `src/dsp/BassEnhancer.ts` | `hse-core::bass_enhancer` | [bass-enhancer.md](dsp/bass-enhancer.md) |
+| `mid-side` | DSP | `src/dsp/MidSide.ts` | `hse-core::mid_side` | [mid-side.md](dsp/mid-side.md) |
+| `eq-chain` | DSP | `src/dsp/EqChain.ts` | `hse-core::eq_chain` | [eq-chain.md](dsp/eq-chain.md) |
+| `fdn-reverb` | DSP | `src/dsp/FdnReverb.ts` | `hse-core::fdn_reverb` | [fdn-reverb.md](dsp/fdn-reverb.md) |
+| `deesser` | DSP | `src/dsp/Deesser.ts` | `hse-core::deesser` | [deesser.md](dsp/deesser.md) |
+| `loudness-comp` | DSP | `src/dsp/LoudnessComp.ts` | `hse-core::loudness_comp` | [loudness-comp.md](dsp/loudness-comp.md) |
+| `dynamic-eq` | DSP | `src/dsp/DynamicEq.ts` | `hse-core::dynamic_eq` | [dynamic-eq.md](dsp/dynamic-eq.md) |
+| `mod-effects` | DSP | `src/dsp/ModEffects.ts` | `hse-core::mod_effects` | [mod-effects.md](dsp/mod-effects.md) |
+| `fft` | DSP | `src/dsp/fft.ts` | `hse-core::fft` | [fft.md](dsp/fft.md) |
+| `convolver` | DSP | `src/dsp/Convolver.ts` | `hse-core::convolver` | [convolver.md](dsp/convolver.md) |
+| `modulation-matrix` | DSP | `src/dsp/modulation.ts` | `hse-core::modulation_matrix` | [modulation-matrix.md](dsp/modulation-matrix.md) |
+| `hse-stretch` | DSP | `src/dsp/HseStretch.ts` | `hse-core::hse_stretch` | [hse-stretch.md](dsp/hse-stretch.md) |
+| `lufs-meter` | DSP meter | `src/dsp/LufsMeter.ts` | `hse-core::lufs_meter` | [lufs-meter.md](dsp/lufs-meter.md) |
+| `engine-chain` | Engine | `src/engine/HyperSoundEngine.ts` 第 1–21 级 | `hse-core::engine_chain::EngineChainStage` | [engine/chain.md](engine/chain.md) |
 
 ---
 
@@ -224,6 +246,7 @@ specs/
 - 立体声处理器通用契约：`src/interfaces.ts`（`StereoProcessor`：`setParams`/`processStereo`/`reset`）
 - DSP 实现契约（TS 侧）：`src/dsp/API_SPEC.md`
 - 向量 Schema：[specs/schema/vector-case.schema.json](schema/vector-case.schema.json)
-- 模块规格：[biquad](dsp/biquad.md) ｜ [limiter](dsp/limiter.md) ｜ [reverb-simple](dsp/reverb-simple.md) ｜ [compressor](dsp/compressor.md) ｜ [bass-enhancer](dsp/bass-enhancer.md) ｜ [mid-side](dsp/mid-side.md) ｜ [eq-chain](dsp/eq-chain.md) ｜ [fdn-reverb](dsp/fdn-reverb.md) ｜ [deesser](dsp/deesser.md) ｜ [loudness-comp](dsp/loudness-comp.md) ｜ [dynamic-eq](dsp/dynamic-eq.md) ｜ [mod-effects](dsp/mod-effects.md) ｜ [fft](dsp/fft.md) ｜ [convolver](dsp/convolver.md) ｜ [modulation-matrix](dsp/modulation-matrix.md) ｜ [hse-stretch](dsp/hse-stretch.md)
+- 模块规格：[biquad](dsp/biquad.md) ｜ [limiter](dsp/limiter.md) ｜ [reverb-simple](dsp/reverb-simple.md) ｜ [compressor](dsp/compressor.md) ｜ [bass-enhancer](dsp/bass-enhancer.md) ｜ [mid-side](dsp/mid-side.md) ｜ [eq-chain](dsp/eq-chain.md) ｜ [fdn-reverb](dsp/fdn-reverb.md) ｜ [deesser](dsp/deesser.md) ｜ [loudness-comp](dsp/loudness-comp.md) ｜ [dynamic-eq](dsp/dynamic-eq.md) ｜ [mod-effects](dsp/mod-effects.md) ｜ [fft](dsp/fft.md) ｜ [convolver](dsp/convolver.md) ｜ [modulation-matrix](dsp/modulation-matrix.md) ｜ [hse-stretch](dsp/hse-stretch.md) ｜ [lufs-meter](dsp/lufs-meter.md)
+- 引擎链规格：[engine-chain](engine/chain.md)（第 1–21 级；`spatial.mode='off'`）
 - 服务层·控制面契约：[service/control-plane.md](service/control-plane.md)
 - 服务层·推流协议设计：[service/push-stream.md](service/push-stream.md)

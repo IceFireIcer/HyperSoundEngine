@@ -1,6 +1,6 @@
 {
   "name": "hypersoundengine",
-  "version": "0.5.0",
+  "version": "0.7.0",
   "description": "HyperSoundEngine v1 独立音频效果引擎：纯 TS DSP 核心 + 浏览器宿主 + 可选 React UI；不依赖任何特定宿主，可接入任意软件/宿主。",
   "type": "module",
   "main": "./dist/index.js",

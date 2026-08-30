@@ -10,12 +10,14 @@ HyperSoundEngine 是一个**不依赖任何特定宿主**的独立软件 DSP 音
 - 浏览器宿主（`HyperSoundEngineHost`）与 WaveForge 适配层分离，其他软件可直接接入。
 
 > 当前生成代号 **HyperSoundEngine v1**（包版本 0.x 为其预发布阶段）；版本与命名规则见 [docs/VERSIONING.md](docs/VERSIONING.md)。
+>
+> **0.7.0 状态**：18 份共享规格（17 DSP + 1 engine-chain）、72 组冻结向量 / 144 文件；TS 全量测试 50 文件 / 670 用例，Rust 对拍 72/72。Phase 3 已以 Rust 1–21 级全链收口，空间音频保持 `spatial.mode='off'` 契约；Phase 4 指标已达标，仅余 8h 真机压测；Phase 5 已完成 wasm 单 Biquad 最小试点，ASIO 与 Rust `hrtf-core` 尚未启动。
 
 ## 快速开始
 
 ```bash
 npm install
-npm test              # 全量测试（50 文件 / 570+ 用例，含空间音频 104 项）
+npm test              # 全量测试（50 文件 / 670 用例，含空间音频 104 项）
 npm run build         # 产出 dist/（核心 ESM + 类型声明 + worklet 单文件包）
 npm run benchmark     # 本地性能基准（48kHz/128 帧默认全链）
 npm run benchmark:scenes  # 场景化基准（卷积/FDN 混响、DynamicEq）
@@ -78,8 +80,9 @@ HyperSoundEngine/
 └── test/ + ui/uiSmoke.test.tsx
 
 HyperSoundEngineRust/ —— **Rust 支线**（独立 Cargo workspace，见《原生化双支线与
-Windows 音频接入规划书》）：hse-core（DSP，对拍 23/23 逐位一致）/ hse-parity / hse-wasapi /
-hse-service（引擎服务进程 + 推流协议）/ hse-napi（占位）；与 TS 支线零代码依赖。
+Windows 音频接入规划书》）：hse-core（17 个 DSP 模块 + `EngineChainStage` 1–21 级主链，
+`spatial.mode='off'` 契约）/ hse-parity（72/72）/ hse-wasapi / hse-service / hse-wasm
+（单 Biquad 的 wasm32 最小试点）/ hse-napi（占位）；与 TS 支线零代码依赖。
 ```
 
 ## 子路径导入
