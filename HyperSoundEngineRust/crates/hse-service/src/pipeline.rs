@@ -35,6 +35,9 @@ pub(crate) const XRUN_EVENT_INTERVAL_MS: u64 = 100;
 /// 捕获空轮询退避：后端 pull 为非阻塞尽力语义（返回实际帧数，0=暂无），
 /// 无数据时按此间隔休眠再询，避免忙转（I/O 线程允许系统调用）。
 const CAPTURE_IDLE_POLL_MS: u64 = 10;
+/// 旧 DSP 链回收环容量。回收线程持续消费；满载时 DSP 线程保留候选链并在
+/// 后续块边界重试，不会就地析构。
+const RECLAIM_RING_CAPACITY: usize = 8;
 
 /// 线程族共享依赖（各线程持有克隆）。
 pub struct WorkerDeps {
@@ -59,7 +62,9 @@ pub fn ring_capacity_samples(block_frames: usize) -> usize {
 }
 
 /// 构造数据面双环（入环/出环，容量均为 blockSize 整数倍的样本数）。
-pub fn build_rings(block_frames: usize) -> (Producer<f32>, Consumer<f32>, Producer<f32>, Consumer<f32>) {
+pub fn build_rings(
+    block_frames: usize,
+) -> (Producer<f32>, Consumer<f32>, Producer<f32>, Consumer<f32>) {
     let cap = ring_capacity_samples(block_frames);
     let (ip, ic) = RingBuffer::<f32>::new(cap);
     let (op, oc) = RingBuffer::<f32>::new(cap);
@@ -95,6 +100,23 @@ pub fn spawn_workers(
 
     let (cap_tx, cap_rx) = std::sync::mpsc::channel::<Result<StreamFormat, String>>();
     let (ren_tx, ren_rx) = std::sync::mpsc::channel::<Result<StreamFormat, String>>();
+    let (reclaim_prod, mut reclaim_cons) = RingBuffer::<PilotSubchain>::new(RECLAIM_RING_CAPACITY);
+
+    let h_reclaim = std::thread::Builder::new()
+        .name("hse-reclaim".into())
+        .spawn(move || loop {
+            while let Ok(retired) = reclaim_cons.pop() {
+                drop(retired);
+            }
+            if reclaim_cons.is_abandoned() {
+                while let Ok(retired) = reclaim_cons.pop() {
+                    drop(retired);
+                }
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        })
+        .expect("回收线程创建失败");
 
     let run_cap = Arc::clone(&run);
     let err_cap = Arc::clone(&err);
@@ -125,19 +147,49 @@ pub fn spawn_workers(
     let h_ren = std::thread::Builder::new()
         .name("hse-render".into())
         .spawn(move || {
-            render_loop(render_opener, out_cons, block_frames, ren_tx, &run_ren, &err_ren, &gate_ren, &stats_ren, &ev_ren);
+            render_loop(
+                render_opener,
+                out_cons,
+                block_frames,
+                ren_tx,
+                &run_ren,
+                &err_ren,
+                &gate_ren,
+                &stats_ren,
+                &ev_ren,
+            );
         })
         .expect("渲染线程创建失败");
 
     let h_dsp = std::thread::Builder::new()
         .name("hse-dsp".into())
-        .spawn(move || dsp_loop(in_cons, out_prod, chain_rx, block_frames, &run, &err, &stats))
+        .spawn(move || {
+            dsp_loop(
+                in_cons,
+                out_prod,
+                chain_rx,
+                reclaim_prod,
+                block_frames,
+                &run,
+                &err,
+                &stats,
+            )
+        })
         .expect("DSP 线程创建失败");
 
-    ThreadHandles { handles: vec![h_cap, h_dsp, h_ren], capture_ready: cap_rx, render_ready: ren_rx }
+    ThreadHandles {
+        handles: vec![h_cap, h_dsp, h_ren, h_reclaim],
+        capture_ready: cap_rx,
+        render_ready: ren_rx,
+    }
 }
 
-fn maybe_emit_xrun(events: &SyncSender<ServiceEvent>, last_emit: &mut Instant, dir: &'static str, count: u64) {
+fn maybe_emit_xrun(
+    events: &SyncSender<ServiceEvent>,
+    last_emit: &mut Instant,
+    dir: &'static str,
+    count: u64,
+) {
     if count == 0 {
         return;
     }
@@ -229,7 +281,11 @@ fn capture_loop(
                     nf
                 };
                 if total > 0 {
-                    let out: &[f32] = if use_mix { &mix[..total * 2] } else { &buf[..total * 2] };
+                    let out: &[f32] = if use_mix {
+                        &mix[..total * 2]
+                    } else {
+                        &buf[..total * 2]
+                    };
                     let mut sent = 0usize;
                     while sent < out.len() {
                         if prod.push(out[sent]).is_ok() {
@@ -245,7 +301,14 @@ fn capture_loop(
                     }
                 }
                 // 后端内部 xrun 计数聚合
-                aggregate_backend_xruns("in", &mut backend_xruns, src.xruns(), stats, events, &mut last_emit);
+                aggregate_backend_xruns(
+                    "in",
+                    &mut backend_xruns,
+                    src.xruns(),
+                    stats,
+                    events,
+                    &mut last_emit,
+                );
                 if nf == 0 && total == 0 {
                     // 非阻塞尽力语义：回环暂无数据且本轮会话也未取出任何块，
                     // 退避后再询（不忙转）；会话有数据时保持全速消费。
@@ -285,6 +348,41 @@ mod tests {
         aggregate_backend_xruns("out", &mut out_last, 7, &stats, &tx, &mut last_emit);
         assert_eq!(out_last, 7);
         assert_eq!(stats.xruns_out.load(Ordering::Relaxed), 7);
+    }
+
+    #[test]
+    fn 热换旧值在回收侧析构且环满时保留所有权() {
+        use std::sync::atomic::AtomicUsize;
+
+        struct DropProbe(Arc<AtomicUsize>);
+        impl Drop for DropProbe {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let drops = Arc::new(AtomicUsize::new(0));
+        let (mut reclaim_tx, mut reclaim_rx) = RingBuffer::new(1);
+        reclaim_tx.push(DropProbe(Arc::clone(&drops))).unwrap();
+        let mut active = Some(DropProbe(Arc::clone(&drops)));
+        let mut awaiting = None;
+
+        replace_and_reclaim(
+            &mut active,
+            DropProbe(Arc::clone(&drops)),
+            &mut reclaim_tx,
+            &mut awaiting,
+        );
+        assert_eq!(drops.load(Ordering::SeqCst), 0, "换链侧不得析构任何值");
+        assert!(awaiting.is_some(), "回收环满时旧值必须保留所有权");
+
+        drop(reclaim_rx.pop().unwrap());
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+        reclaim_tx.push(awaiting.take().unwrap()).unwrap();
+        drop(reclaim_rx.pop().unwrap());
+        assert_eq!(drops.load(Ordering::SeqCst), 2, "旧活动值仅在回收侧析构");
+        drop(active.take());
+        assert_eq!(drops.load(Ordering::SeqCst), 3);
     }
 }
 
@@ -341,7 +439,14 @@ fn render_loop(
             maybe_emit_xrun(events, &mut last_emit, "out", missed);
         }
         // 后端内部 xrun 计数聚合（渲染侧）
-        aggregate_backend_xruns("out", &mut backend_xruns, sink.xruns(), stats, events, &mut last_emit);
+        aggregate_backend_xruns(
+            "out",
+            &mut backend_xruns,
+            sink.xruns(),
+            stats,
+            events,
+            &mut last_emit,
+        );
         if let Err(e) = sink.push(&outbuf) {
             eprintln!("[hse-render] 推帧失败，请求停机：{}", e);
             err.store(true, Ordering::Relaxed);
@@ -351,11 +456,26 @@ fn render_loop(
     let _ = sink.stop();
 }
 
+fn replace_and_reclaim<T>(
+    active: &mut Option<T>,
+    next: T,
+    reclaim: &mut Producer<T>,
+    awaiting_reclaim: &mut Option<T>,
+) {
+    if let Some(retired) = active.replace(next) {
+        match reclaim.push(retired) {
+            Ok(()) => {}
+            Err(rtrb::PushError::Full(retired)) => *awaiting_reclaim = Some(retired),
+        }
+    }
+}
+
 /// DSP 线程：出环 → planar 子链 → 入环；块间取用热更换链。稳态零分配零锁零系统调用。
 fn dsp_loop(
     mut cons_in: Consumer<f32>,
     mut prod_out: Producer<f32>,
     mut chain_rx: Consumer<PilotSubchain>,
+    mut reclaim_tx: Producer<PilotSubchain>,
     block_frames: usize,
     run: &AtomicBool,
     err: &AtomicBool,
@@ -369,13 +489,28 @@ fn dsp_loop(
     let total = block_frames * 2;
     // 初始链由引擎在握手完成后经命令环送达。
     let mut chain: Option<PilotSubchain> = None;
+    let mut awaiting_reclaim: Option<PilotSubchain> = None;
     loop {
         if !run.load(Ordering::Relaxed) || err.load(Ordering::Relaxed) {
             break;
         }
-        // 参数热更换：块边界整链换入（仅所有权移动）。
-        while let Ok(next_chain) = chain_rx.pop() {
-            chain = Some(next_chain);
+        // 参数热更换只在旧链已成功移交回收线程后继续。回收环满时保留
+        // 所有权并重试，绝不在 DSP 线程析构链内缓冲。
+        if let Some(retired) = awaiting_reclaim.take() {
+            match reclaim_tx.push(retired) {
+                Ok(()) => {}
+                Err(rtrb::PushError::Full(retired)) => awaiting_reclaim = Some(retired),
+            }
+        }
+        if awaiting_reclaim.is_none() {
+            if let Ok(next_chain) = chain_rx.pop() {
+                replace_and_reclaim(
+                    &mut chain,
+                    next_chain,
+                    &mut reclaim_tx,
+                    &mut awaiting_reclaim,
+                );
+            }
         }
         let Some(active) = chain.as_mut() else {
             std::hint::spin_loop();
@@ -410,8 +545,31 @@ fn dsp_loop(
             }
         }
         if pushed == total {
-            stats.frames_processed.fetch_add(block_frames as u64, Ordering::Relaxed);
+            stats
+                .frames_processed
+                .fetch_add(block_frames as u64, Ordering::Relaxed);
         }
         filled = 0;
+    }
+
+    // 退出 DSP 线程前把所有链移交回收线程。容量覆盖 active + pending +
+    // command ring 全部元素；若回收线程调度较慢则仅自旋等待，不在本线程 drop。
+    let mut retire = |mut retired: PilotSubchain| loop {
+        match reclaim_tx.push(retired) {
+            Ok(()) => break,
+            Err(rtrb::PushError::Full(value)) => {
+                retired = value;
+                std::hint::spin_loop();
+            }
+        }
+    };
+    if let Some(retired) = awaiting_reclaim.take() {
+        retire(retired);
+    }
+    if let Some(retired) = chain.take() {
+        retire(retired);
+    }
+    while let Ok(retired) = chain_rx.pop() {
+        retire(retired);
     }
 }

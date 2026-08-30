@@ -13,34 +13,129 @@ use crate::engine::{EngineHandle, RpcFault};
 ///
 /// `owner` 为发起连接的标识，仅供 openSession 记录会话归属（断线自动清理）。
 pub fn handle_line(engine: &EngineHandle, owner: u64, line: &str) -> Option<String> {
+    handle_messages(engine, owner, line)
+        .into_iter()
+        .find(|message| {
+            serde_json::from_str::<Value>(message)
+                .ok()
+                .is_some_and(|value| value.get("id").is_some())
+        })
+}
+
+/// 处理一条控制请求，返回必须按数组顺序发送的通知与响应。
+/// start/stop 的同步 phase 通知由当前连接直接发送，避免异步广播抢序。
+pub fn handle_messages(engine: &EngineHandle, owner: u64, line: &str) -> Vec<String> {
     let parsed: Result<Value, _> = serde_json::from_str(line);
     let value = match parsed {
         Ok(v) => v,
-        Err(err) => return Some(error_response(Value::Null, -32700, format!("Parse error：{}", err)).to_string()),
+        Err(err) => {
+            return vec![
+                error_response(Value::Null, -32700, format!("Parse error：{}", err)).to_string(),
+            ]
+        }
     };
     let obj = match value.as_object() {
-        Some(o) => o,
-        None => return Some(error_response(Value::Null, -32600, "Invalid Request：顶层必须是 JSON 对象".into()).to_string()),
+        Some(o) if !o.is_empty() => o,
+        _ => {
+            return vec![error_response(
+                Value::Null,
+                -32600,
+                "Invalid Request：顶层必须是非空 JSON 对象".into(),
+            )
+            .to_string()]
+        }
     };
-    // 批量请求不在契约内：按无效请求处理。
-    if obj.is_empty() || value.is_array() {
-        return Some(error_response(Value::Null, -32600, "Invalid Request：不支持批量或空对象".into()).to_string());
-    }
-    let id = obj.get("id").cloned().unwrap_or(Value::Null);
     let is_notification = !obj.contains_key("id");
+    let id = match obj.get("id") {
+        None => Value::Null,
+        Some(Value::String(s)) => Value::String(s.clone()),
+        Some(Value::Number(n)) if n.is_i64() || n.is_u64() => Value::Number(n.clone()),
+        Some(_) => {
+            return vec![error_response(
+                Value::Null,
+                -32600,
+                "Invalid Request：id 必须为整数或字符串".into(),
+            )
+            .to_string()]
+        }
+    };
     if obj.get("jsonrpc").and_then(|j| j.as_str()) != Some("2.0") {
-        return reply(is_notification, error_response(id, -32600, "Invalid Request：jsonrpc 必须为 \"2.0\"".into()));
+        return reply(
+            is_notification,
+            error_response(id, -32600, "Invalid Request：jsonrpc 必须为 \"2.0\"".into()),
+        )
+        .into_iter()
+        .collect();
     }
     let method = match obj.get("method").and_then(|m| m.as_str()) {
         Some(m) => m.to_string(),
-        None => return reply(is_notification, error_response(id, -32600, "Invalid Request：缺少 method 字符串".into())),
+        None => {
+            return reply(
+                is_notification,
+                error_response(id, -32600, "Invalid Request：缺少 method 字符串".into()),
+            )
+            .into_iter()
+            .collect()
+        }
     };
-    let params = obj.get("params").cloned().unwrap_or(Value::Null);
+    let params = match obj.get("params") {
+        None => json!({}),
+        Some(value) if value.is_object() => value.clone(),
+        Some(_) => {
+            return reply(
+                is_notification,
+                error_response(id, -32602, "Invalid params：params 必须是 JSON 对象".into()),
+            )
+            .into_iter()
+            .collect()
+        }
+    };
+    if matches!(
+        method.as_str(),
+        "listDevices" | "getState" | "start" | "stop"
+    ) && !params.as_object().is_some_and(serde_json::Map::is_empty)
+    {
+        return reply(
+            is_notification,
+            error_response(id, -32602, format!("Invalid params：{method} 只接受空对象")),
+        )
+        .into_iter()
+        .collect();
+    }
+    let phase_before = engine.get_state()["phase"]
+        .as_str()
+        .unwrap_or("idle")
+        .to_owned();
     let response = match dispatch(engine, owner, &method, &params) {
         Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
         Err(fault) => error_response(id, fault.code, fault.message),
     };
-    reply(is_notification, response)
+
+    let mut messages = Vec::new();
+    let succeeded = response.get("result").is_some();
+    if method == "start" && succeeded {
+        messages.push(phase_event(&phase_before, "starting"));
+        messages.push(phase_event("starting", "running"));
+    } else if method == "start" && response["error"]["code"] == -32000 {
+        messages.push(phase_event(&phase_before, "starting"));
+        messages.push(phase_event("starting", "idle"));
+    } else if method == "stop" && succeeded {
+        messages.push(phase_event(&phase_before, "stopping"));
+        messages.push(phase_event("stopping", "idle"));
+    }
+    if !is_notification {
+        messages.push(response.to_string());
+    }
+    messages
+}
+
+fn phase_event(from: &str, to: &str) -> String {
+    json!({
+        "jsonrpc": "2.0",
+        "method": "event.phase",
+        "params": {"from": from, "to": to},
+    })
+    .to_string()
 }
 
 fn reply(is_notification: bool, response: Value) -> Option<String> {
@@ -55,7 +150,12 @@ fn error_response(id: Value, code: i64, message: String) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}})
 }
 
-fn dispatch(engine: &EngineHandle, owner: u64, method: &str, params: &Value) -> Result<Value, RpcFault> {
+fn dispatch(
+    engine: &EngineHandle,
+    owner: u64,
+    method: &str,
+    params: &Value,
+) -> Result<Value, RpcFault> {
     match method {
         "listDevices" => engine.list_devices(),
         "getState" => Ok(engine.get_state()),
@@ -89,7 +189,10 @@ fn dispatch(engine: &EngineHandle, owner: u64, method: &str, params: &Value) -> 
                 .ok_or_else(|| RpcFault::invalid_params("closeSession 需要 params 对象"))?;
             engine.close_session(obj)
         }
-        other => Err(RpcFault::new(-32601, format!("Method not found：未知方法 {}", other))),
+        other => Err(RpcFault::new(
+            -32601,
+            format!("Method not found：未知方法 {}", other),
+        )),
     }
 }
 
@@ -134,7 +237,11 @@ mod tests {
     #[test]
     fn configure缺参报参数无效_状态错误码正确() {
         let eng = engine();
-        let r = call(&eng, r#"{"jsonrpc":"2.0","id":"a","method":"configure","params":{"sampleRate":48000}}"#).unwrap();
+        let r = call(
+            &eng,
+            r#"{"jsonrpc":"2.0","id":"a","method":"configure","params":{"sampleRate":48000}}"#,
+        )
+        .unwrap();
         assert_eq!(r["error"]["code"], -32602);
         assert_eq!(r["id"], "a");
 
@@ -145,16 +252,100 @@ mod tests {
     #[test]
     fn set_params_缺params键报参数无效() {
         let eng = engine();
-        let r = call(&eng, r#"{"jsonrpc":"2.0","id":4,"method":"setParams","params":{}}"#).unwrap();
+        let r = call(
+            &eng,
+            r#"{"jsonrpc":"2.0","id":4,"method":"setParams","params":{}}"#,
+        )
+        .unwrap();
         assert_eq!(r["error"]["code"], -32602);
+    }
+
+    #[test]
+    fn 显式params必须为对象且无参方法只接受空对象() {
+        let eng = engine();
+        let initial = eng.get_state();
+
+        for (method, params) in [
+            ("listDevices", json!(null)),
+            ("getState", json!([])),
+            ("start", json!("bad")),
+            ("stop", json!(1)),
+        ] {
+            let response = call(
+                &eng,
+                &json!({"jsonrpc":"2.0","id":30,"method":method,"params":params}).to_string(),
+            )
+            .unwrap();
+            assert_eq!(response["error"]["code"], -32602, "method={method}");
+            assert_eq!(eng.get_state(), initial, "非法 params 不得产生副作用");
+        }
+
+        for method in ["listDevices", "getState", "start", "stop"] {
+            let response = call(
+                &eng,
+                &json!({"jsonrpc":"2.0","id":31,"method":method,"params":{"extra":true}})
+                    .to_string(),
+            )
+            .unwrap();
+            assert_eq!(response["error"]["code"], -32602, "method={method}");
+            assert_eq!(eng.get_state(), initial, "非空 params 不得产生副作用");
+        }
+    }
+
+    #[test]
+    fn 省略params按空对象处理() {
+        let eng = engine();
+        let response = call(&eng, r#"{"jsonrpc":"2.0","id":32,"method":"getState"}"#).unwrap();
+        assert_eq!(response["result"]["phase"], "idle");
     }
 
     #[test]
     fn 通知执行副作用但不回包() {
         let eng = engine();
-        let out = handle_line(&eng, 0, r#"{"jsonrpc":"2.0","method":"configure","params":{"mode":"loopback","renderDeviceId":null,"sampleRate":48000,"blockSizeFrames":128}}"#);
+        let out = handle_line(
+            &eng,
+            0,
+            r#"{"jsonrpc":"2.0","method":"configure","params":{"mode":"loopback","renderDeviceId":null,"sampleRate":48000,"blockSizeFrames":128}}"#,
+        );
         assert!(out.is_none(), "通知不得回包");
-        assert_eq!(eng.get_state()["config"]["blockSizeFrames"], 128, "副作用已生效");
+        assert_eq!(
+            eng.get_state()["config"]["blockSizeFrames"],
+            128,
+            "副作用已生效"
+        );
+    }
+
+    #[test]
+    fn 显式非法id报无效请求且不执行副作用() {
+        let eng = engine();
+        let initial = eng.get_state()["config"].clone();
+        for id in [
+            serde_json::json!(null),
+            serde_json::json!(true),
+            serde_json::json!({"nested": 1}),
+            serde_json::json!([1]),
+        ] {
+            let line = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "configure",
+                "params": {
+                    "mode": "loopback",
+                    "renderDeviceId": null,
+                    "sampleRate": 48000,
+                    "blockSizeFrames": 128
+                }
+            })
+            .to_string();
+            let response = call(&eng, &line).unwrap();
+            assert_eq!(response["error"]["code"], -32600);
+            assert!(response["id"].is_null());
+            assert_eq!(
+                eng.get_state()["config"],
+                initial,
+                "非法 id 不得执行 configure"
+            );
+        }
     }
 
     #[test]
@@ -168,6 +359,40 @@ mod tests {
         assert_eq!(res["stats"]["framesProcessed"], 0);
         assert_eq!(res["stats"]["uptimeMs"], 0);
         assert!(res["lastParams"].is_null());
+    }
+
+    #[test]
+    fn set_params_lastParams只暴露规范化已知wire键() {
+        let eng = engine();
+        let response = call(
+            &eng,
+            r#"{"jsonrpc":"2.0","id":33,"method":"setParams","params":{"params":{"unknownTop":1,"biquad":{"f0":1200,"unknownChild":2},"reverbRoute":"unknown-route","limiter":{"enabled":false}}}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            response["result"]["warnings"],
+            json!(["biquad.unknownChild", "unknownTop"])
+        );
+
+        let last = eng.get_state()["lastParams"].clone();
+        assert!(last.get("unknownTop").is_none());
+        assert!(last["biquad"].get("unknownChild").is_none());
+        assert_eq!(
+            last["biquad"],
+            json!({"type":"peaking","f0":1200.0,"q":1.0,"gainDb":0.0})
+        );
+        assert_eq!(last["reverbRoute"], "simple");
+        assert_eq!(
+            last["limiter"],
+            json!({
+                "enabled":false,
+                "thresholdDb":-1.0,
+                "lookaheadMs":5.0,
+                "attackMs":0.5,
+                "releaseMs":150.0,
+                "truePeak":true
+            })
+        );
     }
 
     #[test]
@@ -186,16 +411,29 @@ mod tests {
     fn 完整生命周期往返_configure_start_set_params_stop() {
         let eng = engine();
         let cfg_line = r#"{"jsonrpc":"2.0","id":1,"method":"configure","params":{"mode":"loopback","renderDeviceId":null,"sampleRate":48000,"blockSizeFrames":64}}"#;
-        assert_eq!(call(&eng, cfg_line).unwrap()["result"]["applied"]["sampleRate"], 48000);
-        assert_eq!(call(&eng, r#"{"jsonrpc":"2.0","id":2,"method":"start"}"#).unwrap()["result"]["started"], true);
+        assert_eq!(
+            call(&eng, cfg_line).unwrap()["result"]["applied"]["sampleRate"],
+            48000
+        );
+        assert_eq!(
+            call(&eng, r#"{"jsonrpc":"2.0","id":2,"method":"start"}"#).unwrap()["result"]
+                ["started"],
+            true
+        );
         assert_eq!(eng.get_state()["phase"], "running");
         let sp = call(&eng, r#"{"jsonrpc":"2.0","id":3,"method":"setParams","params":{"params":{"biquad":{"type":"peaking","f0":1000,"q":1,"gainDb":6},"unknownKey":1}}}"#).unwrap();
         assert_eq!(sp["result"]["accepted"], true);
         assert_eq!(sp["result"]["warnings"].as_array().unwrap().len(), 1);
-        assert_eq!(call(&eng, r#"{"jsonrpc":"2.0","id":4,"method":"stop"}"#).unwrap()["result"]["stopped"], true);
+        assert_eq!(
+            call(&eng, r#"{"jsonrpc":"2.0","id":4,"method":"stop"}"#).unwrap()["result"]["stopped"],
+            true
+        );
         assert_eq!(eng.get_state()["phase"], "idle");
         // 运行中重复 stop / configure 都应被拒
-        assert_eq!(call(&eng, r#"{"jsonrpc":"2.0","id":5,"method":"stop"}"#).unwrap()["error"]["code"], -32001);
+        assert_eq!(
+            call(&eng, r#"{"jsonrpc":"2.0","id":5,"method":"stop"}"#).unwrap()["error"]["code"],
+            -32001
+        );
         assert_eq!(call(&eng, cfg_line).is_some(), true); // idle 下又可配置了
     }
 
@@ -215,7 +453,10 @@ mod tests {
         let r = call(&eng, r#"{"jsonrpc":"2.0","id":10,"method":"openSession","params":{"sampleRate":48000,"channels":2,"format":"f32le"}}"#).unwrap();
         let res = &r["result"];
         assert!(res["sessionId"].is_u64() && res["sessionId"].as_u64().unwrap() >= 1);
-        assert_eq!(res["granted"], serde_json::json!({"sampleRate": 48000, "channels": 2, "format": "f32le"}));
+        assert_eq!(
+            res["granted"],
+            serde_json::json!({"sampleRate": 48000, "channels": 2, "format": "f32le"})
+        );
     }
 
     #[test]
@@ -229,7 +470,10 @@ mod tests {
             r#"{"sampleRate":48000,"channels":2,"format":"s16le"}"#,
             r#"{"sampleRate":44100,"channels":2,"format":"f32le"}"#,
         ] {
-            let line = format!(r#"{{"jsonrpc":"2.0","id":11,"method":"openSession","params":{}}}"#, params);
+            let line = format!(
+                r#"{{"jsonrpc":"2.0","id":11,"method":"openSession","params":{}}}"#,
+                params
+            );
             assert_eq!(call(&eng, &line).unwrap()["error"]["code"], -32602);
         }
         // 参数缺失 / 类型错误同属 -32602
@@ -249,7 +493,14 @@ mod tests {
         let eng = engine();
         configure_48k(&eng);
         // GWT-PS-04：未知 id 拒绝
-        assert_eq!(call(&eng, r#"{"jsonrpc":"2.0","id":14,"method":"closeSession","params":{"sessionId":7}}"#).unwrap()["error"]["code"], -32602);
+        assert_eq!(
+            call(
+                &eng,
+                r#"{"jsonrpc":"2.0","id":14,"method":"closeSession","params":{"sessionId":7}}"#
+            )
+            .unwrap()["error"]["code"],
+            -32602
+        );
         let r = call(&eng, r#"{"jsonrpc":"2.0","id":15,"method":"openSession","params":{"sampleRate":48000,"channels":2,"format":"f32le"}}"#).unwrap();
         let sid = r["result"]["sessionId"].as_u64().unwrap();
         // 成功关闭
@@ -257,8 +508,22 @@ mod tests {
         // 重复 close 不幂等
         assert_eq!(call(&eng, &format!(r#"{{"jsonrpc":"2.0","id":17,"method":"closeSession","params":{{"sessionId":{sid}}}}}"#)).unwrap()["error"]["code"], -32602);
         // sessionId 类型错 / 缺失 → -32602
-        assert_eq!(call(&eng, r#"{"jsonrpc":"2.0","id":18,"method":"closeSession","params":{"sessionId":"7"}}"#).unwrap()["error"]["code"], -32602);
-        assert_eq!(call(&eng, r#"{"jsonrpc":"2.0","id":19,"method":"closeSession","params":{}}"#).unwrap()["error"]["code"], -32602);
+        assert_eq!(
+            call(
+                &eng,
+                r#"{"jsonrpc":"2.0","id":18,"method":"closeSession","params":{"sessionId":"7"}}"#
+            )
+            .unwrap()["error"]["code"],
+            -32602
+        );
+        assert_eq!(
+            call(
+                &eng,
+                r#"{"jsonrpc":"2.0","id":19,"method":"closeSession","params":{}}"#
+            )
+            .unwrap()["error"]["code"],
+            -32602
+        );
     }
 
     #[test]
@@ -276,7 +541,11 @@ mod tests {
         assert_eq!(eng.sessions().active_ids().len(), 2);
         call(&eng, r#"{"jsonrpc":"2.0","id":23,"method":"stop"}"#).unwrap();
         assert_eq!(eng.get_state()["phase"], "idle");
-        assert_eq!(eng.sessions().active_ids().len(), 2, "stop 不影响会话生命周期");
+        assert_eq!(
+            eng.sessions().active_ids().len(),
+            2,
+            "stop 不影响会话生命周期"
+        );
     }
 
     #[test]

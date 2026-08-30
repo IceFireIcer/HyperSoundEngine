@@ -34,7 +34,10 @@ pub struct RpcFault {
 
 impl RpcFault {
     pub fn new(code: i64, message: impl Into<String>) -> Self {
-        Self { code, message: message.into() }
+        Self {
+            code,
+            message: message.into(),
+        }
     }
     /// -32602 参数无效。
     pub fn invalid_params(message: impl Into<String>) -> Self {
@@ -109,19 +112,24 @@ impl EngineHandle {
         }
     }
 
-    fn transition(&self, g: &mut EngineInner, to: Phase) {
+    fn transition(&self, g: &mut EngineInner, to: Phase, publish: bool) {
         let from = g.phase;
         g.phase = to;
-        // 事件通道满则丢弃通知（权威状态以 getState 为准）。
-        let _ = self.events.try_send(ServiceEvent::Phase {
-            from: from.as_str().to_string(),
-            to: to.as_str().to_string(),
-        });
+        if publish {
+            // 异步数据面跃迁走广播；RPC 同步跃迁由连接线程按响应顺序直接发送。
+            let _ = self.events.try_send(ServiceEvent::Phase {
+                from: from.as_str().to_string(),
+                to: to.as_str().to_string(),
+            });
+        }
     }
 
     /// listDevices：设备枚举，按类别分列。
     pub fn list_devices(&self) -> Result<Value, RpcFault> {
-        let devs = self.factory.list_devices().map_err(|e| RpcFault::backend_failed(e.to_string()))?;
+        let devs = self
+            .factory
+            .list_devices()
+            .map_err(|e| RpcFault::backend_failed(e.to_string()))?;
         let mut render = Vec::new();
         let mut capture = Vec::new();
         for d in devs {
@@ -166,13 +174,16 @@ impl EngineHandle {
     /// （channels≠2、format≠"f32le"）与 sampleRate≠图采样率 → -32602；
     /// 全部通过才分配 id（被拒请求不消耗 id 空间）；u32 id 空间耗尽 → -32000。
     /// 会话可在任意 phase 打开，与引擎相位解耦。
-    pub fn open_session(&self, params_obj: &Map<String, Value>, owner: u64) -> Result<Value, RpcFault> {
+    pub fn open_session(
+        &self,
+        params_obj: &Map<String, Value>,
+        owner: u64,
+    ) -> Result<Value, RpcFault> {
         let graph_rate = {
             let g = self.inner.lock().unwrap();
-            g.config
-                .as_ref()
-                .map(|c| c.sample_rate)
-                .ok_or_else(|| RpcFault::state_forbidden("图未配置采样率（尚未成功 configure），禁止 openSession"))?
+            g.config.as_ref().map(|c| c.sample_rate).ok_or_else(|| {
+                RpcFault::state_forbidden("图未配置采样率（尚未成功 configure），禁止 openSession")
+            })?
         };
         let sample_rate = match params_obj.get("sampleRate").and_then(|v| v.as_u64()) {
             Some(n) if n <= u32::MAX as u64 => n as u32,
@@ -180,7 +191,8 @@ impl EngineHandle {
         };
         if sample_rate != graph_rate {
             return Err(RpcFault::invalid_params(format!(
-                "sampleRate 必须等于引擎图采样率 {}", graph_rate
+                "sampleRate 必须等于引擎图采样率 {}",
+                graph_rate
             )));
         }
         let channels = match params_obj.get("channels").and_then(|v| v.as_u64()) {
@@ -218,13 +230,21 @@ impl EngineHandle {
         if self.sessions.close(session_id) {
             Ok(json!({"closed": true}))
         } else {
-            Err(RpcFault::invalid_params(format!("sessionId {} 不存在或已关闭", session_id)))
+            Err(RpcFault::invalid_params(format!(
+                "sessionId {} 不存在或已关闭",
+                session_id
+            )))
         }
     }
 
     /// framesProcessed 总量（测试/诊断用）。
     pub fn frames_processed(&self) -> u64 {
-        self.inner.lock().unwrap().stats.frames_processed.load(Ordering::Relaxed)
+        self.inner
+            .lock()
+            .unwrap()
+            .stats
+            .frames_processed
+            .load(Ordering::Relaxed)
     }
 
     /// configure：仅 phase=idle 可调；成功后保存配置快照并回显 applied。
@@ -235,7 +255,8 @@ impl EngineHandle {
             let g = self.inner.lock().unwrap();
             if g.phase != Phase::Idle {
                 return Err(RpcFault::state_forbidden(format!(
-                    "phase={} 时禁止 configure（仅 idle 可配）", g.phase.as_str()
+                    "phase={} 时禁止 configure（仅 idle 可配）",
+                    g.phase.as_str()
                 )));
             }
         }
@@ -245,7 +266,8 @@ impl EngineHandle {
         };
         if mode != "loopback" {
             return Err(RpcFault::invalid_params(format!(
-                "暂不支持 mode=\"{}\"（当前仅 loopback）", mode
+                "暂不支持 mode=\"{}\"（当前仅 loopback）",
+                mode
             )));
         }
         let render_device_id = match params_obj.get("renderDeviceId") {
@@ -256,30 +278,55 @@ impl EngineHandle {
                     .factory
                     .list_devices()
                     .map_err(|e| RpcFault::backend_failed(e.to_string()))?;
-                if !devs.iter().any(|d| d.kind == DeviceKind::Render && d.id == *s) {
+                if !devs
+                    .iter()
+                    .any(|d| d.kind == DeviceKind::Render && d.id == *s)
+                {
                     return Err(RpcFault::backend_failed(format!(
-                        "renderDeviceId 不在当前渲染端点枚举中：{}", s
+                        "renderDeviceId 不在当前渲染端点枚举中：{}",
+                        s
                     )));
                 }
                 Some(s.clone())
             }
             Some(Value::String(_)) => {
-                return Err(RpcFault::invalid_params("renderDeviceId 不能为空字符串（用 null 表示默认设备）"));
+                return Err(RpcFault::invalid_params(
+                    "renderDeviceId 不能为空字符串（用 null 表示默认设备）",
+                ));
             }
-            Some(_) => return Err(RpcFault::invalid_params("renderDeviceId 必须为字符串或 null")),
+            Some(_) => {
+                return Err(RpcFault::invalid_params(
+                    "renderDeviceId 必须为字符串或 null",
+                ))
+            }
         };
         let sample_rate = match params_obj.get("sampleRate").and_then(|v| v.as_u64()) {
             Some(n) if n >= MIN_SAMPLE_RATE as u64 && n <= MAX_SAMPLE_RATE as u64 => n as u32,
-            _ => return Err(RpcFault::invalid_params(format!("sampleRate 必须为 {}..={} 的整数", MIN_SAMPLE_RATE, MAX_SAMPLE_RATE))),
+            _ => {
+                return Err(RpcFault::invalid_params(format!(
+                    "sampleRate 必须为 {}..={} 的整数",
+                    MIN_SAMPLE_RATE, MAX_SAMPLE_RATE
+                )))
+            }
         };
         let block_size_frames = match params_obj.get("blockSizeFrames").and_then(|v| v.as_u64()) {
             Some(n) if n >= MIN_BLOCK_FRAMES as u64 && n <= MAX_BLOCK_FRAMES as u64 => n as u32,
-            _ => return Err(RpcFault::invalid_params(format!("blockSizeFrames 必须为 {}..={} 的整数", MIN_BLOCK_FRAMES, MAX_BLOCK_FRAMES))),
+            _ => {
+                return Err(RpcFault::invalid_params(format!(
+                    "blockSizeFrames 必须为 {}..={} 的整数",
+                    MIN_BLOCK_FRAMES, MAX_BLOCK_FRAMES
+                )))
+            }
         };
 
         // 相位已在开头守卫；控制面串行处理（规格 §九），期间相位不可能变化
         let mut g = self.inner.lock().unwrap();
-        let cfg = ServiceConfig { mode, render_device_id, sample_rate, block_size_frames };
+        let cfg = ServiceConfig {
+            mode,
+            render_device_id,
+            sample_rate,
+            block_size_frames,
+        };
         let applied = cfg.to_json();
         g.config = Some(cfg);
         Ok(json!({"applied": applied}))
@@ -291,18 +338,28 @@ impl EngineHandle {
         let (cfg, pilot, run_flag, err_flag, stats, ready_gate) = {
             let mut g = self.inner.lock().unwrap();
             if g.phase != Phase::Idle {
-                return Err(RpcFault::state_forbidden(format!("phase={} 时禁止 start", g.phase.as_str())));
+                return Err(RpcFault::state_forbidden(format!(
+                    "phase={} 时禁止 start",
+                    g.phase.as_str()
+                )));
             }
             let cfg = match g.config.clone() {
                 Some(c) => c,
                 None => return Err(RpcFault::state_forbidden("尚未成功 configure，禁止 start")),
             };
-            self.transition(&mut g, Phase::Starting);
+            self.transition(&mut g, Phase::Starting, false);
             g.err_flag.store(false, Ordering::Relaxed);
             g.run_flag.store(true, Ordering::SeqCst);
             g.started_at = None;
             let gate = Arc::new(AtomicBool::new(false));
-            (cfg, g.pilot_params.clone(), Arc::clone(&g.run_flag), Arc::clone(&g.err_flag), Arc::clone(&g.stats), gate)
+            (
+                cfg,
+                g.pilot_params.clone(),
+                Arc::clone(&g.run_flag),
+                Arc::clone(&g.err_flag),
+                Arc::clone(&g.stats),
+                gate,
+            )
         };
 
         // 第二段：锁外完成开流握手、建环、装配初始链。任一步失败即整体回滚。
@@ -317,13 +374,19 @@ impl EngineHandle {
                     for handle in workers {
                         let _ = handle.join();
                     }
-                    return Err(RpcFault::state_forbidden("start 过程中收到 stop，已中止本次启动"));
+                    return Err(RpcFault::state_forbidden(
+                        "start 过程中收到 stop，已中止本次启动",
+                    ));
                 }
                 g.workers = workers;
-                g.hot = Some(HotState { sample_rate: negotiated_rate, max_block: block_frames, chain_tx });
+                g.hot = Some(HotState {
+                    sample_rate: negotiated_rate,
+                    max_block: block_frames,
+                    chain_tx,
+                });
                 g.started_at = Some(Instant::now());
                 ready_gate.store(true, Ordering::SeqCst);
-                self.transition(&mut g, Phase::Running);
+                self.transition(&mut g, Phase::Running, false);
                 Ok(json!({"started": true}))
             }
             Err((message, workers)) => {
@@ -347,7 +410,10 @@ impl EngineHandle {
         _err_flag: &Arc<AtomicBool>,
         stats: &Arc<StatsAtomic>,
         ready_gate: &Arc<AtomicBool>,
-    ) -> Result<(Vec<JoinHandle<()>>, Producer<PilotSubchain>, f64, usize), (String, Vec<JoinHandle<()>>)> {
+    ) -> Result<
+        (Vec<JoinHandle<()>>, Producer<PilotSubchain>, f64, usize),
+        (String, Vec<JoinHandle<()>>),
+    > {
         let block_frames = cfg.block_size_frames as usize;
         let opts = OpenOptions {
             device_id: cfg.render_device_id.clone(),
@@ -391,7 +457,10 @@ impl EngineHandle {
         };
         if cap_fmt.channels != 2 || ren_fmt.channels != 2 {
             return Err(fail(
-                format!("仅支持立体声端点（捕获 {}ch / 渲染 {}ch）", cap_fmt.channels, ren_fmt.channels),
+                format!(
+                    "仅支持立体声端点（捕获 {}ch / 渲染 {}ch）",
+                    cap_fmt.channels, ren_fmt.channels
+                ),
                 std::mem::take(&mut handles.handles),
             ));
         }
@@ -401,35 +470,51 @@ impl EngineHandle {
         let chain = match PilotSubchain::build(pilot, negotiated, block_frames) {
             Ok(c) => c,
             Err(e) => {
-                return Err(fail(format!("构建试点子链失败：{}", e), std::mem::take(&mut handles.handles)));
+                return Err(fail(
+                    format!("构建试点子链失败：{}", e),
+                    std::mem::take(&mut handles.handles),
+                ));
             }
         };
         if let Err(rtrb::PushError::Full(_)) = chain_tx.push(chain) {
             // 全新命令环不可能满；防御性兜底。
-            return Err(fail("命令环异常（内部错误）".into(), std::mem::take(&mut handles.handles)));
+            return Err(fail(
+                "命令环异常（内部错误）".into(),
+                std::mem::take(&mut handles.handles),
+            ));
         }
-        Ok((std::mem::take(&mut handles.handles), chain_tx, negotiated, block_frames))
+        Ok((
+            std::mem::take(&mut handles.handles),
+            chain_tx,
+            negotiated,
+            block_frames,
+        ))
     }
 
     fn abort_start(&self, reason: &str) {
         let mut g = self.inner.lock().unwrap();
         g.run_flag.store(false, Ordering::SeqCst);
         if g.phase == Phase::Starting {
-            self.transition(&mut g, Phase::Idle);
+            self.transition(&mut g, Phase::Idle, false);
         }
         eprintln!("[hse-service] start 失败已回滚：{}", reason);
     }
 
-    /// begin_stop：置 stopping、发停机旗、取走线程句柄（锁内不做 join）。
-    fn begin_stop(&self) -> Result<Vec<JoinHandle<()>>, RpcFault> {
+    /// begin_stop：内部停机入口。公开 RPC 只允许 Running；析构可额外清理 Starting。
+    fn begin_stop(
+        &self,
+        publish: bool,
+        allow_starting: bool,
+    ) -> Result<Vec<JoinHandle<()>>, RpcFault> {
         let mut g = self.inner.lock().unwrap();
-        match g.phase {
-            Phase::Running | Phase::Starting => {}
-            Phase::Idle | Phase::Stopping => {
-                return Err(RpcFault::state_forbidden(format!("phase={} 时禁止 stop", g.phase.as_str())));
-            }
+        let allowed = g.phase == Phase::Running || (allow_starting && g.phase == Phase::Starting);
+        if !allowed {
+            return Err(RpcFault::state_forbidden(format!(
+                "phase={} 时禁止 stop",
+                g.phase.as_str()
+            )));
         }
-        self.transition(&mut g, Phase::Stopping);
+        self.transition(&mut g, Phase::Stopping, publish);
         g.run_flag.store(false, Ordering::SeqCst);
         if let Some(hot) = g.hot.as_ref() {
             // 命令环随 HotState 一并失效；DSP 线程靠 run_flag 退出。
@@ -439,21 +524,21 @@ impl EngineHandle {
         Ok(std::mem::take(&mut g.workers))
     }
 
-    fn finish_stop(&self) {
+    fn finish_stop(&self, publish: bool) {
         let mut g = self.inner.lock().unwrap();
         if g.phase == Phase::Stopping {
             g.started_at = None;
-            self.transition(&mut g, Phase::Idle);
+            self.transition(&mut g, Phase::Idle, publish);
         }
     }
 
-    /// stop：running/starting → stopping → join → idle。
+    /// stop：仅 running → stopping → join → idle。
     pub fn stop(&self) -> Result<Value, RpcFault> {
-        let workers = self.begin_stop()?;
+        let workers = self.begin_stop(false, false)?;
         for handle in workers {
             let _ = handle.join();
         }
-        self.finish_stop();
+        self.finish_stop(false);
         Ok(json!({"stopped": true}))
     }
 
@@ -462,61 +547,126 @@ impl EngineHandle {
         let needs_stop = {
             let g = self.inner.lock().unwrap();
             g.phase == Phase::Running
-                && (g.err_flag.load(Ordering::Relaxed)
-                    || g.workers.iter().any(|h| h.is_finished()))
+                && (g.err_flag.load(Ordering::Relaxed) || g.workers.iter().any(|h| h.is_finished()))
         };
         if !needs_stop {
             return;
         }
         eprintln!("[hse-service] 数据面异常退出，执行兜底停机");
-        if let Ok(workers) = self.begin_stop() {
+        if let Ok(workers) = self.begin_stop(true, true) {
             for handle in workers {
                 let _ = handle.join();
             }
-            self.finish_stop();
+            self.finish_stop(true);
         }
     }
 
-    /// setParams：解析快照存入状态；running 时构建新链经命令环热换入。
+    /// setParams：候选快照先解析、构链/prepare，并在运行态成功投递后才原子提交状态。
     pub fn set_params(&self, params_value: &Value) -> Result<Value, RpcFault> {
-        let (pilot, warnings) = parse_pilot_params(params_value).map_err(RpcFault::invalid_params)?;
-        let mut warnings_json: Vec<Value> = warnings.iter().map(|w| json!(w)).collect();
+        let (pilot, warnings) =
+            parse_pilot_params(params_value).map_err(RpcFault::invalid_params)?;
+        let warnings_json: Vec<Value> = warnings.iter().map(|w| json!(w)).collect();
         let mut g = self.inner.lock().unwrap();
-        g.pilot_params = pilot;
-        g.last_params_value = Some(params_value.clone());
-        if g.phase == Phase::Running {
-            let (rate, max_block) = match g.hot.as_ref() {
-                Some(h) => (h.sample_rate, h.max_block),
-                None => return Err(RpcFault::backend_failed("运行态缺失热更换通道（内部错误）")),
-            };
-            let built = PilotSubchain::build(&g.pilot_params, rate, max_block)
-                .map_err(|e| RpcFault::invalid_params(format!("参数无法应用：{}", e)))?;
-            if g.hot.as_mut().expect("上方已确认存在").chain_tx.push(built).is_err() {
-                // 命令环满（连续快速换参）：丢弃本次快照并如实告警。
-                warnings_json.push(json!("参数更换过快，命令环已满：本条快照被丢弃，沿用上一条待生效参数"));
-            }
+
+        let built = if g.phase == Phase::Running {
+            let hot = g
+                .hot
+                .as_ref()
+                .ok_or_else(|| RpcFault::backend_failed("运行态缺失热更换通道（内部错误）"))?;
+            Some(
+                PilotSubchain::build(&pilot, hot.sample_rate, hot.max_block)
+                    .map_err(|e| RpcFault::invalid_params(format!("参数无法应用：{}", e)))?,
+            )
+        } else {
+            None
+        };
+
+        if let Some(chain) = built {
+            g.hot
+                .as_mut()
+                .expect("运行态热更换通道已在上方确认")
+                .chain_tx
+                .push(chain)
+                .map_err(|_| RpcFault::backend_failed("参数命令环已满，本条快照未提交"))?;
         }
+        let canonical = pilot.to_wire_json(params_value);
+        g.pilot_params = pilot;
+        g.last_params_value = Some(canonical);
         Ok(json!({"accepted": true, "warnings": warnings_json}))
     }
 }
 
 /// 等待一条握手通道给出开流结果。
-fn wait_ready(rx: &Receiver<Result<hse_wasapi::StreamFormat, String>>) -> Result<hse_wasapi::StreamFormat, String> {
+fn wait_ready(
+    rx: &Receiver<Result<hse_wasapi::StreamFormat, String>>,
+) -> Result<hse_wasapi::StreamFormat, String> {
     match rx.recv_timeout(HANDSHAKE_TIMEOUT) {
         Ok(Ok(fmt)) => Ok(fmt),
         Ok(Err(m)) => Err(m),
-        Err(_) => Err(format!("开流握手超时（{} 秒）", HANDSHAKE_TIMEOUT.as_secs())),
+        Err(_) => Err(format!(
+            "开流握手超时（{} 秒）",
+            HANDSHAKE_TIMEOUT.as_secs()
+        )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fake_backend::FakeFactory;
+    use std::sync::mpsc::sync_channel;
+
+    #[test]
+    fn starting状态公开stop必须拒绝() {
+        let (events, _event_rx) = sync_channel(16);
+        let engine =
+            EngineHandle::new(FakeFactory::working(Duration::ZERO, Duration::ZERO), events);
+        engine.inner.lock().unwrap().phase = Phase::Starting;
+
+        let err = engine.stop().unwrap_err();
+        assert_eq!(err.code, -32001);
+        assert_eq!(engine.get_state()["phase"], "starting");
+    }
+
+    #[test]
+    fn set_params_命令投递失败不提交候选状态() {
+        let (events, _event_rx) = sync_channel(16);
+        let engine =
+            EngineHandle::new(FakeFactory::working(Duration::ZERO, Duration::ZERO), events);
+        let old_value = json!({"reverbRoute": "off"});
+        let (old_params, _) = parse_pilot_params(&old_value).unwrap();
+        let (mut chain_tx, _chain_rx) = pipeline::build_command_ring();
+        for _ in 0..4 {
+            let filler = PilotSubchain::build(&old_params, 48_000.0, 64).unwrap();
+            assert!(chain_tx.push(filler).is_ok());
+        }
+        {
+            let mut g = engine.inner.lock().unwrap();
+            g.phase = Phase::Running;
+            g.pilot_params = old_params;
+            g.last_params_value = Some(old_value.clone());
+            g.hot = Some(HotState {
+                sample_rate: 48_000.0,
+                max_block: 64,
+                chain_tx,
+            });
+        }
+
+        let candidate = json!({"limiter": {"enabled": false}});
+        let err = engine.set_params(&candidate).unwrap_err();
+        assert_eq!(err.code, -32000);
+        assert_eq!(engine.get_state()["lastParams"], old_value);
     }
 }
 
 impl Drop for EngineHandle {
     fn drop(&mut self) {
         // 句柄销毁时尽力停掉仍在运行的数据面（避免测试/异常路径泄漏线程）。
-        if let Ok(workers) = self.begin_stop() {
+        if let Ok(workers) = self.begin_stop(true, true) {
             for handle in workers {
                 let _ = handle.join();
             }
-            self.finish_stop();
+            self.finish_stop(true);
         }
     }
 }

@@ -48,6 +48,21 @@ describe('modulation', () => {
     expect(gains.size).toBeGreaterThan(1)
   })
 
+  it('ModulationMatrix preserves snapshot semantics and supports allocation-free output', () => {
+    const matrix = new ModulationMatrix(48000)
+    const l = new Float32Array(128)
+    const r = new Float32Array(128)
+
+    const first = matrix.processBlock(l, r, 128)
+    const second = matrix.processBlock(l, r, 128)
+    expect(second).not.toBe(first)
+    expect(second).toEqual({ masterGain: 1, stereoWidth: 1 })
+
+    const output = { masterGain: 0, stereoWidth: 0 }
+    matrix.processBlockInto(l, r, 128, output)
+    expect(output).toEqual({ masterGain: 1, stereoWidth: 1 })
+  })
+
   it('Engine applies LFO master-gain modulation', () => {
     const fs = 48000
     const engine = new HyperSoundEngine(fs, 2)

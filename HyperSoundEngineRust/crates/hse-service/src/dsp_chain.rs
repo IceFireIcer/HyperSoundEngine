@@ -49,9 +49,9 @@ const DYNAMIC_EQ_CROSSOVERS: [f64; 4] = [200.0, 800.0, 2500.0, 8000.0];
 
 /// reverb 级的三路路由持有态（route=off 时不持有任何混响实例）。
 enum ReverbRoute {
-    Simple(ReverbSimpleStage),
-    Fdn(FdnReverbStage),
-    Convolver(ConvolverStage),
+    Simple(Box<ReverbSimpleStage>),
+    Fdn(Box<FdnReverbStage>),
+    Convolver(Box<ConvolverStage>),
     Off,
 }
 
@@ -81,7 +81,10 @@ pub struct PilotSubchain {
 impl PilotSubchain {
     /// 按参数快照构造并对 max_block 完成预分配（控制面线程调用）。
     pub fn build(params: &PilotParams, sample_rate: f64, max_block: usize) -> Result<Self, String> {
-        let MidSideParams { width, voice_balance } = params.mid_side;
+        let MidSideParams {
+            width,
+            voice_balance,
+        } = params.mid_side;
         let mut mid_side = MidSideStage::new();
         mid_side.set_params(width, voice_balance);
         let biquad = match &params.biquad {
@@ -102,7 +105,11 @@ impl PilotSubchain {
                 let eq_bands: Vec<EqBandParam> = spec
                     .bands
                     .iter()
-                    .map(|b| EqBandParam { frequency: b.frequency, gain: b.gain, q: b.q })
+                    .map(|b| EqBandParam {
+                        frequency: b.frequency,
+                        gain: b.gain,
+                        q: b.q,
+                    })
                     .collect();
                 eq.set_bands(&eq_bands);
                 eq.set_q_compensation(spec.q_compensation);
@@ -114,12 +121,13 @@ impl PilotSubchain {
         let compressor = CompressorStage::from_settings(sample_rate, params.compressor.clone())?;
         let mod_effects = ModEffectsStage::from_settings(sample_rate, params.mod_effects)?;
         let reverb = match params.reverb_route {
-            ReverbRouteKind::Simple => {
-                ReverbRoute::Simple(ReverbSimpleStage::from_params(sample_rate, params.reverb_simple.clone())?)
-            }
-            ReverbRouteKind::Fdn => {
-                ReverbRoute::Fdn(FdnReverbStage::from_params(sample_rate, params.fdn_reverb.clone())?)
-            }
+            ReverbRouteKind::Simple => ReverbRoute::Simple(Box::new(
+                ReverbSimpleStage::from_params(sample_rate, params.reverb_simple.clone())?,
+            )),
+            ReverbRouteKind::Fdn => ReverbRoute::Fdn(Box::new(FdnReverbStage::from_params(
+                sample_rate,
+                params.fdn_reverb.clone(),
+            )?)),
             ReverbRouteKind::Convolver => {
                 // 卷积路：IR 必须由确定性配方给出（无 IR 即为非法快照）。
                 // 装配顺序对齐引擎接线（parity 驱动器同序）：
@@ -128,17 +136,19 @@ impl PilotSubchain {
                     .convolver
                     .ir_recipe
                     .ok_or("convolver 路由需要 convolver.irRecipe（delta / expNoise 配方）")?;
-                let ir = build_ir_recipe(&recipe).map_err(|e| format!("convolver IR 配方非法：{e}"))?;
+                let ir =
+                    build_ir_recipe(&recipe).map_err(|e| format!("convolver IR 配方非法：{e}"))?;
                 let mut convolver = ConvolverStage::new(sample_rate, ConvolverOptions::default())?;
                 convolver.load_ir(&ir, Some("setParams-recipe"))?;
                 convolver.set_mix(params.convolver.mix);
                 convolver.set_pre_delay_ms(params.convolver.pre_delay_ms);
-                ReverbRoute::Convolver(convolver)
+                ReverbRoute::Convolver(Box::new(convolver))
             }
             ReverbRouteKind::Off => ReverbRoute::Off,
         };
         let bass = BassEnhancerStage::from_settings(sample_rate, params.bass_enhancer.clone())?;
-        let loudness_comp = LoudnessCompStage::from_settings(sample_rate, params.loudness_comp.clone())?;
+        let loudness_comp =
+            LoudnessCompStage::from_settings(sample_rate, params.loudness_comp.clone())?;
         // crossover 频率按引擎常量固定注入（镜像 TS DYNAMIC_EQ_CROSSOVERS[i] ?? 0），
         // 协议键只暴露 enabled/targetGainDb；kneeDb/blockSize 保持模块构造默认。
         let dynamic_bands: Vec<DynamicEqBandParam> = (0..params.dynamic_eq.bands.len().min(5))
@@ -220,9 +230,9 @@ impl PilotSubchain {
         Stage::prepare(&mut self.compressor, max_block);
         Stage::prepare(&mut self.mod_effects, max_block);
         match &mut self.reverb {
-            ReverbRoute::Simple(s) => Stage::prepare(s, max_block),
-            ReverbRoute::Fdn(f) => Stage::prepare(f, max_block),
-            ReverbRoute::Convolver(c) => Stage::prepare(c, max_block),
+            ReverbRoute::Simple(s) => Stage::prepare(s.as_mut(), max_block),
+            ReverbRoute::Fdn(f) => Stage::prepare(f.as_mut(), max_block),
+            ReverbRoute::Convolver(c) => Stage::prepare(c.as_mut(), max_block),
             ReverbRoute::Off => {}
         }
         Stage::prepare(&mut self.bass, max_block);
@@ -390,13 +400,19 @@ mod tests {
     // ---------- Phase 3 全序链新增锚点 ----------
 
     /// 经 parse_pilot_params 装配（显式覆盖新键）+ 直通基准，返回 (chain, 输入)。
-    fn build_parsed(base: serde_json::Value, extra: serde_json::Value) -> (PilotSubchain, Vec<f32>, Vec<f32>) {
+    fn build_parsed(
+        base: serde_json::Value,
+        extra: serde_json::Value,
+    ) -> (PilotSubchain, Vec<f32>, Vec<f32>) {
         let mut obj = base.as_object().cloned().unwrap();
         for (k, v) in extra.as_object().unwrap() {
             obj.insert(k.clone(), v.clone());
         }
         let (p, warnings) = parse_pilot_params(&serde_json::Value::Object(obj)).unwrap();
-        assert!(warnings.is_empty(), "锚点快照不应产生 warnings：{warnings:?}");
+        assert!(
+            warnings.is_empty(),
+            "锚点快照不应产生 warnings：{warnings:?}"
+        );
         let chain = PilotSubchain::build(&p, 48000.0, 256).unwrap();
         let in_l = lcg_noise(256, 42, 0.9);
         let in_r = lcg_noise(256, 43, 0.8);
@@ -417,13 +433,16 @@ mod tests {
         // hse-core GWT-EQ-01 零增益锚点同配置（该 (f,q) 集合下 0dB 级联逐位
         // 直通——design_biquad 以 b0×(1/a0) 归一化，部分 (f,q) 组合存在 ±1 ulp
         // 偏差，任意 (f,q) 的 0dB 不作逐位承诺，见 params.rs eq_chain 文档）。
-        let five_bands: Vec<Value> =
-            (0..5).map(|_| json!({"enabled": true, "targetGainDb": 0})).collect();
-        let eq_bands: Vec<Value> = [40.0, 80.0, 160.0, 320.0, 640.0, 1280.0, 2560.0, 5120.0, 10240.0, 16000.0]
-            .iter()
-            .zip([0.5, 0.8, 1.0, 1.2, 1.4, 2.0, 3.0, 4.0, 0.707, 6.0])
-            .map(|(&f, q)| json!({"frequency": f, "gain": 0, "q": q}))
+        let five_bands: Vec<Value> = (0..5)
+            .map(|_| json!({"enabled": true, "targetGainDb": 0}))
             .collect();
+        let eq_bands: Vec<Value> = [
+            40.0, 80.0, 160.0, 320.0, 640.0, 1280.0, 2560.0, 5120.0, 10240.0, 16000.0,
+        ]
+        .iter()
+        .zip([0.5, 0.8, 1.0, 1.2, 1.4, 2.0, 3.0, 4.0, 0.707, 6.0])
+        .map(|(&f, q)| json!({"frequency": f, "gain": 0, "q": q}))
+        .collect();
         let extra = json!({
             "eqChain": {"bands": eq_bands, "bandCount": 10, "qCompensation": false},
             "deesser": {"enabled": false, "centerHz": 6000, "q": 0.7, "thresholdDb": -30,
@@ -454,12 +473,15 @@ mod tests {
     fn eqChain_全零增益锚点逐位直通_与hse_core同配置() {
         // 规格 §4.3 锚点（GWT-EQ-01 投影）：hse-core 零增益直通单测同款 (f,q) 集合
         // —— 0dB peaking 级联逐位直通（该集合下归一化精确还原 b0=1，级联状态恒零）。
-        let eq_bands: Vec<Value> = [40.0, 80.0, 160.0, 320.0, 640.0, 1280.0, 2560.0, 5120.0, 10240.0, 16000.0]
-            .iter()
-            .zip([0.5, 0.8, 1.0, 1.2, 1.4, 2.0, 3.0, 4.0, 0.707, 6.0])
-            .map(|(&f, q)| json!({"frequency": f, "gain": 0, "q": q}))
-            .collect();
-        let extra = json!({"eqChain": {"bands": eq_bands, "bandCount": 10, "qCompensation": false}});
+        let eq_bands: Vec<Value> = [
+            40.0, 80.0, 160.0, 320.0, 640.0, 1280.0, 2560.0, 5120.0, 10240.0, 16000.0,
+        ]
+        .iter()
+        .zip([0.5, 0.8, 1.0, 1.2, 1.4, 2.0, 3.0, 4.0, 0.707, 6.0])
+        .map(|(&f, q)| json!({"frequency": f, "gain": 0, "q": q}))
+        .collect();
+        let extra =
+            json!({"eqChain": {"bands": eq_bands, "bandCount": 10, "qCompensation": false}});
         let (mut chain, in_l, in_r) = build_parsed(bypass_json(), extra);
         let mut left = in_l.clone();
         let mut right = in_r.clone();
@@ -551,7 +573,10 @@ mod tests {
         }
         assert!(left.iter().all(|x| x.is_finite()) && right.iter().all(|x| x.is_finite()));
         // masterGain 钳制域 [0,4] ⇒ 幅度界 = 输入界 × 4 + 余量。
-        assert!(left.iter().all(|x| x.abs() <= 4.0), "masterGain 调制输出越界");
+        assert!(
+            left.iter().all(|x| x.abs() <= 4.0),
+            "masterGain 调制输出越界"
+        );
         assert_ne!(left, in_l, "调制路由生效时不得恒等直通");
     }
 
@@ -624,7 +649,10 @@ mod tests {
                 "delta IR 冲激应出现在湿路延迟 {ls} 处 @i={i}：{}",
                 left[i]
             );
-            assert!((f64::from(right[i]) - want).abs() < 1e-4, "右声道同延迟 @i={i}");
+            assert!(
+                (f64::from(right[i]) - want).abs() < 1e-4,
+                "右声道同延迟 @i={i}"
+            );
         }
         // mix=0：干路逐位还原（除 -0.0 符号位）。
         let extra = json!({
@@ -643,8 +671,9 @@ mod tests {
     fn 逐级激活烟测_每新级单独开启输出有限有界() {
         // deesser / loudnessComp(auto) / dynamicEq 三级的单独激活
         // （eqChain/modEffects/modMatrix/reverb 路由已有各自的激活烟测）。
-        let five_bands: Vec<Value> =
-            (0..5).map(|_| json!({"enabled": true, "targetGainDb": 0})).collect();
+        let five_bands: Vec<Value> = (0..5)
+            .map(|_| json!({"enabled": true, "targetGainDb": 0}))
+            .collect();
         let cases: Vec<(&str, serde_json::Value)> = vec![
             (
                 "deesser",
@@ -722,17 +751,18 @@ mod tests {
     fn convolver路由缺IR配方_构建拒绝() {
         // route=convolver 但无 irRecipe → build 报错（调用方映射 -32602）。
         let extra = json!({"reverbRoute": "convolver"});
-        let (p, _) = parse_pilot_params(
-            &{
-                let mut obj = bypass_json().as_object().cloned().unwrap();
-                for (k, v) in extra.as_object().unwrap() {
-                    obj.insert(k.clone(), v.clone());
-                }
-                serde_json::Value::Object(obj)
-            },
-        )
+        let (p, _) = parse_pilot_params(&{
+            let mut obj = bypass_json().as_object().cloned().unwrap();
+            for (k, v) in extra.as_object().unwrap() {
+                obj.insert(k.clone(), v.clone());
+            }
+            serde_json::Value::Object(obj)
+        })
         .unwrap();
-        assert!(PilotSubchain::build(&p, 48000.0, 256).is_err(), "缺 IR 配方必须构建失败");
+        assert!(
+            PilotSubchain::build(&p, 48000.0, 256).is_err(),
+            "缺 IR 配方必须构建失败"
+        );
         assert_eq!(p.reverb_route, ReverbRouteKind::Convolver);
     }
 }

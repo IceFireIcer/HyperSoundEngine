@@ -314,6 +314,7 @@ export class HyperSoundEngine implements AudioEngine {
   private readonly _modMatrix: ModulationMatrix
   private _modMasterGain = 1
   private _modStereoWidth = 1
+  private readonly _modulationResult = { masterGain: 1, stereoWidth: 1 }
   private readonly _delay: DelayEffect
   private readonly _chorus: ChorusEffect
   private readonly _flanger: FlangerEffect
@@ -677,9 +678,9 @@ export class HyperSoundEngine implements AudioEngine {
 
     // 参数调制矩阵（块速率更新 masterGain / stereoWidth）
     if (this._params.modulation.enabled) {
-      const mod = this._modMatrix.processBlock(L, R, n)
-      this._modMasterGain = mod.masterGain
-      this._modStereoWidth = mod.stereoWidth
+      this._modMatrix.processBlockInto(L, R, n, this._modulationResult)
+      this._modMasterGain = this._modulationResult.masterGain
+      this._modStereoWidth = this._modulationResult.stereoWidth
     } else {
       // 调制矩阵未启用：stereoWidth 回退快照值；masterGain 仅当无 MIDI 绑定时回退 1，
       // 否则保留 MIDI 自动化设置的值（mod-master-gain stage 会据此生效）

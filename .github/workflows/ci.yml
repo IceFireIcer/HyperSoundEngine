@@ -34,6 +34,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: HyperSoundEngineRust
+      - name: Rust 实时安全改动格式门禁
+        run: rustfmt --edition 2021 --check crates/hse-core/src/convolver.rs crates/hse-core/tests/realtime_alloc.rs
+        working-directory: HyperSoundEngineRust
+      - name: Rust Clippy 正确性与性能门禁
+        # 精确小数常数与 x-x NaN 传播用于复刻 TS 位型，已由冻结向量覆盖。
+        run: cargo clippy --workspace --all-targets --locked -- --allow clippy::approx_constant --allow clippy::eq_op --deny clippy::suspicious --deny clippy::perf
+        working-directory: HyperSoundEngineRust
+      - name: Rust 基准编译门禁
+        run: cargo bench --workspace --no-run --locked
+        working-directory: HyperSoundEngineRust
       - name: 安装 wasm 试点构建工具
         run: |
           npm ci
@@ -52,5 +62,25 @@ jobs:
         run: cargo test --workspace --locked
         working-directory: HyperSoundEngineRust
       - name: 对拍门禁（specs/ 冻结向量全部 PASS 才算过，双绿门禁 Rust 半边）
+        run: cargo run -q -p hse-parity
+        working-directory: HyperSoundEngineRust
+
+  rust-windows-silent:
+    runs-on: windows-latest
+    env:
+      HSE_ALLOW_REAL_AUDIO: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: HyperSoundEngineRust
+      - name: Windows hse-core 无声门禁
+        run: cargo test -p hse-core --locked
+        working-directory: HyperSoundEngineRust
+      - name: Windows hse-service 无声门禁
+        run: cargo test -p hse-service --locked
+        working-directory: HyperSoundEngineRust
+      - name: Windows 对拍无声门禁
         run: cargo run -q -p hse-parity
         working-directory: HyperSoundEngineRust

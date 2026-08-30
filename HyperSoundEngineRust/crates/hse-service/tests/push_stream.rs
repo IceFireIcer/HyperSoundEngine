@@ -40,15 +40,29 @@ struct Setup {
 fn setup_silent(capture_period: Duration, render_period: Duration) -> Setup {
     let (tx, rx) = sync_channel::<ServiceEvent>(4096);
     let factory = FakeFactory::silent_loopback(capture_period, render_period);
-    let engine = Arc::new(EngineHandle::new(Arc::clone(&factory) as Arc<dyn BackendFactory>, tx));
-    Setup { engine, factory, events: rx }
+    let engine = Arc::new(EngineHandle::new(
+        Arc::clone(&factory) as Arc<dyn BackendFactory>,
+        tx,
+    ));
+    Setup {
+        engine,
+        factory,
+        events: rx,
+    }
 }
 
 fn setup_working(capture_period: Duration, render_period: Duration) -> Setup {
     let (tx, rx) = sync_channel::<ServiceEvent>(4096);
     let factory = FakeFactory::working(capture_period, render_period);
-    let engine = Arc::new(EngineHandle::new(Arc::clone(&factory) as Arc<dyn BackendFactory>, tx));
-    Setup { engine, factory, events: rx }
+    let engine = Arc::new(EngineHandle::new(
+        Arc::clone(&factory) as Arc<dyn BackendFactory>,
+        tx,
+    ));
+    Setup {
+        engine,
+        factory,
+        events: rx,
+    }
 }
 
 fn wait_until(pred: impl Fn() -> bool, timeout: Duration, what: &str) {
@@ -83,7 +97,9 @@ fn enable_bypass(engine: &EngineHandle) {
 fn open_session(engine: &EngineHandle) -> u32 {
     let resp = engine
         .open_session(
-            json!({"sampleRate": 48_000u64, "channels": 2u16, "format": "f32le"}).as_object().unwrap(),
+            json!({"sampleRate": 48_000u64, "channels": 2u16, "format": "f32le"})
+                .as_object()
+                .unwrap(),
             0,
         )
         .unwrap();
@@ -91,10 +107,18 @@ fn open_session(engine: &EngineHandle) -> u32 {
 }
 
 /// 向会话灌 N 块、每块 64 帧的恒定立体声样本。
-fn push_constant(engine: &EngineHandle, session_id: u32, value: f32, chunks: usize, seq_base: &mut u64) {
+fn push_constant(
+    engine: &EngineHandle,
+    session_id: u32,
+    value: f32,
+    chunks: usize,
+    seq_base: &mut u64,
+) {
     let payload = [value; 128]; // 64 立体声帧
     for _ in 0..chunks {
-        assert!(engine.sessions().ingest_frame(&frame(session_id, *seq_base, &payload)));
+        assert!(engine
+            .sessions()
+            .ingest_frame(&frame(session_id, *seq_base, &payload)));
         *seq_base += 1;
     }
 }
@@ -120,7 +144,11 @@ fn 混后处理_双会话求和进渲染_无串扰_无丢失() {
     // 阶段一：仅会话 A（+0.25）→ 渲染出现 0.25，且绝无求和值 0.75（无串扰）
     let mut seq_a = 0u64;
     push_constant(&s.engine, a, 0.25, 200, &mut seq_a);
-    wait_until(|| count(0.25) >= 500, Duration::from_secs(10), "会话 A 独占期 0.25 到达渲染");
+    wait_until(
+        || count(0.25) >= 500,
+        Duration::from_secs(10),
+        "会话 A 独占期 0.25 到达渲染",
+    );
     assert_eq!(count(0.75), 0, "B 未推流，不得出现 A+B 求和值");
 
     // 阶段二：A、B 成对推流（B=+0.5）→ (0.0 回环静音 + 0.25) + 0.5 = 0.75 逐位精确
@@ -131,7 +159,11 @@ fn 混后处理_双会话求和进渲染_无串扰_无丢失() {
         push_constant(&s.engine, a, 0.25, 1, &mut seq_a);
         push_constant(&s.engine, b, 0.5, 1, &mut seq_b);
     }
-    wait_until(|| count(0.75) >= 500, Duration::from_secs(10), "A+B 混合值 0.75 到达渲染");
+    wait_until(
+        || count(0.75) >= 500,
+        Duration::from_secs(10),
+        "A+B 混合值 0.75 到达渲染",
+    );
 
     // 阶段三：继续单推 B；A 的存量排空后进入 B 独占区 → 0.5
     let mut extra = 0usize;
@@ -142,14 +174,27 @@ fn 混后处理_双会话求和进渲染_无串扰_无丢失() {
             std::thread::sleep(Duration::from_millis(2));
         }
     }
-    wait_until(|| count(0.5) >= 500, Duration::from_secs(10), "A 排空后 B 独占区 0.5 到达渲染");
-    assert!(count(0.75) > 0 && count(0.25) > 0, "三个区段（A 独占/求和/B 独占）都应出现过");
+    wait_until(
+        || count(0.5) >= 500,
+        Duration::from_secs(10),
+        "A 排空后 B 独占区 0.5 到达渲染",
+    );
+    assert!(
+        count(0.75) > 0 && count(0.25) > 0,
+        "三个区段（A 独占/求和/B 独占）都应出现过"
+    );
 
     // 全程无溢出：会话环预算从未触顶 ⇒ xrunsIn 恒 0；渲染值域恰为 {0, 0.25, 0.5, 0.75}
-    assert_eq!(s.engine.sessions().xruns_in_total(), 0, "受控速率下不应发生丢弃");
+    assert_eq!(
+        s.engine.sessions().xruns_in_total(),
+        0,
+        "受控速率下不应发生丢弃"
+    );
     let received = s.factory.render_received.lock().unwrap();
     assert!(
-        received.iter().all(|&x| x == 0.0 || x == 0.25 || x == 0.5 || x == 0.75),
+        received
+            .iter()
+            .all(|&x| x == 0.0 || x == 0.25 || x == 0.5 || x == 0.75),
         "渲染值域超出 {{0, 0.25, 0.5, 0.75}}，混合被污染"
     );
     drop(received);
@@ -157,7 +202,11 @@ fn 混后处理_双会话求和进渲染_无串扰_无丢失() {
     // 停止后相位回 idle；会话与相位解耦，仍存活可关
     s.engine.stop().unwrap();
     assert_eq!(s.engine.get_state()["phase"], "idle");
-    assert_eq!(s.engine.sessions().active_ids(), vec![a, b], "stop 不影响会话生命周期");
+    assert_eq!(
+        s.engine.sessions().active_ids(),
+        vec![a, b],
+        "stop 不影响会话生命周期"
+    );
     assert_eq!(
         s.engine
             .close_session(json!({"sessionId": a}).as_object().unwrap())
@@ -203,7 +252,11 @@ fn 背压_运行中超速灌帧_丢旧计入xruns_in并上报事件() {
     }
     assert!(saw_event, "溢出应产生 event.xrun(dir=in) 通知");
     // DSP 消费侧持续推进（始终取得较新数据）
-    wait_until(|| s.engine.frames_processed() > 0, Duration::from_secs(10), "DSP 持续消费");
+    wait_until(
+        || s.engine.frames_processed() > 0,
+        Duration::from_secs(10),
+        "DSP 持续消费",
+    );
     s.engine.stop().unwrap();
     assert_eq!(s.engine.get_state()["phase"], "idle");
 }
@@ -225,11 +278,18 @@ fn 非运行相位照常入队与淘汰_丢弃计入xruns_in_启动后继续消�
         Duration::from_secs(10),
         "idle 期淘汰计数增长",
     );
-    assert_eq!(s.engine.get_state()["stats"]["xrunsIn"].as_u64().unwrap(), s.engine.sessions().xruns_in_total());
+    assert_eq!(
+        s.engine.get_state()["stats"]["xrunsIn"].as_u64().unwrap(),
+        s.engine.sessions().xruns_in_total()
+    );
 
     // 恢复运行后 DSP 从中断处继续取得较新数据（陈旧数据已被淘汰清除）
     s.engine.start().unwrap();
-    wait_until(|| s.engine.frames_processed() > 0, Duration::from_secs(10), "启动后继续消费");
+    wait_until(
+        || s.engine.frames_processed() > 0,
+        Duration::from_secs(10),
+        "启动后继续消费",
+    );
     s.engine.stop().unwrap();
 }
 
@@ -253,11 +313,20 @@ fn 会话帧按帧头路由_互不串扰_关闭即断流() {
 
     // GWT-PS-03：closeSession 即时生效——未消费块丢弃，后续帧按未知会话静默丢弃
     assert_eq!(
-        s.engine.close_session(json!({"sessionId": a}).as_object().unwrap()).unwrap()["closed"],
+        s.engine
+            .close_session(json!({"sessionId": a}).as_object().unwrap())
+            .unwrap()["closed"],
         true
     );
-    assert_eq!(s.engine.sessions().queued_frames(a), None, "环内未消费块直接丢弃");
-    assert!(!s.engine.sessions().ingest_frame(&frame(a, 99, &[0.25; 128])));
+    assert_eq!(
+        s.engine.sessions().queued_frames(a),
+        None,
+        "环内未消费块直接丢弃"
+    );
+    assert!(!s
+        .engine
+        .sessions()
+        .ingest_frame(&frame(a, 99, &[0.25; 128])));
     assert_eq!(s.engine.sessions().queued_frames(b), Some(0), "B 不受影响");
 }
 
@@ -269,16 +338,27 @@ fn loopback_only_无会话时行为与推流实施前一致() {
     configure_48k(&s.engine, 64);
     enable_bypass(&s.engine);
     s.engine.start().unwrap();
-    wait_until(|| s.engine.frames_processed() > 200, Duration::from_secs(10), "纯回环持续出帧");
-    assert_eq!(s.engine.get_state()["stats"]["xrunsIn"].as_u64().unwrap(), 0, "受控速率下无入环丢弃");
+    wait_until(
+        || s.engine.frames_processed() > 200,
+        Duration::from_secs(10),
+        "纯回环持续出帧",
+    );
+    assert_eq!(
+        s.engine.get_state()["stats"]["xrunsIn"].as_u64().unwrap(),
+        0,
+        "受控速率下无入环丢弃"
+    );
     let received = s.factory.render_received.lock().unwrap();
     // 渲染值域 ⊆ 回环斜坡 997 值集合 ∪ {0.0（欠供补零）}——斜坡逐位经链未被改动
-    let mut ramp: Vec<f32> = (0..997u64).map(|i| ((i % 997) as f32 / 997.0) * 2.0 - 1.0).collect();
+    let mut ramp: Vec<f32> = (0..997u64)
+        .map(|i| ((i % 997) as f32 / 997.0) * 2.0 - 1.0)
+        .collect();
     ramp.sort_by(|a, b| a.partial_cmp(b).unwrap());
     assert!(
-        received
-            .iter()
-            .all(|&x| x == 0.0 || ramp.binary_search_by(|p| p.partial_cmp(&x).unwrap()).is_ok()),
+        received.iter().all(|&x| x == 0.0
+            || ramp
+                .binary_search_by(|p| p.partial_cmp(&x).unwrap())
+                .is_ok()),
         "渲染出现斜坡集合之外的样本，回环路径被污染"
     );
     // 流首帧指纹：首块（cursor=0）首帧 = (test_sample(0), test_sample(500000))，
@@ -286,7 +366,9 @@ fn loopback_only_无会话时行为与推流实施前一致() {
     let head_l = -1.0_f32; // test_sample(0)
     let head_r = ((500_000u64 % 997) as f32 / 997.0) * 2.0 - 1.0;
     assert!(
-        received.windows(2).any(|w| w[0] == head_l && w[1] == head_r),
+        received
+            .windows(2)
+            .any(|w| w[0] == head_l && w[1] == head_r),
         "回环斜坡流首帧指纹未达渲染"
     );
     drop(received);
@@ -322,7 +404,10 @@ fn ws端到端_文本控制_二进制推流_断线自动清理_分流正交() {
     let port = listener.local_addr().unwrap().port();
     let (tx, rx) = sync_channel::<ServiceEvent>(4096);
     let factory = FakeFactory::silent_loopback(Duration::ZERO, Duration::ZERO);
-    let engine = Arc::new(EngineHandle::new(Arc::clone(&factory) as Arc<dyn BackendFactory>, tx));
+    let engine = Arc::new(EngineHandle::new(
+        Arc::clone(&factory) as Arc<dyn BackendFactory>,
+        tx,
+    ));
     let clients: server::ClientTable = Arc::new(Mutex::new(Vec::new()));
 
     // 事件中枢 + 接受循环（真实服务拓扑；本测试不启动数据面，音频只入会话环）
@@ -346,18 +431,32 @@ fn ws端到端_文本控制_二进制推流_断线自动清理_分流正交() {
     let (mut ws, _resp) = tungstenite::connect(format!("ws://127.0.0.1:{port}/")).unwrap();
 
     // 控制面：configure → openSession（granted 回显 + id 从 1 起）
-    let resp = rpc_request(&mut ws, 1, "configure",
-        json!({"mode": "loopback", "renderDeviceId": null, "sampleRate": 48_000u64, "blockSizeFrames": 64u64}));
+    let resp = rpc_request(
+        &mut ws,
+        1,
+        "configure",
+        json!({"mode": "loopback", "renderDeviceId": null, "sampleRate": 48_000u64, "blockSizeFrames": 64u64}),
+    );
     assert_eq!(resp["result"]["applied"]["sampleRate"], 48_000);
 
-    let resp = rpc_request(&mut ws, 2, "openSession",
-        json!({"sampleRate": 48_000u64, "channels": 2u16, "format": "f32le"}));
-    assert_eq!(resp["result"]["granted"],
-        json!({"sampleRate": 48_000u64, "channels": 2u16, "format": "f32le"}));
+    let resp = rpc_request(
+        &mut ws,
+        2,
+        "openSession",
+        json!({"sampleRate": 48_000u64, "channels": 2u16, "format": "f32le"}),
+    );
+    assert_eq!(
+        resp["result"]["granted"],
+        json!({"sampleRate": 48_000u64, "channels": 2u16, "format": "f32le"})
+    );
     let sid_a = resp["result"]["sessionId"].as_u64().unwrap();
     assert_eq!(sid_a, 1);
-    let resp = rpc_request(&mut ws, 3, "openSession",
-        json!({"sampleRate": 48_000u64, "channels": 2u16, "format": "f32le"}));
+    let resp = rpc_request(
+        &mut ws,
+        3,
+        "openSession",
+        json!({"sampleRate": 48_000u64, "channels": 2u16, "format": "f32le"}),
+    );
     let sid_b = resp["result"]["sessionId"].as_u64().unwrap();
     assert_eq!(sid_b, 2);
 
@@ -365,23 +464,41 @@ fn ws端到端_文本控制_二进制推流_断线自动清理_分流正交() {
     // B 帧在 A 帧之后发出且同连接串行处理：等待条件必须覆盖最后一帧（B），
     // 否则快机器上 A 先达标而 B 帧仍在连接线程排队 → 假阴性竞态。
     for seq in 0..3u64 {
-        ws.send(Message::Binary(frame(sid_a as u32, seq, &[0.25, 0.75]))).unwrap();
+        ws.send(Message::Binary(frame(sid_a as u32, seq, &[0.25, 0.75])))
+            .unwrap();
     }
-    ws.send(Message::Binary(frame(sid_b as u32, 0, &[1.0, -1.0]))).unwrap();
+    ws.send(Message::Binary(frame(sid_b as u32, 0, &[1.0, -1.0])))
+        .unwrap();
     wait_until(
         || engine.sessions().queued_frames(sid_b as u32) == Some(1),
         Duration::from_secs(5),
         "B 会话收到自己的帧（同连接串行 ⇒ A 的 3 帧必已入环）",
     );
-    assert_eq!(engine.sessions().queued_frames(sid_a as u32), Some(3), "A 会话收到 3 帧载荷");
-    assert_eq!(engine.sessions().queued_frames(sid_b as u32), Some(1), "B 会话只收自己的帧");
+    assert_eq!(
+        engine.sessions().queued_frames(sid_a as u32),
+        Some(3),
+        "A 会话收到 3 帧载荷"
+    );
+    assert_eq!(
+        engine.sessions().queued_frames(sid_b as u32),
+        Some(1),
+        "B 会话只收自己的帧"
+    );
 
     // 违规帧静默：未知会话 / sessionId=0 / 载荷非 8 倍数 / 不足帧头
-    ws.send(Message::Binary(frame(999_999, 0, &[0.0, 0.0]))).unwrap();
+    ws.send(Message::Binary(frame(999_999, 0, &[0.0, 0.0])))
+        .unwrap();
     ws.send(Message::Binary(frame(0, 0, &[0.0, 0.0]))).unwrap();
     ws.send(Message::Binary(vec![0u8; 14])).unwrap();
-    ws.send(Message::Binary(frame(sid_a as u32, 9, &[0.5])[..14].to_vec())).unwrap();
-    assert_eq!(engine.sessions().queued_frames(sid_a as u32), Some(3), "违规帧不入环");
+    ws.send(Message::Binary(
+        frame(sid_a as u32, 9, &[0.5])[..14].to_vec(),
+    ))
+    .unwrap();
+    assert_eq!(
+        engine.sessions().queued_frames(sid_a as u32),
+        Some(3),
+        "违规帧不入环"
+    );
 
     // GWT-PS-13 分流正交：非法 JSON 文本帧 → -32700（id null），绝不触达音频路径
     ws.send(Message::text("{not json".to_string())).unwrap();
@@ -403,8 +520,14 @@ fn ws端到端_文本控制_二进制推流_断线自动清理_分流正交() {
     json_like.extend_from_slice(b"    "); // 补齐到 8 的倍数
     ws.send(Message::Binary(json_like)).unwrap();
     let resp = rpc_request(&mut ws, 4, "getState", json!({}));
-    assert_eq!(resp["result"]["phase"], "idle", "连接健康、未受二进制帧影响");
-    assert_eq!(engine.sessions().active_ids(), vec![sid_a as u32, sid_b as u32]);
+    assert_eq!(
+        resp["result"]["phase"], "idle",
+        "连接健康、未受二进制帧影响"
+    );
+    assert_eq!(
+        engine.sessions().active_ids(),
+        vec![sid_a as u32, sid_b as u32]
+    );
 
     // closeSession：成功 → closed:true；重复 → -32602（不幂等）
     let resp = rpc_request(&mut ws, 5, "closeSession", json!({"sessionId": sid_b}));
@@ -427,7 +550,126 @@ fn ws端到端_文本控制_二进制推流_断线自动清理_分流正交() {
     let resp = rpc_request(&mut ws2, 1, "getState", json!({}));
     assert_eq!(resp["result"]["phase"], "idle");
     // 新连接 openSession 的 id 继续单调（永不复用）
-    let resp = rpc_request(&mut ws2, 2, "openSession",
-        json!({"sampleRate": 48_000u64, "channels": 2u16, "format": "f32le"}));
+    let resp = rpc_request(
+        &mut ws2,
+        2,
+        "openSession",
+        json!({"sampleRate": 48_000u64, "channels": 2u16, "format": "f32le"}),
+    );
     assert!(resp["result"]["sessionId"].as_u64().unwrap() > sid_b);
+}
+
+#[test]
+fn ws端到端_start_stop相位事件严格先于响应() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (tx, rx) = sync_channel::<ServiceEvent>(4096);
+    let factory = FakeFactory::silent_loopback(Duration::from_millis(1), Duration::from_millis(1));
+    let engine = Arc::new(EngineHandle::new(
+        Arc::clone(&factory) as Arc<dyn BackendFactory>,
+        tx,
+    ));
+    let clients: server::ClientTable = Arc::new(Mutex::new(Vec::new()));
+
+    {
+        let engine = Arc::clone(&engine);
+        let clients = Arc::clone(&clients);
+        std::thread::spawn(move || server::run_hub(engine, rx, clients));
+    }
+    {
+        let engine = Arc::clone(&engine);
+        let clients = Arc::clone(&clients);
+        std::thread::spawn(move || server::serve(listener, engine, clients));
+    }
+
+    let (mut ws, _) = tungstenite::connect(format!("ws://127.0.0.1:{port}/")).unwrap();
+    rpc_request(
+        &mut ws,
+        1,
+        "configure",
+        json!({"mode":"loopback","renderDeviceId":null,"sampleRate":48000,"blockSizeFrames":64}),
+    );
+
+    for (id, method, expected_edges) in [
+        (2, "start", [("idle", "starting"), ("starting", "running")]),
+        (3, "stop", [("running", "stopping"), ("stopping", "idle")]),
+    ] {
+        ws.send(Message::text(
+            json!({"jsonrpc":"2.0","id":id,"method":method,"params":{}}).to_string(),
+        ))
+        .unwrap();
+        let mut received = Vec::new();
+        while received.len() < 3 {
+            if let Message::Text(text) = ws.read().unwrap() {
+                received.push(serde_json::from_str::<Value>(&text).unwrap());
+            }
+        }
+        for (index, (from, to)) in expected_edges.into_iter().enumerate() {
+            assert_eq!(received[index]["method"], "event.phase");
+            assert_eq!(received[index]["params"], json!({"from":from,"to":to}));
+        }
+        assert_eq!(
+            received[2]["id"], id,
+            "{method} 响应必须排在两条 phase 事件之后"
+        );
+    }
+}
+
+#[test]
+fn ws端到端_phase事件向其他连接广播且请求方不重复() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (tx, rx) = sync_channel::<ServiceEvent>(4096);
+    let factory = FakeFactory::silent_loopback(Duration::from_millis(1), Duration::from_millis(1));
+    let engine = Arc::new(EngineHandle::new(
+        Arc::clone(&factory) as Arc<dyn BackendFactory>,
+        tx,
+    ));
+    let clients: server::ClientTable = Arc::new(Mutex::new(Vec::new()));
+
+    {
+        let engine = Arc::clone(&engine);
+        let clients = Arc::clone(&clients);
+        std::thread::spawn(move || server::run_hub(engine, rx, clients));
+    }
+    {
+        let engine = Arc::clone(&engine);
+        let clients = Arc::clone(&clients);
+        std::thread::spawn(move || server::serve(listener, engine, clients));
+    }
+
+    let (mut requester, _) = tungstenite::connect(format!("ws://127.0.0.1:{port}/")).unwrap();
+    let (mut observer, _) = tungstenite::connect(format!("ws://127.0.0.1:{port}/")).unwrap();
+    rpc_request(
+        &mut requester,
+        1,
+        "configure",
+        json!({"mode":"loopback","renderDeviceId":null,"sampleRate":48000,"blockSizeFrames":64}),
+    );
+
+    requester
+        .send(Message::text(
+            json!({"jsonrpc":"2.0","id":2,"method":"start","params":{}}).to_string(),
+        ))
+        .unwrap();
+    let mut requester_messages = Vec::new();
+    while requester_messages.len() < 3 {
+        if let Message::Text(text) = requester.read().unwrap() {
+            requester_messages.push(serde_json::from_str::<Value>(&text).unwrap());
+        }
+    }
+    assert_eq!(requester_messages[0]["method"], "event.phase");
+    assert_eq!(requester_messages[1]["method"], "event.phase");
+    assert_eq!(requester_messages[2]["id"], 2);
+
+    for (from, to) in [("idle", "starting"), ("starting", "running")] {
+        let Message::Text(text) = observer.read().unwrap() else {
+            panic!("观察连接应收到 phase 文本通知");
+        };
+        let event: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(event["method"], "event.phase");
+        assert_eq!(event["params"], json!({"from":from,"to":to}));
+    }
+
+    rpc_request(&mut requester, 3, "stop", json!({}));
 }

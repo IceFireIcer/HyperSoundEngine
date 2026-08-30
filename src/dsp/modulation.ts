@@ -110,6 +110,7 @@ export class EnvelopeFollower {
 export class ModulationMatrix {
   private readonly lfo: Lfo
   private readonly env: EnvelopeFollower
+  private readonly result = { masterGain: 1, stereoWidth: 1 }
   private routes: ModulationRoute[] = []
 
   constructor(
@@ -140,8 +141,19 @@ export class ModulationMatrix {
     this.env.setParams(attackMs, releaseMs, amount)
   }
 
-  /** 处理一个块，返回应用调制后的目标值 */
+  /** 处理一个块并返回独立结果快照。实时路径应使用 processBlockInto。 */
   processBlock(l: Float32Array, r: Float32Array, n: number): { masterGain: number; stereoWidth: number } {
+    this.processBlockInto(l, r, n, this.result)
+    return { masterGain: this.result.masterGain, stereoWidth: this.result.stereoWidth }
+  }
+
+  /** 把结果写入调用方提供的对象，供实时路径避免每块分配。 */
+  processBlockInto(
+    l: Float32Array,
+    r: Float32Array,
+    n: number,
+    output: { masterGain: number; stereoWidth: number },
+  ): void {
     const lfoVal = this.lfo.processBlock(n)
     const envVal = this.env.processBlock(l, r, n)
 
@@ -153,9 +165,8 @@ export class ModulationMatrix {
       if (route.target === 'masterGain') masterGain += v
       else stereoWidth += v
     }
-    masterGain = clamp(masterGain, 0, 4)
-    stereoWidth = clamp(stereoWidth, 0, 2)
-    return { masterGain, stereoWidth }
+    output.masterGain = clamp(masterGain, 0, 4)
+    output.stereoWidth = clamp(stereoWidth, 0, 2)
   }
 
   reset(): void {

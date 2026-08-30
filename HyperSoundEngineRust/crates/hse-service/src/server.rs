@@ -14,7 +14,7 @@
 use std::collections::VecDeque;
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{Receiver, SyncSender, RecvTimeoutError};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -25,8 +25,8 @@ use crate::engine::EngineHandle;
 use crate::rpc;
 use crate::state::ServiceEvent;
 
-/// 在线客户端广播表（每客户端一条有界回传通道）。
-pub type ClientTable = Arc<Mutex<Vec<SyncSender<String>>>>;
+/// 在线客户端广播表（连接 id + 每客户端一条有界回传通道）。
+pub type ClientTable = Arc<Mutex<Vec<(u64, SyncSender<String>)>>>;
 
 const HUB_TICK_MS: u64 = 50;
 /// 连接标识分配器：openSession 记录归属，断线时据此自动清理会话。
@@ -59,7 +59,14 @@ pub fn run_hub(engine: Arc<EngineHandle>, rx: Receiver<ServiceEvent>, clients: C
 
 fn broadcast(clients: &ClientTable, text: String) {
     let mut list = clients.lock().unwrap();
-    list.retain(|client| client.try_send(text.clone()).is_ok());
+    list.retain(|(_, client)| client.try_send(text.clone()).is_ok());
+}
+
+fn broadcast_except(clients: &ClientTable, excluded_owner: u64, text: String) {
+    let mut list = clients.lock().unwrap();
+    list.retain(|(owner, client)| {
+        *owner == excluded_owner || client.try_send(text.clone()).is_ok()
+    });
 }
 
 fn render_event(engine: &EngineHandle, ev: ServiceEvent) -> String {
@@ -87,7 +94,12 @@ fn render_event(engine: &EngineHandle, ev: ServiceEvent) -> String {
 /// tungstenite 同步栈无法跨线程拆分读写，故在单线程内以短轮询同时服务
 /// 入站请求/推流帧与事件出站（控制面线程不受实时纪律约束）。
 /// 连接断开时自动清理本连接打开的全部推流会话（GWT-PS-06 防泄漏）。
-fn handle_connection(stream: TcpStream, engine: &Arc<EngineHandle>, clients: &ClientTable, owner: u64) {
+fn handle_connection(
+    stream: TcpStream,
+    engine: &Arc<EngineHandle>,
+    clients: &ClientTable,
+    owner: u64,
+) {
     let _ = stream.set_nodelay(true);
     let mut ws = match tungstenite::accept(stream) {
         Ok(ws) => ws,
@@ -102,14 +114,28 @@ fn handle_connection(stream: TcpStream, engine: &Arc<EngineHandle>, clients: &Cl
         return;
     }
     let (tx, rx) = std::sync::mpsc::sync_channel::<String>(256);
-    clients.lock().unwrap().push(tx);
+    clients.lock().unwrap().push((owner, tx));
     loop {
         // —— 入站：逐帧读取（WouldBlock 视为暂无数据）——
         match ws.read() {
             Ok(Message::Text(text)) => {
-                if let Some(response) = rpc::handle_line(engine, owner, &text) {
-                    if ws.send(Message::text(response)).is_err() {
+                for response in rpc::handle_messages(engine, owner, &text) {
+                    let is_phase_event = serde_json::from_str::<serde_json::Value>(&response)
+                        .ok()
+                        .and_then(|value| {
+                            value
+                                .get("method")
+                                .and_then(|method| method.as_str())
+                                .map(str::to_owned)
+                        })
+                        .as_deref()
+                        == Some("event.phase");
+                    if ws.send(Message::text(response.clone())).is_err() {
                         break;
+                    }
+                    if is_phase_event {
+                        // 请求连接已按同步顺序收到事件；其余连接仍收到一次广播。
+                        broadcast_except(clients, owner, response);
                     }
                 }
             }
@@ -123,9 +149,13 @@ fn handle_connection(stream: TcpStream, engine: &Arc<EngineHandle>, clients: &Cl
             }
             Ok(Message::Close(_)) => break,
             Ok(_) => {}
-            Err(tungstenite::Error::ConnectionClosed) | Err(tungstenite::Error::AlreadyClosed) => break,
+            Err(tungstenite::Error::ConnectionClosed) | Err(tungstenite::Error::AlreadyClosed) => {
+                break
+            }
             Err(tungstenite::Error::Io(ref e)) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-            Err(tungstenite::Error::Protocol(tungstenite::error::ProtocolError::ResetWithoutClosingHandshake)) => break,
+            Err(tungstenite::Error::Protocol(
+                tungstenite::error::ProtocolError::ResetWithoutClosingHandshake,
+            )) => break,
             Err(e) => {
                 eprintln!("[hse-service] 连接读错误：{}", e);
                 break;
@@ -148,7 +178,11 @@ fn handle_connection(stream: TcpStream, engine: &Arc<EngineHandle>, clients: &Cl
 }
 
 /// 接受循环：阻塞监听并逐连接开线程。
-pub fn serve(listener: TcpListener, engine: Arc<EngineHandle>, clients: ClientTable) -> std::io::Result<()> {
+pub fn serve(
+    listener: TcpListener,
+    engine: Arc<EngineHandle>,
+    clients: ClientTable,
+) -> std::io::Result<()> {
     for incoming in listener.incoming() {
         match incoming {
             Ok(stream) => {

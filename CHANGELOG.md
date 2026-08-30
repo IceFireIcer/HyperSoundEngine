@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+- **服务控制面契约与实时安全加固**：JSON-RPC 显式非法 `id`/`params` 在分派前拒绝且无副作用；start/stop 的 phase 通知在请求连接上严格先于响应，并向其他连接广播一次；`setParams` 运行态候选构链、命令投递与规范化 `lastParams` 改为事务提交，非运行态保留延迟构链兼容语义；公开 stop 不再接受 starting 状态。
+- **稳态零分配机械门禁**：Convolver 固定容量 pending 队列移除处理期扩容，服务热换旧链经 SPSC 回收环转交专用非实时线程析构；Rust 分配器测试同时统计 alloc/realloc/dealloc，覆盖卷积、默认链和代表性全开链；TS 调制矩阵新增 `processBlockInto` 供引擎复用预分配结果，同时保留公开 `processBlock` 的独立快照语义。
+- **跨平台 CI**：增加本批 Rust 文件格式检查、Clippy 可疑逻辑/性能阻断、全部 benchmark 编译和 `windows-latest` 的 core/service/parity 无声门禁；真机 WASAPI 仍需显式 `HSE_ALLOW_REAL_AUDIO=1`。
+
 ## [0.7.0] - 2026-08
 
 ### Added

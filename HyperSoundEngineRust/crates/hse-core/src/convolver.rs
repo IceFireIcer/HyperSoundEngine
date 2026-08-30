@@ -13,8 +13,8 @@
 //!   → −60dB **后缀**判定（防稀疏 IR 误衰减）→ τ≈50ms 指数衰减；不改变 IR 长度；
 //! - **流式处理**（§4.4）：输入按 Ls 分组、湿块按块粒度生产、湿路逐样本放行；
 //!   outAccum **跨块累加**（块处理前不得清零，左移保留各分区历史贡献）；
-//!   pending 为滑动窗口队列（队尾越界 copyWithin 压缩 + 突发扩容——纯容量管理，
-//!   无数值影响）；湿路放行条件四联：pendingLen>0 ∧ wetIdx≥0 ∧
+//!   pending 为固定容量滑动窗口队列，逐样本交替生产/消费，处理期不扩容；
+//!   湿路放行条件四联：pendingLen>0 ∧ wetIdx≥0 ∧
 //!   wetIdx<completedBlocks·Ls ∧ totalWetOut===wetIdx；
 //! - **f32 落点**：IR、分区频谱、复乘结果（prodShort/prodLong）、outAccum 的
 //!   overlap-add 累加、pending、preDelay 延迟线全部是 TS `Float32Array`——
@@ -121,7 +121,12 @@ pub fn build_ir_recipe(recipe: &IrRecipe) -> Result<Vec<f32>, String> {
             ir[delay as usize] = 1.0;
             Ok(ir)
         }
-        IrRecipe::ExpNoise { length, seed, decay, amp } => {
+        IrRecipe::ExpNoise {
+            length,
+            seed,
+            decay,
+            amp,
+        } => {
             let length = length.round();
             if !(length >= 2.0) || !(decay > 0.0) {
                 return Err("expNoise IR 配方 length/decay 非法".to_string());
@@ -134,7 +139,8 @@ pub fn build_ir_recipe(recipe: &IrRecipe) -> Result<Vec<f32>, String> {
                 s = s.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
                 let u = f64::from(s) / 4294967296.0;
                 // 结合序逐字固化：((u * 2 - 1) * amp) * Math.exp((-decay * i) / (length - 1))。
-                *slot = (((u * 2.0 - 1.0) * amp) * ((-decay * i as f64) / (length - 1.0)).exp()) as f32;
+                *slot =
+                    (((u * 2.0 - 1.0) * amp) * ((-decay * i as f64) / (length - 1.0)).exp()) as f32;
             }
             Ok(ir)
         }
@@ -199,8 +205,7 @@ impl ChannelState {
 
 /// 非均匀分区卷积混响阶段（对齐 TS `Convolver` 类）。
 ///
-/// 全部缓冲在 `load_ir`（非实时路径）定容分配；`process_stereo` 稳态零分配
-/// （pending 队列的突发扩容只在输入块长超出容量的非常规驱动下发生，§4.4 注记）。
+/// 全部缓冲在 `load_ir`（非实时路径）定容分配；`process_stereo` 稳态零分配。
 pub struct ConvolverStage {
     fs: f64,
     /// 最短分区长 Ls（= 湿路延迟，构造时锁定）。
@@ -492,7 +497,8 @@ impl ConvolverStage {
         let dry_gain = 1.0 - self.mix;
         let wet_gain = self.mix;
 
-        // ---- 先喂入输入块；块满时跑分区卷积产出湿块（pending 滑动窗口队列）----
+        // 每帧先喂入；块满时产出一个湿块，然后立即按序放行当前帧。这样 pending
+        // 峰值不随调用块长增长，load_ir 分配的固定容量足够覆盖所有合法状态。
         for i in 0..b {
             self.ch_l.input_block[self.input_pos] = l[i];
             self.ch_r.input_block[self.input_pos] = r[i];
@@ -500,7 +506,6 @@ impl ConvolverStage {
             if self.input_pos >= ls {
                 let cap = self.ch_l.pending.len();
                 if self.pending_pos + self.pending_len + ls > cap {
-                    // 压缩：未读内容移到头部（摊还 O(Ls)/块）。
                     let remain = self.pending_len;
                     if remain > 0 && self.pending_pos > 0 {
                         self.ch_l
@@ -511,32 +516,40 @@ impl ConvolverStage {
                             .copy_within(self.pending_pos..self.pending_pos + remain, 0);
                     }
                     self.pending_pos = 0;
-                    // 突发（单次调用多块产出）超出容量时动态扩容；resize 保留
-                    // 前 pending_len 个（压缩后即全部未读内容），尾部未读区域
-                    // 不会被先读后写——纯容量管理，无数值影响。
-                    if self.pending_len + ls > self.ch_l.pending.len() {
-                        let new_cap = (cap * 2).max(self.pending_len + ls);
-                        self.ch_l.pending.resize(new_cap, 0.0);
-                        self.ch_r.pending.resize(new_cap, 0.0);
-                    }
                 }
+                assert!(
+                    self.pending_len + ls <= cap,
+                    "convolver pending 固定容量不足"
+                );
                 let write_at = self.pending_pos + self.pending_len;
-                let block_idx = self.completed_blocks; // 当前块号（0-based，处理后 +1）
+                let block_idx = self.completed_blocks;
                 let plan = self.plan.as_ref().expect("IR 已载入");
-                Self::process_wet_block(plan, ls, ll, k, &mut self.work, &mut self.ch_l, write_at, block_idx);
-                Self::process_wet_block(plan, ls, ll, k, &mut self.work, &mut self.ch_r, write_at, block_idx);
+                Self::process_wet_block(
+                    plan,
+                    ls,
+                    ll,
+                    k,
+                    &mut self.work,
+                    &mut self.ch_l,
+                    write_at,
+                    block_idx,
+                );
+                Self::process_wet_block(
+                    plan,
+                    ls,
+                    ll,
+                    k,
+                    &mut self.work,
+                    &mut self.ch_r,
+                    write_at,
+                    block_idx,
+                );
                 self.pending_len += ls;
                 self.completed_blocks += 1;
                 self.input_pos = 0;
             }
-        }
-        self.total_in += b;
+            self.total_in += 1;
 
-        // ---- 再按序取出 b 个湿样本（不足补零）并与干路混合 ----
-        // 放行约束（逐样本，支持任意块长）：位置 i 的湿输出 = 输入位置 i−Ls 的
-        // 卷积 → wetIdx = totalOut − Ls；wetIdx ≥ 0 且 < completedBlocks·Ls
-        // （对应输入块已产出）且 totalWetOut === wetIdx（严格按序放行）。
-        for i in 0..b {
             let mut wet_l = 0.0_f32;
             let mut wet_r = 0.0_f32;
             let wet_idx = self.total_out as i64 - ls as i64;
@@ -555,10 +568,18 @@ impl ConvolverStage {
                 }
             }
             self.total_out += 1;
-            // preDelay 环形延迟线（共享游标每帧推进两次 → 每声道有效延迟 =
-            // preDelaySamples/2，见 push_delay 文档；preDelay=0 直通且不推游标）。
-            wet_l = Self::push_delay(&mut self.ch_l.wet_delay, &mut self.wet_delay_pos, self.pre_delay_samples, wet_l);
-            wet_r = Self::push_delay(&mut self.ch_r.wet_delay, &mut self.wet_delay_pos, self.pre_delay_samples, wet_r);
+            wet_l = Self::push_delay(
+                &mut self.ch_l.wet_delay,
+                &mut self.wet_delay_pos,
+                self.pre_delay_samples,
+                wet_l,
+            );
+            wet_r = Self::push_delay(
+                &mut self.ch_r.wet_delay,
+                &mut self.wet_delay_pos,
+                self.pre_delay_samples,
+                wet_r,
+            );
             l[i] = (dry_gain * f64::from(l[i]) + wet_gain * f64::from(wet_l)) as f32;
             r[i] = (dry_gain * f64::from(r[i]) + wet_gain * f64::from(wet_r)) as f32;
         }
@@ -613,10 +634,12 @@ impl ConvolverStage {
                     let base1 = (plan.long_start + p * ll) - (k - 1) * ls;
                     let base2 = base1 + ll;
                     for j in 0..ll {
-                        ch.out_accum[base1 + j] =
-                            (f64::from(ch.out_accum[base1 + j]) + f64::from(work.prod_long_real[j])) as f32;
-                        ch.out_accum[base2 + j] =
-                            (f64::from(ch.out_accum[base2 + j]) + f64::from(work.prod_long_real[ll + j])) as f32;
+                        ch.out_accum[base1 + j] = (f64::from(ch.out_accum[base1 + j])
+                            + f64::from(work.prod_long_real[j]))
+                            as f32;
+                        ch.out_accum[base2 + j] = (f64::from(ch.out_accum[base2 + j])
+                            + f64::from(work.prod_long_real[ll + j]))
+                            as f32;
                     }
                 }
             }
@@ -645,10 +668,12 @@ impl ConvolverStage {
             let base1 = p * ls;
             let base2 = base1 + ls;
             for j in 0..ls {
-                ch.out_accum[base1 + j] =
-                    (f64::from(ch.out_accum[base1 + j]) + f64::from(work.prod_short_real[j])) as f32;
-                ch.out_accum[base2 + j] =
-                    (f64::from(ch.out_accum[base2 + j]) + f64::from(work.prod_short_real[ls + j])) as f32;
+                ch.out_accum[base1 + j] = (f64::from(ch.out_accum[base1 + j])
+                    + f64::from(work.prod_short_real[j]))
+                    as f32;
+                ch.out_accum[base2 + j] = (f64::from(ch.out_accum[base2 + j])
+                    + f64::from(work.prod_short_real[ls + j]))
+                    as f32;
             }
         }
 
@@ -793,13 +818,20 @@ mod tests {
     }
 
     /// 按给定块长驱动整段输入（分段 process_stereo），返回输出拷贝。
-    fn drive(stage: &mut ConvolverStage, l: &[f32], r: &[f32], block: usize) -> (Vec<f32>, Vec<f32>) {
+    fn drive(
+        stage: &mut ConvolverStage,
+        l: &[f32],
+        r: &[f32],
+        block: usize,
+    ) -> (Vec<f32>, Vec<f32>) {
         let mut out_l = l.to_vec();
         let mut out_r = r.to_vec();
         let mut off = 0_usize;
         while off < l.len() {
             let end = (off + block).min(l.len());
-            stage.process_stereo(&mut out_l[off..end], &mut out_r[off..end]).expect("合法驱动");
+            stage
+                .process_stereo(&mut out_l[off..end], &mut out_r[off..end])
+                .expect("合法驱动");
             off = end;
         }
         (out_l, out_r)
@@ -819,7 +851,12 @@ mod tests {
     /// 的 expNoise(length=1024, seed=777, decay=5, amp=0.5) 前 6 个样本
     /// （f32 位型，JSON 最短往返）。
     const GOLDEN_EXPNOISE_SEED777_DECAY5_AMP05: [u32; 6] = [
-        0x3D18_5B0D, 0x3E82_1F96, 0x3EAB_4D64, 0xBD8E_1D4C, 0xBE88_6320, 0x3DBA_2B07,
+        0x3D18_5B0D,
+        0x3E82_1F96,
+        0x3EAB_4D64,
+        0xBD8E_1D4C,
+        0xBE88_6320,
+        0x3DBA_2B07,
     ];
 
     #[test]
@@ -851,24 +888,72 @@ mod tests {
         .unwrap();
         assert_eq!(ir, ir2);
         // 非法域。
-        assert!(build_ir_recipe(&IrRecipe::ExpNoise { length: 1.0, seed: 1, decay: 1.0, amp: 1.0 }).is_err());
-        assert!(build_ir_recipe(&IrRecipe::ExpNoise { length: 8.0, seed: 1, decay: 0.0, amp: 1.0 }).is_err());
-        assert!(build_ir_recipe(&IrRecipe::ExpNoise { length: f64::NAN, seed: 1, decay: 1.0, amp: 1.0 }).is_err());
+        assert!(build_ir_recipe(&IrRecipe::ExpNoise {
+            length: 1.0,
+            seed: 1,
+            decay: 1.0,
+            amp: 1.0
+        })
+        .is_err());
+        assert!(build_ir_recipe(&IrRecipe::ExpNoise {
+            length: 8.0,
+            seed: 1,
+            decay: 0.0,
+            amp: 1.0
+        })
+        .is_err());
+        assert!(build_ir_recipe(&IrRecipe::ExpNoise {
+            length: f64::NAN,
+            seed: 1,
+            decay: 1.0,
+            amp: 1.0
+        })
+        .is_err());
     }
 
     #[test]
     fn 构造钳制与非法采样率() {
         // partitionSize clamp [32, 8192]；round 语义。
-        let s = ConvolverStage::new(48000.0, ConvolverOptions { partition_size: 16.0, ..Default::default() }).unwrap();
+        let s = ConvolverStage::new(
+            48000.0,
+            ConvolverOptions {
+                partition_size: 16.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(s.partition_size(), 32);
-        let s = ConvolverStage::new(48000.0, ConvolverOptions { partition_size: 100000.0, ..Default::default() }).unwrap();
+        let s = ConvolverStage::new(
+            48000.0,
+            ConvolverOptions {
+                partition_size: 100000.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(s.partition_size(), 8192);
         // longPartitionSize 向上取 Ls 的 2 的幂整数倍。
-        let s = ConvolverStage::new(48000.0, ConvolverOptions { partition_size: 512.0, long_partition_size: 1000.0, ..Default::default() }).unwrap();
+        let s = ConvolverStage::new(
+            48000.0,
+            ConvolverOptions {
+                partition_size: 512.0,
+                long_partition_size: 1000.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(s.long_partition_size, 1024); // k = 2
-        let s = ConvolverStage::new(48000.0, ConvolverOptions { partition_size: 512.0, long_partition_size: 512.0, ..Default::default() }).unwrap();
+        let s = ConvolverStage::new(
+            48000.0,
+            ConvolverOptions {
+                partition_size: 512.0,
+                long_partition_size: 512.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(s.long_partition_size, 512); // want ≤ Ls → k=1 退化均匀
-        // 非法 fs。
+                                                // 非法 fs。
         for bad in [0.0_f64, -48000.0, f64::NAN, f64::INFINITY] {
             assert!(ConvolverStage::new(bad, ConvolverOptions::default()).is_err());
         }
@@ -932,7 +1017,11 @@ mod tests {
             },
         )
         .unwrap();
-        s.load_ir(&build_ir_recipe(&IrRecipe::Delta { delay: 0.0 }).unwrap(), Some("test")).unwrap();
+        s.load_ir(
+            &build_ir_recipe(&IrRecipe::Delta { delay: 0.0 }).unwrap(),
+            Some("test"),
+        )
+        .unwrap();
         s.set_mix(1.0);
         s.set_pre_delay_ms(0.0);
         assert_eq!(s.get_latency_samples(), ls);
@@ -943,7 +1032,8 @@ mod tests {
         // 分块恰好 = Ls（12 块整除语义）。
         let mut off = 0;
         while off < f {
-            s.process_stereo(&mut out_l[off..off + ls], &mut out_r[off..off + ls]).unwrap();
+            s.process_stereo(&mut out_l[off..off + ls], &mut out_r[off..off + ls])
+                .unwrap();
             off += ls;
         }
         for i in 0..ls {
@@ -978,7 +1068,13 @@ mod tests {
             )
             .unwrap();
             s.load_ir(
-                &build_ir_recipe(&IrRecipe::ExpNoise { length: 1024.0, seed: 777, decay: 5.0, amp: 0.5 }).unwrap(),
+                &build_ir_recipe(&IrRecipe::ExpNoise {
+                    length: 1024.0,
+                    seed: 777,
+                    decay: 5.0,
+                    amp: 0.5,
+                })
+                .unwrap(),
                 None,
             )
             .unwrap();
@@ -1022,7 +1118,13 @@ mod tests {
             },
         )
         .unwrap();
-        let ir = build_ir_recipe(&IrRecipe::ExpNoise { length: 128.0, seed: 777, decay: 5.0, amp: 0.5 }).unwrap();
+        let ir = build_ir_recipe(&IrRecipe::ExpNoise {
+            length: 128.0,
+            seed: 777,
+            decay: 5.0,
+            amp: 0.5,
+        })
+        .unwrap();
         s.load_ir(&ir, None).unwrap();
         s.set_mix(1.0);
         assert_eq!(s.partition_size(), ls);
@@ -1058,7 +1160,13 @@ mod tests {
             },
         )
         .unwrap();
-        let ir = build_ir_recipe(&IrRecipe::ExpNoise { length: 128.0, seed: 777, decay: 5.0, amp: 0.5 }).unwrap();
+        let ir = build_ir_recipe(&IrRecipe::ExpNoise {
+            length: 128.0,
+            seed: 777,
+            decay: 5.0,
+            amp: 0.5,
+        })
+        .unwrap();
         s.load_ir(&ir, None).unwrap();
         s.set_mix(1.0);
         // 规划断言：Ps = max(1, k−1) = 1、longStart = 32、Pl = ceil(96/64) = 2。
@@ -1109,15 +1217,31 @@ mod tests {
         assert_eq!(on_r, off_r, "δ IR 下 dePeriodize 必须为精确无操作（右）");
 
         // 指数衰减 IR：decay 足够大使尾部跌破 −60dB。
-        let noisy = build_ir_recipe(&IrRecipe::ExpNoise { length: 1024.0, seed: 777, decay: 12.0, amp: 0.5 }).unwrap();
+        let noisy = build_ir_recipe(&IrRecipe::ExpNoise {
+            length: 1024.0,
+            seed: 777,
+            decay: 12.0,
+            amp: 0.5,
+        })
+        .unwrap();
         let (on_l, _) = run(true, &noisy);
         let (off_l, _) = run(false, &noisy);
         let first_diff = on_l.iter().zip(off_l.iter()).position(|(a, b)| a != b);
         assert!(first_diff.is_some(), "去周期化触发后输出必须可区分");
-        assert!(first_diff.unwrap() > 0, "触发点之前应逐样本一致（存在共享前缀）");
+        assert!(
+            first_diff.unwrap() > 0,
+            "触发点之前应逐样本一致（存在共享前缀）"
+        );
         // 触发段显著可区分：差异样本占比可观。
-        let diff_count = on_l.iter().zip(off_l.iter()).filter(|(a, b)| a != b).count();
-        assert!(diff_count > f / 10, "差异样本 {diff_count} 应可观（衰减尾被压缩）");
+        let diff_count = on_l
+            .iter()
+            .zip(off_l.iter())
+            .filter(|(a, b)| a != b)
+            .count();
+        assert!(
+            diff_count > f / 10,
+            "差异样本 {diff_count} 应可观（衰减尾被压缩）"
+        );
     }
 
     #[test]
@@ -1138,7 +1262,13 @@ mod tests {
             )
             .unwrap();
             s.load_ir(
-                &build_ir_recipe(&IrRecipe::ExpNoise { length: 1024.0, seed: 777, decay: 5.0, amp: 0.5 }).unwrap(),
+                &build_ir_recipe(&IrRecipe::ExpNoise {
+                    length: 1024.0,
+                    seed: 777,
+                    decay: 5.0,
+                    amp: 0.5,
+                })
+                .unwrap(),
                 Some("golden"),
             )
             .unwrap();
@@ -1198,7 +1328,11 @@ mod tests {
             },
         )
         .unwrap();
-        s.load_ir(&build_ir_recipe(&IrRecipe::Delta { delay: 0.0 }).unwrap(), None).unwrap();
+        s.load_ir(
+            &build_ir_recipe(&IrRecipe::Delta { delay: 0.0 }).unwrap(),
+            None,
+        )
+        .unwrap();
         s.set_mix(1.0);
         s.set_pre_delay_ms(25.0); // 1200 样本 → 每声道有效延迟 600
 
@@ -1225,15 +1359,33 @@ mod tests {
     mod golden {
         /// mix=1：湿路延迟段之后（下标 32..48）的输出 f32 位型。
         pub const CONV_WET_32_48: [u32; 16] = [
-            0xBCE5_ECDA, 0xBE1A_7F57, 0xBCBC_8D04, 0x3E6F_7C9E,
-            0xBCBA_F6D1, 0xBE05_23DD, 0x3F06_EA1F, 0xBE9C_DD43,
-            0xBED3_1A2B, 0x3F20_4D21, 0x3E93_5181, 0x3E2B_F357,
-            0x3EDD_D6C4, 0xBD89_8B03, 0xBE8F_3B06, 0x3D1E_57B1,
+            0xBCE5_ECDA,
+            0xBE1A_7F57,
+            0xBCBC_8D04,
+            0x3E6F_7C9E,
+            0xBCBA_F6D1,
+            0xBE05_23DD,
+            0x3F06_EA1F,
+            0xBE9C_DD43,
+            0xBED3_1A2B,
+            0x3F20_4D21,
+            0x3E93_5181,
+            0x3E2B_F357,
+            0x3EDD_D6C4,
+            0xBD89_8B03,
+            0xBE8F_3B06,
+            0x3D1E_57B1,
         ];
         /// mix=0.8：干湿混合（含逐样本放行首段）的输出 f32 位型（下标 0..8）。
         pub const CONV_MIX08_0_8: [u32; 8] = [
-            0xBE1A_890A, 0x3E3D_600E, 0xBD9E_CF74, 0xBD18_00CD,
-            0x3E12_46E9, 0x3B55_2366, 0xBDAC_4E41, 0xBD0E_FB60,
+            0xBE1A_890A,
+            0x3E3D_600E,
+            0xBD9E_CF74,
+            0xBD18_00CD,
+            0x3E12_46E9,
+            0x3B55_2366,
+            0xBDAC_4E41,
+            0xBD0E_FB60,
         ];
     }
 
@@ -1250,7 +1402,13 @@ mod tests {
         )
         .unwrap();
         s.load_ir(
-            &build_ir_recipe(&IrRecipe::ExpNoise { length: 128.0, seed: 777, decay: 5.0, amp: 0.5 }).unwrap(),
+            &build_ir_recipe(&IrRecipe::ExpNoise {
+                length: 128.0,
+                seed: 777,
+                decay: 5.0,
+                amp: 0.5,
+            })
+            .unwrap(),
             Some("golden"),
         )
         .unwrap();
@@ -1296,6 +1454,9 @@ mod tests {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             s.process(&mut l, &mut r);
         }));
-        assert!(result.is_err(), "未载入 IR 的 Stage::process 应 panic（镜像 TS 抛错）");
+        assert!(
+            result.is_err(),
+            "未载入 IR 的 Stage::process 应 panic（镜像 TS 抛错）"
+        );
     }
 }
