@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+### Added
+- **Phase 4 固定种子全链跨语言参数扫描门禁**：复用 40 个合法快照矩阵（44.1/48/96kHz，63/128/257/512 块，8 固定种子 + 最小/最大边界，全部含 17 帧短尾），由 TS 事实实现显式 `--write` 冻结参数、输入种子与输出；默认脚本仅验证且缺失即失败。TS 与 `hse-parity` 同调度重放并按 1e-6 相对容差比对有限率、非零率及峰值/RMS 数量级摘要，综合退出码覆盖新门禁；既有 72 组逐样本音频向量保持不变。
+
+## [1.5.0] - 2026-08
+
+### Fixed
+- **Phase 4 自动门禁与验收口径**：CI 以 release profile 运行 `hse-core` 稳态零分配测试，Windows 增加不枚举/不打开设备的 `hse-wasapi` 方向门禁，服务以显式 readiness 许可覆盖假捕获→输入环→`ServiceEngineChain`→输出环→内存渲染完整路径；`hse-real-audio-check` schema 2 明确仅为 low-level WASAPI diagnostics，并与未测的服务管线字段拆分。双推流工具改用两条独立 WebSocket，通过加性的 `getState.sessions` 分别核验接收/消费/排空和零 xrun，物理输出与双频验证明确返回 `external-output-required`。
+- **正式 wasm AudioWorklet 浏览器兼容性**：改用 wasm-bindgen 的命名 `initSync` 导出，避免将异步默认初始化器误用于同步 processor 构造；生产 bundle 在 AudioWorkletGlobalScope 缺少 `TextEncoder` / `TextDecoder` 时前置轻量 UTF-8 codec，使 Chromium 能完成处理器注册、wasm 实例化与 `ready` 握手。
+- **TS `processMulti` 共享主链拓扑**：多声道 spatial 开启时改为先由 `SpatialBackend.processMulti` 双耳化全部 3–8 路输入，再让所得 L/R 执行第 1–21 级主链，确保 ch2+ 同样受 EQ、动态器、分析与最终 Limiter 影响；spatial off 继续保持 ch0/ch1 兼容，旧双声道 `process` 仍保持 stage 22 最后的冻结顺序。
+- **hrtf-core SOFA 采样率转换**：保留 `sofar default-features=false` 纯 Rust parser，在控制路径以确定性 129-tap Kaiser-windowed sinc 转换 44.1/48/96k HRIR；`Data.Delay` 先按源采样率验证整数采样，再按物理时间换算到目标采样率，输出长度、轴与有限性严格校验。真实 SOFA 测试继续通过 `HSE_TEST_SOFA` ignored 门控，不下载资产。
+- **TS/wasm Worklet 参数更新移出渲染线程**：`HyperSoundEngineHost.setParams` 对两个 worklet backend 都在宿主控制路径预建带 `processorOptions.initialParams` 的完整新节点，等待 `ready` 后经双 GainNode 在默认 20ms 内线性交叉淡变；旧链仅在 `AudioContext.currentTime` 到达淡变终点后清理，context 暂停不会被墙钟定时器提前断开。运行期 worklet 不再接受参数重建消息，仅保留 `reset`；替换失败保留当前可听链，并发更新串行化，dispose 立即清理并结束等待。
+
+### Added
+- **Rust EngineChain stage 22 world/stage 参数对等**：`hse-core` 完整消费 world listener position/yaw/pitch/roll、sources/trajectories/playhead/occlusion 与相邻快照确定速度，并按 source id 使用确定性稳定 slot；stage 对齐四套 preset、seat、roomSize、reverbAmount、customSources 与 ambience。`hrtf-core` 新增完整欧拉几何及 Doppler、遮挡、声源大小方向模糊/右耳去相关，保持中性配置和 spatial off 旧路径不变；service 与 wasm 构造路径同步覆盖，新增短块、reset 和稳态零分配门禁。world-listener 共享夹具在保留原 12 case 的基础上追加 pitch/roll 两例，综合空间门禁为 28/28。
+- **正式 wasm AudioWorklet Chromium E2E 门禁**：新增基于 `playwright-core` 的 headless Chromium 测试，按 wasm32 release → wasm-bindgen web glue → core/Host bundle → 生产 worklet bundle 的顺序构建，并从 localhost 加载真实产物；以不连接扬声器或麦克风的 Web Audio 图验证 `ready`、spatial off 的 1–21 级非静音处理、构造失败静音和参数节点替换淡变。Firefox 尚未纳入自动门禁。
+- **Rust stage 22 接入正式 wasm Host 路径**：`hse-wasm::HseEngine` 新增 SOFA bytes 与预解析规则 grid 构造入口，在 AudioWorklet 构造控制阶段统一调用 `EngineChainStage::from_params_with_hrtf_grid`；默认 spatial off 保持兼容，非 off 无 HRTF 明确失败。`HyperSoundEngineHost` 新增互斥的 `hrtfUrl` / `hrtf` 选项，主线程 fetch 并缓存 SOFA bytes、编译 wasm module，参数替换沿现有 crossfade 预建节点并复用两项资源，render callback 不解析 HRTF。
+- **Rust stage 22 接入 hse-service 正式路径**：控制面新增向后兼容的 `loadHrtf{path}`，仅在 idle 从本地绝对 `.sofa` 普通文件按已配置采样率调用 `hrtf-core::load_sofa_file`，成功后将网格与规范路径存入 `EngineHandle`；`getState.hrtf` 加性暴露加载状态和网格元数据。`start` 与运行态 `setParams` 统一在控制线程预建带 grid 的 1–22 级链，DSP 线程仅在块边界换链；无 grid 的非 off spatial 明确失败，改配采样率清除旧 grid，非法/解析失败路径保持旧状态。
+- **Rust HRTF 分区卷积与 wasm ABI**：`hrtf-core::BinauralRenderer` 新增 `ConvolutionMode::Time | Partitioned`；partitioned 按 `RenderProfile` 使用固定 64/128 样本分区，在 prepare/控制路径预计算网格 HRIR 频谱及对象工作区，每对象每分区一次输入 FFT 复用于左右耳，稳态 render 零分配/零锁。模式切换重建并清状态，延迟准确上报；`hse-wasm::spatial_set_convolution_mode(handle, 1)` 现可实际启用，不再返回 unsupported。
+- **Phase 4 真机验收工具**：新增默认 dry-run 的 `hse-real-audio-check`，枚举设备并检测 VB-CABLE，真实开流要求 `measure --run` 与 `HSE_ALLOW_REAL_AUDIO=1` 双门控；以固定帧数/脉冲数生成并相关脉冲，JSON 输出 shared/exclusive、设备 ID、采样率/块长、延迟 p50/p95/max、xrun、进程 CPU 与帧吞吐。无法证明 capture/render 物理闭环时明确返回 `external-loopback-required` 且不伪造延迟；另附同门控、固定帧数的双推流客户端和正式播放器/VB-CABLE/非零回环验收作业书。
+- **TS spatial 多声道实时输入产品路径**：`AudioEngine.processMulti` 接受 caller-owned 的 3–8 路非交错缓冲，经预分配引用视图把 6/8 路 discrete 输入送入 `SpatialBackend.processMulti` 并固定输出双耳；spatial off 保持 ch0/ch1 兼容下混。浏览器 Host 新增 `inputChannelCount: 2 | 6 | 8`，TS AudioWorklet 以 explicit/discrete 协商输入且始终 2 路输出，ScriptProcessor 回退同步支持；热路径不走会分配的 `processBus`。
+- **WASAPI 捕获事件等待与服务路径基准**：`CaptureSource` 新增有界 readiness 等待，Windows loopback/直捕复用已持有的 WASAPI event handle，服务捕获线程移除固定 10ms 空轮询；fake 后端提供显式事件许可与调用计数，测试不以固定睡眠时长断言。新增 `bench_service_path`，纯内存覆盖 deinterleave、三会话混音、完整 DSP、interleave、双环搬运与串联块路径，不打开真实音频设备。
+- **WASAPI shared/exclusive 访问模式**：`OpenOptions`/服务配置新增稳定 `AccessMode`，控制面与 CLI 支持可选 `shareMode:"shared"|"exclusive"`；省略时保持 shared 行为和旧回显形态。普通 capture/render 的 exclusive 路径使用 `EventsExclusive`、要求设备原生支持目标立体声 f32 格式并禁用自动转换，loopback+exclusive 在 configure 阶段以 -32602 拒绝且不回退 shared。
+
 ## [1.3.0] - 2026-08
 
 ### Added

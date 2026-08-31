@@ -6,7 +6,7 @@
 
 ## 背景
 
-HyperSoundEngine 的 Windows 服务路径已经围绕 WASAPI 共享模式、loopback 捕获、虚拟音频缆直捕和独立渲染建立实现与自动化测试口径，真机组合路径仍需设备验收。继续保留 ASIO 作为可选路线会引入第二套设备枚举、生命周期、格式协商、许可和测试矩阵，但当前产品目标不需要该后端。
+HyperSoundEngine 的 Windows 服务路径已经围绕 WASAPI shared/exclusive 普通 capture/render、shared-only loopback、虚拟音频缆直捕和独立渲染建立实现与自动化测试口径，真机组合路径仍需设备验收。继续保留 ASIO 作为可选路线会引入第二套设备枚举、生命周期、格式协商、许可和测试矩阵，但当前产品目标不需要该后端。
 
 MIDI 事件、MIDI Learn 及其 UI/API/控制面描述也不属于当前项目范围。参数调制仍是引擎 DSP 能力，但其来源限定为内部 LFO 与 Envelope Follower，不依赖外部 MIDI 控制协议。
 

@@ -11,7 +11,7 @@
 
 ## 一、范围与方法
 
-### 1.1 覆盖清单（18 组基准，对应 16 个新 bench 文件 + 3 个既有 parity 文件）
+### 1.1 覆盖清单（22 个 bench 目标文件：19 个功能基准 + 3 个既有 parity 基准）
 
 | 组 | bench 文件 | 覆盖对象 |
 |---|---|---|
@@ -31,9 +31,13 @@
 | `bench_share_codec` | 新增 | share_codec：decode_share_code（固化 v2 HSE2 串，854 字符） |
 | `bench_wav` | 新增 | wav：encode/decode × PCM16 / Float32（32768 帧立体声） |
 | `bench_chain_full` | 新增 | **完整 1–21 级离线吞吐（§三指标）**：hse-service `ServiceEngineChain` 驱动 60s 音频 |
+| `bench_hse_stretch` | 新增 | hse-stretch：rate 0.1/1/2/8 与 semitones -36/0/+12/+36 参数域，2048 帧块窗映射 |
+| `bench_lufs_meter` | 新增 | lufs-meter：44.1/48/96kHz 与 128/512 块长计量路径，含四项读数读取 |
+| `bench_engine_param_domain` | 新增 | `EngineChainStage` 默认、全旁路边界、全开上边界三种参数域，连续 128 帧分块 |
+| `bench_service_path` | 新增 | 服务纯内存热路径：deinterleave / 三会话 mix / DSP / interleave / 双 rtrb 搬运及串联块路径，块长 128/256/512；不启动线程或真实音频 |
 
-hse-core 中已移植但本矩阵未含的模块：`hse-stretch`（离线变速外置语义、输出长度可变，
-不适用恒长 `push_blocks` 框架，亦不在 Phase 4 基准清单内，留待后续单独补测）。
+新增四组仅建立 criterion 可执行基准与 CI 编译门禁；本轮按严格切片要求只执行
+对应目标的 `cargo bench ... --no-run --locked`，未运行固定时长性能测量，因此不在下文历史数字表中补造数据。
 
 ### 1.2 计时方法（对齐既有 parity 基准的口径）
 
@@ -210,14 +214,33 @@ reverbSimple 35.8 + bass 4.8 + loudness 12.1 + dynEq 20.2 + modMatrix 2.5 + limi
    限幅器不触发 GR）；本矩阵两种输入都跑了全链（327.7 vs 345.3 ms，满幅输入仅 +5%），
    结论对激励选择不敏感。
 
-## 七、未测量 / 未覆盖（留档待后续）
+## 七、Rust 空间 renderer 对象矩阵（本机 release 实测）
+
+口径：128 帧块，确定性合成规则网格，所有 HRIR 频谱/房间拓扑与工作缓冲均在计时区外完成；
+实时路径执行 `BinauralRenderer.process`。以下数字用于验证 §八对象数与单核预算，不替代真实 SOFA
+数据集和目标机复测。
+
+| 场景 | 对象数 | ns/帧 | 单核 realtime |
+|---|---:|---:|---:|
+| 48k / 256 taps / time / room off | 32 | 5,236 | 25.13% |
+| 48k / 256 taps / time / room off | 64 | 10,432 | 50.07% |
+| 48k / 256 taps / partitioned / room off | 32 | 365 | 1.75% |
+| 48k / 256 taps / partitioned / room off | 64 | 724 | 3.47% |
+| 44.1k / 512 taps / partitioned / hall | 64 | 1,190 | 5.25% |
+| 48k / 512 taps / partitioned / hall | 64 | 1,189 | 5.71% |
+| 96k / 512 taps / partitioned / hall | 64 | 1,202 | 11.54% |
+
+结论：**partitioned 模式在 64 对象、512 taps、非零房间与 96k 最重组合下仍低于 25% 单核目标**；
+time 直接卷积在 32 对象已约 25%，64 对象约 50%，只能作为低对象数参考/兼容模式，不得作为多对象生产默认。
+LowLatency 分区为 64 样本，在 44.1/48/96k 均低于 5ms renderer 延迟目标。
+
+## 八、未测量 / 未覆盖（留档待后续）
 
 - **SIMD 显式向量化**：当前数字为 rustc 1.95 auto-vectorize 的结果，未做 AVX2/AVX-512
   intrinsics 专项（TS 审计确认的 radix-4 FFT / 块级向量化 EqChain 对应项）。若后续做
   SIMD 冲刺，以本矩阵为 before 基线复测。
-- **hse-stretch**：已移植至 hse-core 但不在 Phase 4 基准清单（外置离线语义、变长输出），
-  未测。
-- **真实设备路径**：全链 CPU 数字为离线驱动 `process_planar` 的纯 DSP 成本，未含
+- **hse-stretch / 计量 / 参数域 / 服务路径新增组**：已补 criterion 目标并纳入 `cargo bench --workspace --no-run --locked` 编译门禁；服务路径基准为纯内存组件与串联块口径，不运行真实音频。本轮未执行测量，因此尚无可与历史矩阵并列的性能数字。
+- **真实设备路径**：捕获线程已由 WASAPI event readiness 驱动，移除固定 10ms 空轮询；全链 CPU 数字仍为离线驱动 `process_planar` 的纯 DSP 成本，未含
   WASAPI 后端拷贝/线程唤醒的服务进程端到端开销（Phase 2 已做真机回放机制验证，
   系统级性能仍需单独测量）。
 - **笔记本功耗态**：未锁频、未控制后台负载，数字 ±2% 波动；正式对外发布数字建议在

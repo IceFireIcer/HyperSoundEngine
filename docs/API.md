@@ -1,6 +1,6 @@
 # HyperSoundEngine —— 对外接口文档（API）
 
-> 适用版本：1.3.0（独立引擎包）。核心 API 自 0.2.0 稳定；当前包含 WAV legacy/standard 双模式与 world-listener 几何公共函数。
+> 适用版本：1.5.0（独立引擎包）。核心 API 自 0.2.0 稳定；当前包含 WAV legacy/standard 双模式与 world-listener 几何公共函数。
 > 分享串为 v2 紧凑格式（HSE2，兼容导入 v1 旧串，见 `src/engine/ShareCodec.ts`）。
 > 核心原则：**小接口、深实现**。大多数接入方只需要 `createEngine` + `HyperSoundEngineParams`。
 
@@ -76,6 +76,7 @@ interface AudioEngine {
   getParams(): HyperSoundEngineParams
   prepare(maxBlockSize: number): void
   process(inputs: Float32Array[], outputs: Float32Array[], sidechain?: Float32Array[]): void
+  processMulti?(inputs: Float32Array[], outputs: Float32Array[], sidechain?: Float32Array[]): void
   getStats(): EngineStats
   getAnalysis(): EngineAnalysis
   getLatencySamples(): number
@@ -103,7 +104,12 @@ interface AudioEngine {
 
 - 就地处理：`outputs[i]` 会被覆盖写入；
 - `outputs[i].length` 应 >= `inputs[i].length`；
-- 当前支持单声道（`channelCount=1`）与立体声（`channelCount=2`）；
+- `process` 支持单声道（`channelCount=1`）与立体声（`channelCount=2`）；
+- `processMulti` 是可选扩展；Host 检测到旧 `AudioEngine` 未实现它时，仅将 `ch0/ch1` 交给既有双声道 `process`，因此无需 MAJOR 升级；
+- `processMulti` 是 3–8 路非交错输入到双声道输出的实时安全入口：调用方必须预分配并复用通道缓冲及 `inputs`/`outputs` 数组，并先调用 `prepare(maxBlockSize)`；
+- 两个入口的拓扑有意不同：旧 `process` 固定执行第 1–21 级后再执行 stage 22 spatial，保持既有冻结语义；`processMulti` 在 spatial 开启时先调用 `SpatialBackend.processMulti` 双耳化全部输入，再让所得 L/R 执行完整第 1–21 级，因此 EQ、动态器、分析与最终 Limiter 作用于所有输入声道的空间求和结果，且不会递归再次空间化；
+- 多声道顺序采用 Web Audio `discrete` 约定：`L, R, C, LFE, SL, SR, BL, BR`。`spatial.mode !== 'off'` 且 `instant.multichannelAuto=true` 时，各输入声道由 `SpatialBackend.processMulti` 渲染为双耳，LFE 槽位不做 HRTF；`spatial.mode='off'` 时兼容下混为 `ch0→L`、`ch1→R`，额外声道忽略后直接执行第 1–21 级；
+- 两个实时入口都只产出物理双声道，不提供多声道物理输出；
 - `sidechain`：可选外部侧链输入（与 inputs 同长度的 Float32Array[]）。只有开启 `sidechainEnabled` 的效果器（Compressor / Deesser）会使用它驱动包络/检测；
 - 多通道便捷入口 `processBus(input: HseAudioBus, output: HseAudioBus, sidechain?: HseAudioBus, options?)`：
   - 默认（`mode: 'downmix'`）：>2 声道下混为立体声处理，输出不足 2 声道写第一声道、超过 2 声道复制到其余声道；
@@ -279,12 +285,20 @@ const restored = decodeShareCode(code) // 非法输入抛 Error
 
 ```ts
 interface HyperSoundEngineHostOptions {
-  mode?: 'worklet' | 'script' | 'auto' // 默认 auto
-  workletUrl?: string                  // worklet 打包产物 URL
-  processorName?: string               // 默认 'hypersoundengine'
+  mode?: 'worklet' | 'script' | 'auto' // 承载模式，默认 auto
+  engineBackend?: 'ts' | 'wasm'        // worklet 内核，默认 ts
+  workletBackend?: 'ts' | 'wasm'       // engineBackend 的等价别名；冲突时抛错
+  workletUrl?: string                  // TS worklet 产物 URL
+  wasmWorkletUrl?: string              // wasm 专用 worklet 产物 URL
+  wasmUrl?: string                     // hse_wasm_bg.wasm URL
+  wasmRequestTimeoutMs?: number        // ready 超时，默认 2000ms
+  workletCrossfadeMs?: number          // TS/wasm 参数替换淡变窗口，默认 20ms
+  wasmCrossfadeMs?: number             // workletCrossfadeMs 的兼容别名
+  processorName?: string               // TS worklet 注册名，默认 'hypersoundengine'
+  inputChannelCount?: 2 | 6 | 8        // 输入总线；输出始终为双声道，默认 2
   blockSize?: number                   // script 兜底块长，默认 4096
-  engine?: AudioEngine                 // 注入引擎实例（测试/离线复用）
-  engineFactory?: (sampleRate: number, channelCount?: number) => AudioEngine // 自定义引擎工厂
+  engine?: AudioEngine                 // 注入主线程 TS 引擎实例（测试/离线复用）
+  engineFactory?: (sampleRate: number, channelCount?: number) => AudioEngine
 }
 ```
 
@@ -300,11 +314,31 @@ interface HyperSoundEngineHostHandle {
 await host.attach({ audioContext, masterGain, analyser }, params)
 ```
 
-语义：`masterGain` 全断 → 接入处理节点 → 连 `analyser`；幂等；异步注册期间被 dispose 会安全放弃接线。
+语义：`masterGain` 全断 → 接入处理节点 → 连 `analyser`；幂等；异步注册期间被 dispose 会安全放弃接线。`inputChannelCount` 可设为 `2 | 6 | 8`；TS worklet 使用单输入总线、`channelCountMode:'max'` 与 `channelInterpretation:'discrete'` 协商最大输入声道，实际较少的通道补静音，输出固定为 2。当前 wasm worklet 仅支持 2 路输入；`mode:'auto'` 的多声道配置会回退 TS worklet，显式 wasm worklet 模式则 attach 失败。
+
+默认 `engineBackend: 'ts'`，行为与既有版本一致。启用完整 Rust `HseEngine` wasm 链时必须同时提供 `wasmWorkletUrl` 与 `wasmUrl`；可选的 `hrtfUrl` 或 `hrtf`（`ArrayBuffer | HrtfGrid`）用于启用 Rust stage 22，二者互斥：
+
+```ts
+const host = createHyperSoundEngineHost({
+  mode: 'auto',
+  engineBackend: 'wasm',
+  wasmWorkletUrl: '/assets/wasm-worklet-bundle.js',
+  wasmUrl: '/assets/hse_wasm_bg.wasm',
+  hrtfUrl: '/assets/listener.sofa', // 或 hrtf: sofaArrayBuffer / preparsedGrid
+  workletUrl: '/assets/worklet-bundle.js', // auto 模式的 TS worklet 回退
+})
+await host.attach({ audioContext, masterGain, analyser }, params)
+```
+
+主线程分别 fetch/compile wasm module 与 fetch SOFA bytes，并缓存结果供后续参数替换节点复用。`hrtf` 也可直接接受 SOFA `ArrayBuffer` 或语言中立 `HrtfGrid`（`sampleRate/azimuths/elevations/hrirLength/left/right`）；资源通过 `processorOptions` 进入 worklet，SOFA/grid 仅在 worklet 构造控制阶段解析并调用 Rust `EngineChainStage::from_params_with_hrtf_grid`。默认 `spatial.mode='off'` 无需 HRTF；非 `off` 且未提供 HRTF 时构造明确失败。TS 与 wasm worklet 都只在构造时读取完整参数快照，宿主等待带 `requestId` 的 `ready` 回执后才接线；运行期消息只保留 `reset` 等轻量安全命令，不在 render 线程解析参数、HRTF 或重建处理链。`mode: 'auto'` 的回退顺序是 wasm worklet → TS worklet → ScriptProcessor；`mode: 'worklet'` 不跨后端静默回退。
 
 ### `host.setParams(params)`
 
-同步更新主线程引擎与 worklet 处理器。
+script 路径在主线程原位应用完整参数快照。TS/wasm worklet 路径不修改当前渲染实例：宿主先以新快照构造并等待新节点 `ready`，再通过两个输出 GainNode 在 `workletCrossfadeMs`（默认 20ms，旧 `wasmCrossfadeMs` 仍作为别名）内线性交叉淡变；Promise 仅在 `audioContext.currentTime` 到达淡变终点且旧路径断开后完成，context 暂停时不会因墙钟超时提前清链。该语义不迁移旧引擎的滤波器、动态或混响状态；旧节点尾音仅在淡变窗口内参与输出。新节点构造失败时 Promise reject，当前可听链保持不变；并发调用按调用顺序串行替换，dispose 会立即清理活动与退役路径并结束淡变等待。
+
+### `host.reset()`
+
+复位主线程引擎，并向当前 worklet 下发 `{ type: 'reset' }`。
 
 ### `host.dispose()`
 
@@ -312,8 +346,9 @@ await host.attach({ audioContext, masterGain, analyser }, params)
 
 ### 其他
 
-- `host.getMode()`：当前实际模式 `'worklet' | 'script' | null`
-- `host.getLastStats()` / `host.getLastAnalysis()`：worklet 回传的最近数据
+- `host.getMode()`：当前实际承载模式 `'worklet' | 'script' | null`
+- `host.getEngineBackend()`：当前实际内核 `'ts' | 'wasm' | null`；script 恒为 `ts`
+- `host.getLastStats()` / `host.getLastAnalysis()`：TS worklet 回传的最近数据
 - `host.getAudioNode()`：当前处理节点，可在前面插入自定义节点
 
 ---
@@ -334,12 +369,28 @@ npm run build:worklet
 
 产物 `dist/worklet-bundle.js` 可通过 `audioWorklet.addModule(url)` 加载。
 
+完整 wasm worklet 是独立可选产物，不覆盖上述 TS 默认实现。先使用 `wasm-bindgen --target web` 生成包含 `HseEngine` 的 glue 与 wasm，再把生成目录显式传给构建脚本：
+
+```bash
+npm run build:wasm-worklet -- --pkg /path/to/wasm-bindgen-output
+```
+
+脚本会检查 wasm magic 与 `HseEngine` 的 HRTF 构造入口、缓冲、处理、reset 绑定，然后生成 `dist/wasm-worklet-bundle.js`。部署时还需把同目录的 `hse_wasm_bg.wasm` 作为 `wasmUrl` 静态资源发布；构建不读取 `target/` 或 wasm pilot 的忽略目录作为隐式输入。
+
+真实浏览器门禁在构建 core、wasm-bindgen glue 与 wasm worklet 后运行：
+
+```bash
+npm run test:wasm-worklet:e2e -- --wasm /path/to/wasm-bindgen-output/hse_wasm_bg.wasm
+```
+
+该命令通过 `playwright-core` 复用本机 Chromium（也可设置 `HSE_CHROMIUM_EXECUTABLE`），从 `127.0.0.1` 加载正式产物，并把音频图终止到 `MediaStreamAudioDestinationNode`，不申请麦克风权限、不连接系统播放目的节点。CI 覆盖 Chromium；Firefox 因当前门禁环境没有与 Playwright 匹配的可用浏览器，尚未纳入自动测试。
+
 ---
 
 ## 7. 性能与实时安全约定
 
-- `prepare(maxBlockSize)` 预分配后，`process()` 稳态零分配；
-- 不要在音频线程调用 `setParams()` 以外的重操作（`setParams` 内部会重算滤波器系数，建议在 UI/控制线程调用）；
+- `prepare(maxBlockSize)` 预分配后，`process()` / `processMulti()` 在容量内稳态零分配；多声道调用方还必须复用通道引用数组；
+- 不要在音频线程执行参数解析或构链；TS/wasm worklet 参数更新均由 Host 预建节点并切换；
 - 参数快照语义避免撕裂；
 - `getStats()` / `getAnalysis()` 为同步读取，可在 UI 线程轮询；
 - 可用 `npm run benchmark` 运行本地性能基准（默认参数全链、48kHz/128 帧）。

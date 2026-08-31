@@ -190,7 +190,7 @@ console.log(host.engine.getStats())
 | stats | 经 `port` 回传(约 80ms 一次) | 主线程 `engine.getStats()` 直读 |
 | 打包 | 需 `worklet-bundle.js` | 无需打包 |
 
-worklet 模式下参数经 `port.postMessage({type:'params', params})` 下发,处理器内 `setParams`;stats/analysis 经 `port.postMessage({type:'stats', ...})` 回传。
+worklet 模式下完整参数快照经 `processorOptions.initialParams` 在节点构造期应用；运行中由 Host 预建新节点、等待 `ready` 后按 `AudioContext.currentTime` 交叉淡变替换，不向渲染线程发送参数重建消息。stats/analysis 仍经 `port.postMessage({type:'stats', ...})` 回传。
 
 完整示例见 `examples/browser-host.mjs`。
 

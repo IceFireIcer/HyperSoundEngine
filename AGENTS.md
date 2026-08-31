@@ -12,8 +12,8 @@
 - `CONTEXT.md` — 领域术语表（ubiquitous language），改模型前先读
 - `原生化双支线与Windows音频接入规划书.md` — 当前主线执行规划
 - `空间音频实现规划书.md` — 空间音频规格输入（§3.2 契约、§八性能目标有效）
-- `specs/` — 双支线共享规格 + 冻结测试向量（总纲 `specs/README.md`、向量 JSON Schema `specs/schema/vector-case.schema.json`、**22 份共享规格：17 DSP + engine-chain + params + scenes + WAV + world-listener**、**72 组音频冻结向量 / 144 文件**，另有 3 个参数/场景夹具、1 个 standard WAV 夹具与 12 个 world-listener case；Rust 综合门禁为音频 **72/72 PASS** + 空间 **12/12 PASS**；engine-chain 固化 1–21 级，要求 `spatial.mode='off'`）；服务层规格 `specs/service/`：control-plane 控制面契约、push-stream 推流协议。**改动前先读 `specs/README.md`**；音频基线唯一生成入口是 `scripts/export-vectors.mjs`（重跑逐字节比对，不一致拒写）
-- `HyperSoundEngineRust/` — **Rust 支线**：`hse-core` 已完成 17 个 DSP 模块与 `EngineChainStage` 1–21 级主链，音频冻结向量 **72/72 PASS**；`hrtf-core` 已完成 world-listener position/yaw 几何核并通过空间夹具 **12/12 PASS**，尚不含 HRIR/卷积/房间渲染；`hse-parity` 为综合共享规格门禁；`hse-wasapi` 提供 WASAPI 共享模式渲染、渲染端点 loopback 捕获与 capture 端点直捕（`wasapi` crate 精确锁版 `=0.24.0`）；`hse-service` 支持独立选择捕获源与最终渲染端点，并提供捕获→DSP→渲染三线程、rtrb 双环、localhost WebSocket JSON-RPC（默认 `ws://127.0.0.1:4780/`）与推流协议；`hse-wasm` 已完成单 Biquad + 独立 AudioWorklet 的 wasm32 最小试点，不是完整引擎替换；`hse-napi` 仍为占位，未入 workspace members。Windows 音频后端固定为 WASAPI，不提供 MIDI 或 ASIO
+- `specs/` — 双支线共享规格 + 冻结测试向量（总纲 `specs/README.md`、**25 份共享规格：17 DSP + 4 engine + 1 I/O + 3 spatial**、**72 组音频冻结向量 / 144 文件**，另有 4 个引擎结构夹具、40 case 参数扫描、1 个 standard WAV 夹具、14 个 world-listener case 与 14 个 renderer/ABI case；Rust 综合门禁为音频 **72/72 PASS** + 空间 **28/28 PASS**，参数扫描结构摘要 **40/40 PASS**；engine-chain 音频向量仍固化 1–21 级并要求 `spatial.mode='off'`）；服务层规格 `specs/service/`：control-plane 控制面契约、push-stream 推流协议。**改动前先读 `specs/README.md`**；音频与空间基线分别由 `scripts/export-vectors.mjs`、`scripts/export-spatial-vectors.mjs` 幂等校验，既有期望不一致时拒写
+- `HyperSoundEngineRust/` — **Rust 支线**：`hse-core` 已完成 17 个 DSP 模块与 `EngineChainStage` 1–22 级完整链，空间支持 `instant`/`headLocked`/`world`/`stage`；`hrtf-core` 已实现完整欧拉 world-listener、规则 grid、SOFA 解析、44.1/48/96 kHz 重采样、nearest/spherical、time/partitioned、距离/空气、Doppler、遮挡、声源大小、房间与稳定 slot；`hse-parity` 门禁为音频 **72/72 PASS** + 空间 **28/28 PASS**；`hse-wasapi`/`hse-service` 支持 shared/exclusive、事件等待、排队延迟统计与真机验收工具；`hse-wasm` 提供完整 1–22 级 `HseEngine`、正式 Host 可选接入及空间 8 函数 C ABI。真实设备 shared/exclusive 延迟/CPU、真实 SOFA 资产自动门禁、Firefox AudioWorklet E2E 与物理 multichannel 输出仍待完成。Windows 后端固定为 WASAPI，不提供 MIDI 或 ASIO
 
 > 规则：README/AGENTS 等仓库文档只描述已跟踪文件，**不得引用 .gitignore 排除的路径**（本地参考资料、草稿目录等不入文档）。
 
@@ -35,7 +35,7 @@ npm run benchmark               # 先 build 再跑 scripts/benchmark.mjs（48kHz
 npm run benchmark:scenes        # 场景化基准（卷积/FDN 混响、DynamicEq）
 node scripts/export-vectors.mjs # 导出/校验冻结对拍向量（幂等；不一致拒写，防单方面改基线）
 cd HyperSoundEngineRust && cargo test            # Rust 支线单元测试（workspace 全成员）
-cd HyperSoundEngineRust && cargo run -q -p hse-parity  # 综合门禁：音频 72/72 + world-listener 12/12
+cd HyperSoundEngineRust && cargo run -q -p hse-parity  # 综合门禁：音频 72/72 + 空间 28/28
 cd HyperSoundEngineRust && cargo bench           # criterion 基准（biquad/limiter/reverb + 块长矩阵）
 cd HyperSoundEngineRust && cargo test -p hse-service  # 引擎服务单测+集成（fake 后端，无需真实音频设备）
 cd HyperSoundEngineRust && cargo run -p hse-service   # 引擎服务（ws://127.0.0.1:4780）；hse-cli 调参见 crates/hse-service/README.md
@@ -55,6 +55,7 @@ cd HyperSoundEngineRust && cargo run -p hse-service   # 引擎服务（ws://127.
 - MAJOR=破坏兼容契约三层；MINOR=新功能/新向量；PATCH=行为不变修复。bump 与 CHANGELOG 更新由实施变更的会话按 `docs/VERSIONING.md` 规则自动完成，不需用户手动管理。
 - 标识符/存储键/事件名/CSS 动画/worklet URL 一律无版本前缀或 `hse-` 前缀；禁止 `v1/v2/v3` 字样（第三方名称如 GPLv3、Freeverb3 除外）。
 - 已冻结对拍向量的期望值永不修改；行为变更=新增向量或走 MAJOR。
+- 固定时长测试已删除且不得恢复；异步/实时流程以事件、帧数、块序号或显式超时上限收敛，不以“运行 N 秒”作为成功条件。
 
 ## 架构铁律（改代码前必读 `docs/ARCHITECTURE.md`）
 

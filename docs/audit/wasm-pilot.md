@@ -2,6 +2,8 @@
 
 审计日期：2026-08-30。
 
+> 本文是 2026-08-30 单 Biquad 最小试点的历史审计快照，不代表当前 Phase 5 状态。当前 `hse-wasm` 已提供完整 1–22 级 `HseEngine`、正式 Host 与空间 8 函数 ABI，Chromium AudioWorklet E2E 已通过；真实 SOFA、Firefox 与物理 multichannel 仍待验收。当前状态以 `docs/audit/phase-status.md` 为准。
+
 ## 试点边界
 
 本试点新增 `HyperSoundEngineRust/crates/hse-wasm`，它是 `wasm-bindgen` 边界 crate，只直接依赖 `hse-core` 与精确锁定的 `wasm-bindgen = 0.2.127`。库同时产出 `cdylib` 和 `rlib`，首个公开对象为 `HseBiquad`。

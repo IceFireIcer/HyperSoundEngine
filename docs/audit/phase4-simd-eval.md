@@ -206,7 +206,7 @@ ns/帧，1.8~2.0×**。若叠加 L/R 双通道合并 lane 与 `wide`/intrinsics 
 
 ## 七、SIMD 后续建议
 
-### 7.1 结论：已测性能目标无需 SIMD；Phase 4 出口仍未关闭
+### 7.1 结论：已测性能目标无需 SIMD；Phase 4 自动实现完成，真机出口仍未关闭
 
 - ≥3× 目标以 **9.7~10.2×** 达成（余量 3.2~3.4×），实时 CPU 与最重场景双达标
   （bench-matrix §三）；SIMD/向量化对当前里程碑**全部可推迟**。
@@ -218,7 +218,7 @@ ns/帧，1.8~2.0×**。若叠加 L/R 双通道合并 lane 与 `wide`/intrinsics 
 1. **convolver 保序 SIMD**（复数乘 + overlap-add + FFT 蝶形 lane 化，AVX2 4×f64
    或 `wide::f64x4`；L/R 双通道合并打包）：预估 1.8~2.0×，把 385 → ~200 ns/帧、
    最重场景 10.7% → ~6%。**前置条件**：以 bench-matrix 为 before 基线复测 +
-   `cargo run -p hse-parity` 全绿 + 63 向量逐位复核。
+   `cargo run -q -p hse-parity` 综合门禁全绿（音频 72/72、空间 28/28、参数扫描结构摘要 40/40）。
 2. **FFT 内核 lane 化**（同 stage 组内并行 + L/R 平面并行）：2~3×，惠及 convolver
    与 fft stage；与 1 有重叠，注意合并施工。
 3. **reverb-simple 梳状并联 lane 化**（4/8 lane）：1.3~1.6×，单模块权重小，随手

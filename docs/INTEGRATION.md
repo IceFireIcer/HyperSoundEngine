@@ -108,14 +108,22 @@ await audioContext.audioWorklet.addModule('/path/to/dist/worklet-bundle.js')
 ```ts
 const node = new AudioWorkletNode(audioContext, 'hypersoundengine', {
   outputChannelCount: [2],
+  processorOptions: {
+    inputChannelCount: 2,
+    initialParams: params,
+    requestId: 'initial-ready',
+  },
 })
 node.port.onmessage = (e) => {
-  if (e.data?.type === 'stats') {
+  if (e.data?.type === 'ready') {
+    // 节点已用 initialParams 完成构造，可以接入音频图
+  } else if (e.data?.type === 'stats') {
     // e.data.stats, e.data.analysis
   }
 }
-node.port.postMessage({ type: 'params', params })
 ```
+
+运行中的完整参数更新应调用 `HyperSoundEngineHost.setParams(params)`；Host 会预建新节点并在音频时间轴上交叉淡变。不要向 TS worklet 发送 `params` 消息。
 
 ---
 
