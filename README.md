@@ -122,5 +122,6 @@ Windows 音频接入规划书》）：hse-core（17 个 DSP 模块 + `EngineChai
 
 ## 许可
 
-核心代码自研；算法概念与公式来源见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
-可选依赖 signalsmith-stretch 为 MIT；引擎包零 LGPL 依赖。
+本项目主体代码采用 [Creative Commons Attribution-NonCommercial-NoDerivatives 4.0 International](LICENSE)（**CC BY-NC-ND 4.0**）许可：使用和分享时必须署名，仅限非商业用途，不得分发修改后的版本。具体权利与限制以仓库 `LICENSE` 原文为准。
+
+第三方依赖和算法来源继续适用各自的许可证，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。可选依赖 `signalsmith-stretch` 为 MIT；引擎包零 LGPL 依赖。
