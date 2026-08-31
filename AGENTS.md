@@ -20,7 +20,7 @@
 ## 远程与 CI
 
 - 远程仓库：`https://github.com/IceFireIcer/HyperSoundEngine`（origin），工作分支 `main`
-- push 到 `main` 触发 `.github/workflows/ci.yml`：TS 侧 `typecheck` → `typecheck:ui` → `test` → `build`；另有 `rust` job 跑 `cargo test --workspace` 与对拍门禁（specs/ 冻结向量全部 PASS），全绿才算过
+- push 到 `main` 触发 `.github/workflows/ci.yml` 的三个作业：`test` 执行许可、类型、frame-count、参数扫描、Vitest、契约导出与构建；`rust` 执行 rustfmt、Clippy、参数扫描、release 零分配、服务管线、benchmark 编译、wasm/Chromium E2E、workspace 测试与综合对拍；`rust-windows-silent` 执行 Windows 无设备 core/WASAPI/service/parity 门禁。三项全绿才算自动门禁通过
 - 每日北京时间 17:00（cron 为 UTC 09:00）触发 `.github/workflows/nightly.yml`：质量门禁 → TS/Rust 构建 → 发 pre-release。tag 命名 `nightly-YYYYMMDD.当日构建次数`（重跑自动 +1）；**包版本号不随 nightly 递增**（版本规则见 docs/VERSIONING.md）；Rust 支线目录不存在时自动跳过
 
 ## 常用命令（工作目录 = 本目录）

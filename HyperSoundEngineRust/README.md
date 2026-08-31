@@ -46,7 +46,7 @@ case 失败均返回非零退出码。
 `hse-core` 已覆盖 17 个 DSP 模块与 `EngineChainStage` 1–22 级，音频冻结向量 **72/72 PASS**。
 第 22 级可在控制路径注入 HRTF grid 后处理 `instant`、`headLocked`、`world` 与 `stage`；world 消费完整 listener 姿态、sources/trajectories/playhead/occlusion 与相邻快照确定速度，stage 对齐 preset/seat/roomSize/reverbAmount/customSources，ambience 同级叠加。`hse-service` 通过 idle-only `loadHrtf` 预载 grid，并让 `start`/运行态 `setParams` 在块边界换链。音频冻结向量仍要求 `spatial.mode='off'`，保持旧 72 组逐位结果。
 
-`hse-wasm::HseEngine` 的默认构造保持完整 1–21 级、`spatial.mode='off'` 兼容路径；`withSofaBytes` 与 `withHrtfGrid` 在 worklet 构造控制阶段建立完整 1–22 级链，非 off 且无 HRTF 明确失败。引擎使用预分配 planar 主输入/sidechain 缓冲，render 不解析 HRTF。正式 `HyperSoundEngineHost` 可选 wasm backend，在主线程缓存 wasm module 与 SOFA bytes/预解析 grid，参数更新通过复用资源预建新节点、等待 ready 后交叉淡变替换。CI 以 headless Chromium 和无设备音频目的节点覆盖正式 bundle 的 ready、spatial off 1–21 级非静音处理、失败静音与参数节点替换淡变；Firefox 尚未纳入自动门禁。
+`hse-wasm::HseEngine` 的默认构造保持完整 1–21 级、`spatial.mode='off'` 兼容路径；`withSofaBytes` 与 `withHrtfGrid` 在 worklet 构造控制阶段建立完整 1–22 级链，非 off 且无 HRTF 明确失败。引擎使用预分配 planar 主输入/sidechain 缓冲，render 不解析 HRTF。正式 `HyperSoundEngineHost` 可选 wasm backend，在主线程缓存 wasm module 与 SOFA bytes/预解析 grid，参数更新通过复用资源预建新节点、等待 ready 后以零增益接入并预滚一个 128-frame render quantum，再交叉淡变替换。CI 以 headless Chromium 和无设备音频目的节点覆盖正式 bundle 的 ready、spatial off 1–21 级非静音处理、失败静音与参数节点替换淡变；Firefox 尚未纳入自动门禁。
 
 ### hrtf-core 与空间 ABI
 

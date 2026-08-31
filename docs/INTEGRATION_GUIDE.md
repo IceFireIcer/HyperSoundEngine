@@ -1,6 +1,6 @@
 # HyperSoundEngine 接线与 API 指南
 
-> 本文保留 TS/UI 专项细节。新项目和自动化编码代理应先阅读 [`INTEGRATION.md`](INTEGRATION.md)，由其中的路径选择表决定使用 TS core、浏览器 TS/Rust Host、Rust `hse-service` 或空间 C ABI。服务 wire 契约不在本文重复定义。
+> 适用版本：1.5.1。本文保留 TS/UI 专项细节。新项目和自动化编码代理应先阅读 [`INTEGRATION.md`](INTEGRATION.md)，由其中的路径选择表决定使用 TS core、浏览器 TS/Rust Host、Rust `hse-service` 或空间 C ABI。服务 wire 契约不在本文重复定义。
 
 ## 目录
 
@@ -161,10 +161,11 @@ const host = createHyperSoundEngineHost({
 const params = createDefaultParams(audioContext.sampleRate)
 await host.attach({ audioContext, masterGain, analyser }, params)
 
-// 实时更新参数
-function updateParams(next: Partial<typeof params>) {
-  const merged = { ...host /* 通过 engine.getParams */ }
-  host.setParams(merged as any)
+// 实时更新参数：从当前完整快照派生，再整体提交
+async function updateCompressorThreshold(thresholdDb: number) {
+  const merged = host.engine.getParams()
+  merged.compressor.thresholdDb = thresholdDb
+  await host.setParams(merged)
 }
 
 // 拆除(恢复 masterGain → analyser 直连)
@@ -190,7 +191,7 @@ console.log(host.engine.getStats())
 | stats | 经 `port` 回传(约 80ms 一次) | 主线程 `engine.getStats()` 直读 |
 | 打包 | 需 `worklet-bundle.js` | 无需打包 |
 
-worklet 模式下完整参数快照经 `processorOptions.initialParams` 在节点构造期应用；运行中由 Host 预建新节点、等待 `ready` 后按 `AudioContext.currentTime` 交叉淡变替换，不向渲染线程发送参数重建消息。stats/analysis 仍经 `port.postMessage({type:'stats', ...})` 回传。
+worklet 模式下完整参数快照经 `processorOptions.initialParams` 在节点构造期应用；运行中由 Host 预建新节点、等待 `ready` 后以零增益接入并预滚一个 128-frame render quantum，再按 `AudioContext.currentTime` 交叉淡变替换，不向渲染线程发送参数重建消息。stats/analysis 仍经 `port.postMessage({type:'stats', ...})` 回传。
 
 完整示例见 `examples/browser-host.mjs`。
 
@@ -322,12 +323,12 @@ engine.getStages()                        // 当前链副本
 ```ts
 import { SCENE_PRESETS, applyScene, encodeShareCode, decodeShareCode } from 'hypersoundengine'
 
-// 内置 11 场景
+// 内置 12 场景
 const popScene = SCENE_PRESETS.find(s => s.id === 'pop')!
 engine.setParams(popScene.params)
 
-// 分享串(完整参数快照,base64url)
-const code = encodeShareCode(engine.getParams())   // "1:checksum:json..."(1=分享串版本号)
+// 当前编码为 HSE2 + Crockford Base32 差异载荷；decode 兼容历史 v1
+const code = encodeShareCode(engine.getParams())   // "HSE2-..."
 const restored = decodeShareCode(code)             // 非法输入抛 Error
 engine.setParams(restored)
 ```
@@ -406,7 +407,7 @@ interface HyperSoundEngineMixingStudioProps {
 
 | 页签 | 功能 |
 |------|------|
-| 音效场景 | 11 内置场景 + 效果卡片(压缩/混响/低音/调制类效果/调制矩阵)+ 启用开关 |
+| 音效场景 | 12 内置场景 + 效果卡片(压缩/混响/低音/调制类效果/调制矩阵)+ 启用开关 |
 | 均衡器 | 5/10/20 段 EQ 曲线编辑器 |
 | 调音器 | 分享串编码/解码 + 离线 WAV 导出 |
 | 分析 | 实时频谱 + 频谱特征 + LUFS |

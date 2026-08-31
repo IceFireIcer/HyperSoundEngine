@@ -1,5 +1,7 @@
 # 最终交付验收报告 —— HyperSoundEngine
 
+> **历史范围**：本文是早期 TS 主链验收快照，不代表 1.5.1 的 Rust 支线、Phase 0–5、真实设备、真实 SOFA、Firefox 或物理 multichannel 验收。当前状态以 [`phase-status.md`](phase-status.md) 为准。
+
 > 验收视角：即将接手本模块的工程师
 > 验收方式：源码复核（Convolver/HseStretch/LoudnessComp/MidSide/HyperSoundEngine）+ 审计测试与全量回归复跑 +
 >           独立数值验证（直接卷积参考对照、块长扫描）+ 逐节核对

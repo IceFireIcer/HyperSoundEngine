@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Documentation
+- **发布就绪度与文档统一**：新增 `docs/RELEASE_READINESS.md`，区分源码 GitHub Release、npm、Windows 二进制与 crates.io 的发布门槛；同步 AGENTS、README、HANDOVER、项目/架构/接入/历史审计文档至 1.5.1 口径，并将第三方来源改为公开上游链接。
+
 ## [1.5.1] - 2026-08
 
 ### Fixed

@@ -115,7 +115,7 @@ specs/
 | Phase 2 | 主体完成，出口待验收 | 服务、控制面、CLI、1–22 级链及独立捕获/输出选路已实现；仍需 VB-CABLE/正式播放器真机链路与端到端延迟 |
 | Phase 3 | 实现完成，出口待验收 | 17 个 DSP 模块、WAV、ShareCodec、推流协议及 1–21 级全链已双绿；双独立推流客户端工具已落地，仍需非零真实回环联合验收 |
 | Phase 4 | 自动实现完成，真机待验收 | release 零分配、参数扫描、服务/空间基准、事件等待、排队统计、shared/exclusive 与验收工具已完成；真实完整服务链延迟与目标机 CPU 待验收 |
-| Phase 5 | 主体实现，外部验收待完成 | 完整 1–22 级 wasm/Host、Rust SOFA/HRTF renderer、四模式 stage22、8 函数 ABI 和 Chromium E2E 已完成；真实 SOFA、Firefox 与物理 multichannel 待验收 |
+| Phase 5 | 主体实现，出口仍有缺口 | 完整 1–22 级 wasm/Host、Rust SOFA/HRTF renderer、四模式 stage22、8 函数 ABI 和 Chromium E2E 已完成；真实 SOFA 自动门禁与 Firefox E2E 未完成，物理 multichannel 输出尚未实现 |
 
 当前工作树版本为 `1.5.1`。综合门禁口径为音频 72/72、空间 28/28、固定种子参数扫描结构摘要 40/40；旧音频向量继续承担逐样本 `1e-6` 对拍。详细证据与持续更新口径见 `docs/audit/phase-status.md`；下列条目保留原始阶段目标与出口判据。
 

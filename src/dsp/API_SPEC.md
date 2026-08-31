@@ -14,9 +14,9 @@
 7. 边界安全：频率/增益/Q 做 clamp；避免 NaN/Infinity；fs<=0 时抛 `Error('invalid sample rate')`。
 8. 测试：每个模块配 `test/<module>.test.ts`，用 vitest；断言数值用容差（1e-3 级），注释说明物理意义。
 9. 边界（严格遵守）：
-   - **允许读取**：`src/types.ts`、`src/dsp/API_SPEC.md`（本文件）、`research/docs/*.md`（算法参考：技术文档/设计文档/决策表）、`research/notes/`；
-   - **禁止读取**：`docs/`（逆向分析文档，另一个对话的产物）、`decompiled/`、`business-code/`、`apktool-out/`、`reference/`；
-   - **禁止写入**：除自己负责的文件外的一切文件；HyperSoundEngine/、research/、docs/ 一律只读；
+   - **允许读取**：`src/types.ts`、`src/dsp/API_SPEC.md`（本文件）、`docs/ALGORITHMS.md`、`docs/音频算法设计文档.md` 与 `THIRD_PARTY_NOTICES.md`；
+   - **禁止读取**：`.gitignore` 排除的本地资料目录、`decompiled/`、`business-code/`、`apktool-out/`、`reference/`；
+   - **禁止写入**：除自己负责的文件外的一切文件；其他源码与文档一律只读；
    - **禁止修改**：`src/types.ts`、`src/dsp/API_SPEC.md`、其他子代理的文件。
 
 ---
@@ -396,8 +396,8 @@ export const SCENE_IDS: string[] // 12 个 id：pop/enhance/jazz/dance/classical
 ### C. src/engine/ShareCodec.ts —— 分享串（F2 负责）
 ```ts
 import type { HyperSoundEngineParams } from '../types'
-export const SHARE_CODEC_VERSION = 1
-/** 序列化：版本 + JSON(去 IR 数组→irName) + FNV-1a 校验 → base64url */
+export const SHARE_CODEC_VERSION = 2
+/** 序列化：默认参数差异 JSON + FNV-1a 校验 → HSE2/Crockford Base32 分组串 */
 export function encodeShareCode(p: HyperSoundEngineParams): string
 /** 反序列化：校验 + 白名单字段 + 数值 clamp；非法输入抛 Error */
 export function decodeShareCode(s: string): HyperSoundEngineParams

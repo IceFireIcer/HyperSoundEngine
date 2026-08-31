@@ -1,139 +1,133 @@
 # HyperSoundEngine 项目总览
 
-> 版本 0.5.0 · 许可 CC BY-NC-ND 4.0 · TS + Rust 双支线音频 DSP 引擎
+> 当前源码版本：1.5.1 · 许可：CC BY-NC-ND 4.0 · TypeScript / Rust 双支线实时音频 DSP 引擎
 
-## 这是什么
+## 1. 项目定位
 
-HyperSoundEngine 是一个**双支线实现的实时音频效果引擎**：TS 支线（本包，纯 TypeScript、零 DOM / 零 AudioContext / 零 React 依赖，Node 离线与浏览器实时两用）与 **Rust 支线**（`HyperSoundEngineRust/`，原生引擎服务进程 + WASAPI 回环拦截，规划见《原生化双支线与Windows音频接入规划书》）。两支线由 `specs/` 共享规格与冻结向量约束，行为对拍容差 1e-6。它不绑定任何特定宿主,可接入任意 Web 应用、Electron 桌面软件、离线转码管线或任意语言的原生宿主（经引擎服务进程 WebSocket JSON-RPC）。
+HyperSoundEngine 是不绑定特定播放器或 UI 的音频处理引擎。两条实现共享 `specs/` 行为契约，但源码和构建保持独立：
 
-设计哲学是 **deep module**:对外只暴露一个极小的 `AudioEngine` 接口(8 个方法),内部封装一条 22 级专业音频处理链（含空间音频内联级，默认旁路）,接入方无需理解 DSP 细节。
+- **TypeScript 支线**：npm 包、Node 离线处理、浏览器 Host、TS AudioWorklet 与空间参考实现。
+- **Rust 支线**：原生 DSP、HRTF renderer、Windows `hse-service`、WASAPI 后端和浏览器 wasm 引擎。
 
-## 能力一览
+接入新项目先阅读 [`INTEGRATION.md`](INTEGRATION.md)。API 类型参考见 [`API.md`](API.md)，当前阶段与验收边界见 [`audit/phase-status.md`](audit/phase-status.md)。
 
-### 一、22 级专业音频处理链
+## 2. 当前能力
 
-引擎内部按固定顺序串联 21 个处理阶段,一次 `process()` 调用即完成全链路处理:
+### 2.1 22 级处理链
 
-| 序号 | 阶段 | 能力 |
-|------|------|------|
-| 1 | 响度归一化 | 实时 LUFS 测量驱动增益,目标 -14 LUFS |
-| 2 | 3D 环绕 | 轻量立体声旋转(可被调制矩阵驱动) |
-| 3 | M/S 立体声宽度 + 人声分离 | 宽度 0–2、voiceBalance 人声/伴奏比例 |
-| 4 | Pre-EQ | 5/10/20 段专业均衡(Q 补偿) |
-| 5 | Deesser | 齿音抑制(可选外部 sidechain) |
-| 6 | Compressor | 动态压缩(可选外部 sidechain) |
-| 7 | NightMode | 夜间模式动态压缩 |
-| 8 | Delay | 延迟(调制类效果) |
-| 9 | Chorus | 合唱 |
-| 10 | Flanger | 镶边 |
-| 11 | Phaser | 移相(2/4/6/8 级全通) |
-| 12 | Tremolo | 颤音 |
-| 13 | 混响 | 卷积(非均匀分区 + IR 去周期化)/ 算法(Freeverb)/ FDN 网络 / off |
-| 14 | BassEnhancer | 低音增强(谐波合成) |
-| 15 | LoudnessComp | 等响度补偿(ISO 226,音量自适应) |
-| 16 | IEQ | 智能均衡(频谱特征闭环修正) |
-| 17 | [FFT 取样] | 频谱分析与特征提取 |
-| 18 | DynamicEq | 自适应动态均衡(频谱包络自动混音,5 带全通交叉) |
-| 19 | [LUFS 取样] | 响度统计 |
-| 20 | 调制主增益 | LFO/Envelope 驱动的 masterGain |
-| 21 | Limiter | 前瞻限幅器(true peak,4× 过采样) |
+第 1–21 级为共享主链：响度归一化、3D 环绕、M/S、EQ、Deesser、Compressor、NightMode、Delay、Chorus、Flanger、Phaser、Tremolo、四路混响、BassEnhancer、LoudnessComp、IEQ、FFT 分析、DynamicEq、LUFS、调制主增益和 Limiter。
 
-### 二、参数调制矩阵
+第 22 级为空间音频，默认 `spatial.mode='off'`。Rust 注入 HRTF grid 后支持：
 
-- **LFO**:正弦/三角/方波/锯齿四种波形,块速率更新
-- **Envelope Follower**:起控/释放/强度可调
-- **调制路由**:源(LFO/Envelope)→ 目标(masterGain / stereoWidth)+ 深度 + 偏移
-### 三、多通道处理
+- `instant`
+- `headLocked`
+- `world`
+- `stage`
 
-- **HseAudioBus**:非交错 N 通道缓冲抽象 + 通道级工具(create/fromInterleaved/toInterleaved/copyTo/fill/applyGain/mixFrom/extract/downmixToMono/downmixToStereo)
-- **processBus 两种模式**:
-  - `downmix`(默认):N 通道下混立体声处理(环绕监听语义)
-  - `perChannelPair`:按立体声对 (0,1)(2,3)… 逐对独立处理(独立子引擎池,参数同步),支持 5.1/7.1 各通道独立 DSP
+空间能力包括完整 listener 姿态、轨迹、稳定对象 slot、距离与空气吸收、Doppler、遮挡、声源大小、nearest/spherical 插值、time/partitioned 双耳卷积、早期反射、FDN 房间和 ambience。最终输出仍为双耳立体声。
 
-### 四、WAV 文件 I/O
+### 2.2 多通道
 
-- **encodeWav / decodeWav**:16-bit PCM 与 32-bit Float，多通道；编码支持 legacy/standard 双模式，解码自动识别
-- 对外交换显式使用 standard 小端 RIFF/WAVE；默认 legacy 仅保留旧字节契约
-- standard 严格校验 RIFF/data 长度、采样率、byteRate 与 blockAlign
-- 解码结果为非交错 Float32Array[],可直接构造 HseAudioBus 进入处理链
+- TS core `processMulti()`：3–8 路非交错输入转双声道。
+- Browser Host：支持 2/6/8 路 discrete 输入，输出固定 2 路。
+- `HseAudioBus.processBus()`：非实时 downmix 或 per-channel-pair 便利路径。
+- 当前不提供 5.1/7.1 物理多声道输出。
 
-### 五、Sidechain
+### 2.3 文件、场景和分享串
 
-- `process(inputs, outputs, sidechain?)` 第三参数
-- Compressor / Deesser 可选 `sidechainEnabled`,用外部信号驱动包络/检测
+- WAV：16-bit PCM / 32-bit float，legacy/standard 双格式。
+- 场景：12 个内置全参数快照。
+- 分享串：当前编码格式为 `HSE2` + Crockford Base32 差异载荷；解码继续兼容历史 v1 全量载荷。
 
-### 六、分析与测量
+### 2.4 浏览器宿主
 
-- **EngineStats**:LUFS(积分/瞬时)、LRA、峰值 dB、true peak dB、限幅衰减 dB、引擎延迟样本数
-- **EngineAnalysis**:幅度谱(FFT)+ 频谱特征(RMS/ZCR/质心/滚降/平坦度/波峰因子)
-- 实时闭环:IEQ 依据频谱特征自动修正
+`HyperSoundEngineHost` 支持：
 
-### 七、场景预设与分享串
+- TS AudioWorklet，失败时可回退 ScriptProcessor。
+- 完整 Rust/WASM 1–22 级引擎。
+- SOFA bytes 或预解析 HRTF grid。
+- 参数更新时预建新节点，等待 `ready`，以零增益接入并预滚一个 128-frame render quantum，再交叉淡变替换。
 
-- **12 个内置场景**:pop/enhance/jazz/dance/classical/livehouse/studio/warm/dts/vocal-stage/night-bass/heavy-bass
-- **我的场景**:localStorage 持久化(上限 8 个,快照去 IR)
-- **分享串**:base64url(version:checksum:json),FNV-1a 校验 + 白名单字段 + 数值 clamp,非法输入抛错
+运行期不向 AudioWorklet 发送参数重建消息；完整参数快照只在节点构造阶段通过 `processorOptions` 应用。
 
-### 八、浏览器宿主(AudioWorklet)
+### 2.5 Windows 原生服务
 
-- `HyperSoundEngineHost`:把引擎接入 Web Audio 图
-- 优先 AudioWorklet(渲染线程,低延迟),失败自动回退 ScriptProcessor
-- 参数经 `port.postMessage` 下发,stats/analysis 周期回传
-- 鸭子类型 AudioNode/AudioContext(Node 测试环境可 stub)
+`hse-service` 提供：
 
-### 九、可选 React UI(调音室)
+- localhost WebSocket JSON-RPC 控制面。
+- WASAPI shared/exclusive capture/render；loopback 仅 shared。
+- 立体声 f32le PCM 推流会话。
+- 多源混后处理，再进入完整 Rust 1–22 级链。
+- HRTF 控制路径加载、参数块边界热换。
+- 双环深度、高水位、帧延迟估算和 xrun 统计。
 
-- 玻璃拟态面板,4 个页签:音效场景 / 均衡器 / 调音器(分享串+导出)/ 分析
-- 效果卡片系统 + 参数弹窗(Spatial/Dynamics/Loudness/Modulation)
-- 经 `HyperSoundEngineUiBridge` 桥接,UI 不直接 import 引擎
+服务处理后的 PCM 输出到 WASAPI 设备，不通过 WebSocket回传。完整协议见 [`../specs/service/control-plane.md`](../specs/service/control-plane.md) 和 [`../specs/service/push-stream.md`](../specs/service/push-stream.md)。
 
-## 技术特性
+## 3. 共享规格和自动门禁
 
-| 特性 | 说明 |
-|------|------|
-| **实时安全** | `process()` 稳态零分配,无 Math.random / Date / console |
-| **确定性** | 同输入同参数 → 同输出(可复现、可测试) |
-| **快照语义** | `setParams` 整包替换 + 深拷贝;`getParams` 返回深拷贝 |
-| **零依赖** | 核心 DSP 纯 TS;meyda/signalsmith-stretch 为可选 |
-| **跨环境** | Node 离线 / 浏览器实时 / Electron,同一内核 |
-| **深模块** | 对外 8 方法 `AudioEngine` 接口,内部 22 级链封装 |
+当前基线：
 
-## 包结构
+- 25 份共享规格：17 DSP + 4 engine + 1 I/O + 3 spatial。
+- 音频冻结向量：72 组 / 144 文件，Rust 72/72 PASS。
+- 空间结构夹具：world-listener 14/14 + renderer/ABI 14/14 = 28/28 PASS。
+- Phase 4 固定参数扫描：40/40 PASS。
+- Release 实时分配门禁：默认链、全开链、长 IR 和 stage 22。
+- Chromium 正式 wasm AudioWorklet E2E。
+- Windows 无设备 core/WASAPI/service/parity 门禁。
 
-```
-hypersoundengine
-├── .                        # 核心:types + dsp/ + engine/ + io/ + analysis/ + offline/
-├── /browser                 # 浏览器宿主:HyperSoundEngineHost + AudioWorklet 接线
-├── /worklet                 # AudioWorklet 处理器打包入口
-├── ui/                      # 可选 React UI(调音室)—— 独立 tsconfig,不随核心打包
-├── adapters/waveforge/      # WaveForge 宿主适配(示例,不属于核心包)
-├── examples/                # Node 离线 / 浏览器实时 接入示例
-└── docs/                    # API / ARCHITECTURE / INTEGRATION_GUIDE / PROJECT_OVERVIEW
-```
+最新验证结果应以 `main` 对应的 GitHub Actions CI 和 [`audit/phase-status.md`](audit/phase-status.md) 为准，不在本页复制易漂移测试总数。
 
-## 快速开始
+## 4. 接入方式
+
+| 场景 | 接口 |
+|---|---|
+| Node/Electron 离线 PCM | `hypersoundengine` / `AudioEngine` |
+| Web Audio 实时处理 | `hypersoundengine/browser` / `HyperSoundEngineHost` |
+| 浏览器 Rust DSP | Host `engineBackend:'wasm'` |
+| 任意语言 Windows 原生接入 | `hse-service` JSON-RPC + PCM WebSocket |
+| 原生程序只用空间 renderer | `hse-wasm` 空间 C ABI |
+
+`hse-napi` 尚未实现。Node/Electron 若需要 Rust 完整引擎，应通过 `hse-service`，或在浏览器渲染进程使用 wasm Host。
+
+## 5. 快速开始
+
+从源码构建：
 
 ```bash
-npm install hypersoundengine
-npm run build          # 构建核心 + worklet
-npm test               # 全量测试
+git clone https://github.com/IceFireIcer/HyperSoundEngine.git
+cd HyperSoundEngine
+npm install
+npm run build
+npm test
 ```
 
-```ts
-import { createEngine, createDefaultParams } from 'hypersoundengine'
+Node 离线示例：
 
-const engine = createEngine(48000, 2)
-const params = createDefaultParams(48000)
-params.compressor.enabled = true
-params.reverb.enabled = true
-engine.setParams(params)
-engine.prepare(4096)
-
-const inL = new Float32Array(4096), inR = new Float32Array(4096)
-const outL = new Float32Array(4096), outR = new Float32Array(4096)
-engine.process([inL, inR], [outL, outR])
-
-console.log(engine.getStats().lufsIntegrated)
+```bash
+node examples/node-offline.mjs
 ```
 
-详细的接线方式与 API 调用见 **[INTEGRATION_GUIDE.md](./INTEGRATION_GUIDE.md)**。
+Rust 服务：
+
+```bash
+cd HyperSoundEngineRust
+cargo run -p hse-service
+```
+
+默认控制地址为 `ws://127.0.0.1:4780/`。其他项目的完整接入顺序、错误处理和 PCM 帧布局见 [`INTEGRATION.md`](INTEGRATION.md)。
+
+## 6. 当前阶段
+
+- Phase 0–1：完成。
+- Phase 2：主体完成，正式播放器/VB-CABLE 真机出口待验收。
+- Phase 3：实现完成，双推流加非零真实 capture/loopback 联合出口待验收。
+- Phase 4：自动实现完成，真实 shared/exclusive 延迟、xrun 和 CPU 待验收。
+- Phase 5：主体实现完成；真实 SOFA 自动门禁与 Firefox E2E 未完成，物理 multichannel 输出尚未实现。
+
+## 7. 发布状态
+
+1.5.1 的源码和自动门禁可以作为**源码型 GitHub Release 候选**。npm、正式 Windows 二进制和 crates.io 的发布条件尚未满足，具体证据和阻断项见 [`RELEASE_READINESS.md`](RELEASE_READINESS.md)。
+
+## 8. 许可
+
+项目主体代码采用 [CC BY-NC-ND 4.0](../LICENSE)。第三方组件分别遵循各自许可证，见 [`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md)。

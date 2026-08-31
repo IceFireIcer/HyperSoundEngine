@@ -93,6 +93,7 @@ cargo build -p hse-wasm --target wasm32-unknown-unknown --release --locked
 
 ## 六、文档索引
 
+- 正式发布就绪度：`docs/RELEASE_READINESS.md`（1.5.1 可作为明确限制的源码型 GitHub Release；npm、Windows 二进制与 crates.io 暂不发布）
 - 阶段状态：`docs/audit/phase-status.md`
 - 共享规格总纲：`specs/README.md`
 - 空间 ABI：`docs/SPATIAL_ABI.md`、`specs/spatial/renderer-abi.md`

@@ -20,7 +20,7 @@ Rust `EngineChainStage` 对齐 TS HyperSoundEngine 第 1–21 级。音频冻结
 
 Rust 第 22 级在控制路径注入 HRTF grid 后支持 `instant`、`headLocked`、`world` 与 `stage`。world 消费完整 listener 姿态、轨迹、playhead、遮挡和相邻快照确定速度；stage 对齐 preset/seat/roomSize/reverbAmount/customSources，ambience 同级叠加。`hrtf-core` renderer 还支持 Doppler、声源大小与按稳定 slot 保持对象状态。空间共享门禁由 world-listener 14 case 与 renderer/ABI 14 case 组成，共 **28/28 PASS**；spherical、非零 room、partitioned 和扩展效果由 Rust 行为/分配测试覆盖，不冒充跨语言数值对拍。
 
-`hse-wasm::HseEngine` 已通过默认构造承载兼容的 1–21 级路径，并通过 `withSofaBytes` / `withHrtfGrid` 在 worklet 构造控制阶段接入 stage 22。正式 `HyperSoundEngineHost` 可选择 wasm backend，在主线程 fetch/缓存 HRTF bytes 与编译 module，参数更新复用资源预建新节点、等待 ready 后交叉淡变替换；render 不解析 HRTF。headless Chromium E2E 已从 localhost 加载正式 bundle/wasm，并以无系统播放目的节点的 Web Audio 图门禁 ready、spatial off 1–21 级非静音、缺 HRTF 构造失败静音、参数节点替换淡变，以及预解析合成 HRTF grid 下成功的 `instant` stage 22 非静音、双耳不对称渲染；Firefox 尚未纳入自动门禁。空间薄 ABI 精确提供规划中的 8 个函数，外加生命周期、错误查询等辅助符号。
+`hse-wasm::HseEngine` 已通过默认构造承载兼容的 1–21 级路径，并通过 `withSofaBytes` / `withHrtfGrid` 在 worklet 构造控制阶段接入 stage 22。正式 `HyperSoundEngineHost` 可选择 wasm backend，在主线程 fetch/缓存 HRTF bytes 与编译 module，参数更新复用资源预建新节点、等待 ready 后以零增益接入并预滚一个 128-frame render quantum，再交叉淡变替换；render 不解析 HRTF。headless Chromium E2E 已从 localhost 加载正式 bundle/wasm，并以无系统播放目的节点的 Web Audio 图门禁 ready、spatial off 1–21 级非静音、缺 HRTF 构造失败静音、参数节点替换淡变，以及预解析合成 HRTF grid 下成功的 `instant` stage 22 非静音、双耳不对称渲染；Firefox 尚未纳入自动门禁。空间薄 ABI 精确提供规划中的 8 个函数，外加生命周期、错误查询等辅助符号。
 
 Phase 4 自动门禁覆盖 40 个合法全链参数快照，并已由 TS 冻结参数/输入种子/输出、由 TS 与 Rust 同调度执行共享摘要对拍（40/40 PASS）；另覆盖完整卷积 IR release 期 alloc/realloc/dealloc 为零、服务纯内存数据路径 benchmark 编译、事件驱动捕获与确定性排队帧统计。固定时长测试已删除且不恢复；测试以事件、帧数、块序号或显式超时上限收敛。
 
@@ -33,7 +33,8 @@ Phase 4 自动门禁覆盖 40 个合法全链参数快照，并已由 TS 冻结�
 | Phase 4 参数/分配 | 40 个参数扫描 case；默认/全开/release 稳态零分配自动门禁 |
 | 服务性能与统计 | `bench_service_path` 覆盖纯内存服务路径；双环 current/high-water、块序号及 latency p50/p95/max 已实现 |
 | wasm | `HseEngine` 默认 1–21 级兼容构造 + SOFA/grid stage 22 构造入口；Host HRTF 资源复用；空间 8 函数 C ABI |
-| 真机/浏览器 | Chromium wasm AudioWorklet E2E 已自动门禁 off 与合成 grid 非 off stage 22；Firefox、真实 SOFA 资产兼容性与真实音频设备仍待验收 |
+| 自动 CI | `main` 提交 `ad860db` 的 [run 33365076659](https://github.com/IceFireIcer/HyperSoundEngine/actions/runs/33365076659)：`test` / `rust` / `rust-windows-silent` 全部成功 |
+| 真机/浏览器 | Chromium wasm AudioWorklet E2E 已自动门禁 off、合成 grid 非 off stage 22 与预滚交叉淡变；Firefox、真实 SOFA 资产兼容性与真实音频设备仍待验收 |
 
 ## 四、剩余工作
 

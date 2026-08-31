@@ -17,7 +17,7 @@
 | `src/dsp/Deesser.ts` / `Compressor.ts` / `BassEnhancer.ts` / `LoudnessComp.ts` / `EqChain.ts` / `MidSide.ts` / `biquad.ts` | 链上各级 |
 | `src/types.ts`（`createDefaultParams`） | 默认参数模型 |
 | `src/dsp/API_SPEC.md`（辅助模块 A） | 链顺序契约（唯一实现契约） |
-| `research/docs/音频算法设计文档.md` §2 | 设计文档总体架构 |
+| `docs/音频算法设计文档.md` §2 | 设计文档总体架构 |
 | `src/engine/ScenePresets.ts` | 12 个组合场景快照 |
 | 审计测试 | `test/audit-chain.test.ts`（15 项全通过） |
 
@@ -88,7 +88,7 @@
 
 ### 异常 8 【低】链顺序与设计文档 §2 偏差（文档级，听感影响极小）
 
-- **位置**：`HyperSoundEngine.ts` 链顺序 vs `research/docs/音频算法设计文档.md` §2。
+- **位置**：`HyperSoundEngine.ts` 链顺序 vs `docs/音频算法设计文档.md` §2。
 - **现象/差异**：
   1. 设计 §2：… → 低频增强 → **Post-EQ → 等响度/响度** → 限幅器；实际（含 API_SPEC 辅助模块 A）：… → BassEnhancer → **LoudnessComp(等响度) → IEQ(Post)** → [LUFS] → Limiter。即"等响度"与"Post-EQ(IEQ)"顺序互换（两者均为线性滤波器，交换听感差异极小）。
   2. 实际链在 M/S 前插入 **3D 环绕** 级（API_SPEC 模块 A 未列出；HyperSoundEngine 头注释有说明）——契约漂移。

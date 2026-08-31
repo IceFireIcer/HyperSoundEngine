@@ -5,23 +5,23 @@
 
 ## 概念/公式来源（实现为自主代码）
 
-| 来源 | 许可 | 用途 | 本地参考 |
+| 来源 | 许可 | 用途 | 上游来源 |
 |---|---|---|---|
-| RBJ Audio EQ Cookbook（Robert Bristow-Johnson） | 公开文档 | biquad 系数公式 | research/notes/rbj-eq-cookbook.txt |
-| DSPFilters（Vinnie Falco） | MIT（源码头声明） | TDF2 状态机思路 | research/audio-libs/DSPFilters |
-| kissfft（Mark Borgerding） | BSD-3-Clause | FFT 蝶形分解思路 | research/audio-libs/kissfft |
-| Freeverb（Jezar @ Dreampoint） | 公有领域 | 梳状+全通混响结构 | stk FreeVerb(MIT) 对照：research/audio-libs/stk |
-| stk（Perry R. Cook & Gary P. Scavone） | MIT 等价宽松许可 | 算法混响参考 | research/audio-libs/stk |
-| DaisySP（Electro-Smith） | MIT | 压限/混响接口思路 | research/audio-libs/DaisySP |
-| signalsmith-basics（Signalsmith Audio） | MIT | 效果器紧凑实现思路 | research/audio-libs/signalsmith-basics |
-| signalsmith-stretch（Signalsmith Audio） | MIT | 变速变调（可选 WASM 依赖） | research/audio-libs/signalsmith-stretch |
-| meyda（Hugh Rawlinson 等） | MIT | 频谱特征定义 | research/audio-libs/meyda |
-| speexdsp（Xiph.Org） | BSD-3-Clause | 多相重采样思路 | research/audio-libs/speexdsp |
-| ITU-R BS.1770-4 / EBU R128 | 标准（公开） | LUFS 测量公式与 K 加权系数 | research/notes（技术文档 §7） |
-| ISO 226:2003 | 标准（公开） | 等响度曲线（本模块为简化近似） | research/docs/音频算法技术文档.md §6 |
-| YIN（de Cheveigné & Kawahara, 2002） | 学术公开 | 音高检测算法 | 技术文档 §10.1 |
-| spleeter（Deezer） / demucs（Meta） | MIT | 声源分离（离线适配层，模型权重按各仓库声明） | research/audio-libs/spleeter, demucs |
-| crepe（Marl/CMU） | MIT | 音高检测（离线可选） | research/audio-libs/crepe |
+| RBJ Audio EQ Cookbook（Robert Bristow-Johnson） | 公开文档 | biquad 系数公式 | https://webaudio.github.io/Audio-EQ-Cookbook/ |
+| DSPFilters（Vinnie Falco） | MIT（源码头声明） | TDF2 状态机思路 | https://github.com/vinniefalco/DSPFilters |
+| kissfft（Mark Borgerding） | BSD-3-Clause | FFT 蝶形分解思路 | https://github.com/mborgerding/kissfft |
+| Freeverb（Jezar @ Dreampoint） | 公有领域 | 梳状+全通混响结构 | https://ccrma.stanford.edu/~jos/pasp/Freeverb.html |
+| stk（Perry R. Cook & Gary P. Scavone） | MIT 等价宽松许可 | 算法混响参考 | https://github.com/thestk/stk |
+| DaisySP（Electro-Smith） | MIT | 压限/混响接口思路 | https://github.com/electro-smith/DaisySP |
+| signalsmith-basics（Signalsmith Audio） | MIT | 效果器紧凑实现思路 | https://github.com/Signalsmith-Audio/basics |
+| signalsmith-stretch（Signalsmith Audio） | MIT | 变速变调（可选 WASM 依赖） | https://github.com/Signalsmith-Audio/signalsmith-stretch |
+| meyda（Hugh Rawlinson 等） | MIT | 频谱特征定义的概念参考；未作为当前 npm 依赖 | https://github.com/meyda/meyda |
+| speexdsp（Xiph.Org） | BSD-3-Clause | 多相重采样思路 | https://gitlab.xiph.org/xiph/speexdsp |
+| ITU-R BS.1770-4 / EBU R128 | 标准（公开） | LUFS 测量公式与 K 加权系数 | https://www.itu.int/rec/R-REC-BS.1770 |
+| ISO 226:2003 | 标准（公开） | 等响度曲线（本模块为简化近似） | https://www.iso.org/standard/34222.html |
+| YIN（de Cheveigné & Kawahara, 2002） | 学术公开 | 音高检测算法 | https://doi.org/10.1121/1.1458024 |
+| spleeter（Deezer） / demucs（Meta） | MIT | 声源分离（离线适配层，模型权重按各仓库声明） | https://github.com/deezer/spleeter / https://github.com/facebookresearch/demucs |
+| crepe（Marl/CMU） | MIT | 音高检测（离线可选） | https://github.com/marl/crepe |
 
 ## npm 开发依赖
 
@@ -39,9 +39,8 @@
 
 `sofar` 基于 BSD-3-Clause 的 libmysofa 设计进行纯 Rust 重写；分发 Rust 二进制时应同时保留其 MIT/Apache-2.0 许可和项目内列出的上游归属。仓库当前不捆绑第三方 SOFA 数据文件；用户提供的数据集许可由调用方负责，未来随包加入数据集前必须单独记录来源、版本、校验和、署名与再分发条款。
 
-## 可选 npm 依赖（均 MIT）
+## 可选 npm 依赖（MIT）
 
-- `meyda`：MIT，Copyright (c) 2014 Hugh A. Rawlinson, Nevo Segal, Jakub Fiala
 - `signalsmith-stretch`：MIT，Copyright (c) 2022 Geraint Luff / Signalsmith Audio Ltd.
 
 ## LGPL（仅宿主侧；引擎包零 LGPL 依赖）
