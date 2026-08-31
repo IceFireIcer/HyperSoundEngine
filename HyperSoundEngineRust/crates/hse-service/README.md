@@ -1,5 +1,7 @@
 # hse-service —— 引擎服务进程
 
+> 外部项目应先阅读仓库根 [`docs/INTEGRATION.md`](../../../docs/INTEGRATION.md) 的 Rust service 章节，其中给出完整生命周期、JSON-RPC/PCM 示例、错误恢复和接入验收清单。本文件描述服务内部边界；协议事实标准仍是 [`specs/service/control-plane.md`](../../../specs/service/control-plane.md) 与 [`push-stream.md`](../../../specs/service/push-stream.md)。
+
 **一句话职责**（《原生化双支线与Windows音频接入规划书》§2.2）：WASAPI loopback 或捕获端点直捕 + PCM 推流会话 → 混后处理 → rtrb 双环 → DSP 线程（`hse-core::EngineChainStage` 1–22 级；stage 22 可消费控制面预载 HRTF grid）→ WASAPI 独立渲染端点；控制面为 localhost WebSocket JSON-RPC。
 
 ## 线程编排（§2.2 架构 + push-stream 混后处理）
@@ -14,7 +16,7 @@
 
 - **DSP 线程**稳态零分配、零锁、零系统调用；双环容量按 blockSize 整数倍预分配；
 - WASAPI 句柄不跨线程：开流在捕获/渲染线程内经 opener 完成，协商格式经握手通道回报引擎；
-- 捕获 `pull` 为非阻塞尽力语义（返回实际帧数，0=暂无）：空轮询按 ~10ms 退避，避免忙转；渲染 `push` 由后端自行阻塞节流到实时速率；
+- 捕获线程通过后端 readiness 等待推进：WASAPI 使用事件句柄，fake 后端可由测试显式发放许可；等待窗口按块长与采样率推导并设 25ms 上限，以便停机和纯推流会话及时推进；渲染 `push` 由后端自行阻塞节流到实时速率；
 - **混后处理**（ADR-0002）：捕获线程同时承担推流会话的混合前级——回环块（若有）先入基线，随后按 sessionId 升序把各会话出队块逐样本求和再入环；无活跃会话时走快路径，与纯回环行为逐字节一致；
 - xrun 计数：欠供/溢出的服务侧计数 + 流对象内置 `xruns()` 增量聚合 + 会话环 drop-oldest 丢弃（每旧块 +1），`event.xrun` 通知经有界通道转发（数据面不碰网络，通道满丢通知不丢计数）。
 

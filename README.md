@@ -43,16 +43,32 @@ engine.process([inL, inR], [outL, outR])
 ### 浏览器实时接入
 
 ```ts
+import { createDefaultParams } from 'hypersoundengine'
 import { createHyperSoundEngineHost } from 'hypersoundengine/browser'
 
+const params = createDefaultParams(audioContext.sampleRate)
 const host = createHyperSoundEngineHost({
   mode: 'auto',               // worklet 优先，失败回退 ScriptProcessor
   workletUrl: '/worklet-bundle.js',
 })
 await host.attach({ audioContext, masterGain, analyser }, params)
-host.setParams(nextParams)
+
+const nextParams = structuredClone(params)
+nextParams.eq.simpleBands[0] = 3
+await host.setParams(nextParams)
 host.dispose()
 ```
+
+## 接入其他项目
+
+从 [接入指南](docs/INTEGRATION.md) 开始。该文档按使用场景明确区分：
+
+- TypeScript core：Node/Electron 离线处理或自有音频回调；
+- 浏览器 Host：TS AudioWorklet 或完整 Rust/WASM 1–22 级引擎；
+- Rust `hse-service`：其他语言通过 localhost WebSocket JSON-RPC + 立体声 f32 PCM 接入，并输出到 WASAPI 设备；
+- 空间 C ABI：仅供原生程序调用双耳 renderer，不等于完整 HSE API。
+
+参考实现见 [`examples/node-offline.mjs`](examples/node-offline.mjs)、[`examples/browser-host.mjs`](examples/browser-host.mjs) 和可导入、无副作用的 [`examples/hse-service-client.mjs`](examples/hse-service-client.mjs)。完整 TS 类型参考见 [API 文档](docs/API.md)，服务 wire 契约见 [control-plane](specs/service/control-plane.md) 与 [push-stream](specs/service/push-stream.md)。
 
 ## 目录结构
 

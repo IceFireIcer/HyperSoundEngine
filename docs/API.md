@@ -291,6 +291,15 @@ interface HyperSoundEngineHostOptions {
   workletUrl?: string                  // TS worklet 产物 URL
   wasmWorkletUrl?: string              // wasm 专用 worklet 产物 URL
   wasmUrl?: string                     // hse_wasm_bg.wasm URL
+  hrtfUrl?: string                     // SOFA URL；与 hrtf 互斥
+  hrtf?: ArrayBuffer | {              // SOFA bytes 或预解析规则网格
+    sampleRate: number
+    azimuths: number[]
+    elevations: number[]
+    hrirLength: number
+    left: Float32Array
+    right: Float32Array
+  }
   wasmRequestTimeoutMs?: number        // ready 超时，默认 2000ms
   workletCrossfadeMs?: number          // TS/wasm 参数替换淡变窗口，默认 20ms
   wasmCrossfadeMs?: number             // workletCrossfadeMs 的兼容别名
@@ -314,7 +323,7 @@ interface HyperSoundEngineHostHandle {
 await host.attach({ audioContext, masterGain, analyser }, params)
 ```
 
-语义：`masterGain` 全断 → 接入处理节点 → 连 `analyser`；幂等；异步注册期间被 dispose 会安全放弃接线。`inputChannelCount` 可设为 `2 | 6 | 8`；TS worklet 使用单输入总线、`channelCountMode:'max'` 与 `channelInterpretation:'discrete'` 协商最大输入声道，实际较少的通道补静音，输出固定为 2。当前 wasm worklet 仅支持 2 路输入；`mode:'auto'` 的多声道配置会回退 TS worklet，显式 wasm worklet 模式则 attach 失败。
+语义：`masterGain` 全断 → 接入处理节点 → 连 `analyser`；同一 handle 重复调用幂等；异步注册期间被 dispose 会安全放弃接线。切换到另一套 AudioContext 或节点前必须先 `dispose()`，避免旧音频图保留连接。`inputChannelCount` 可设为 `2 | 6 | 8`；这是 Host 的集成层限制，core `processMulti()` 本身接受 3–8 路。TS worklet 使用单输入总线、`channelCountMode:'max'` 与 `channelInterpretation:'discrete'` 协商最大输入声道，实际较少的通道补静音，输出固定为 2。当前 wasm worklet 仅支持 2 路输入；`mode:'auto'` 的多声道配置会回退 TS worklet，显式 wasm worklet 模式则 attach 失败。
 
 默认 `engineBackend: 'ts'`，行为与既有版本一致。启用完整 Rust `HseEngine` wasm 链时必须同时提供 `wasmWorkletUrl` 与 `wasmUrl`；可选的 `hrtfUrl` 或 `hrtf`（`ArrayBuffer | HrtfGrid`）用于启用 Rust stage 22，二者互斥：
 

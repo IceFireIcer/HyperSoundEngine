@@ -26,8 +26,8 @@ export async function startEngine(audioContext, masterGain, analyser) {
 
   return {
     host,
-    update(nextParams) {
-      host.setParams(nextParams)
+    async update(nextParams) {
+      await host.setParams(nextParams)
     },
     stop() {
       host.dispose()

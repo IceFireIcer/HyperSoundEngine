@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- **统一接入指南与 service 客户端示例**：重写 `docs/INTEGRATION.md`，按 TS core、浏览器 TS Host、浏览器 Rust/WASM Host、Rust `hse-service` 与空间 C ABI 明确选择边界、生命周期、参数语义、PCM 帧格式、错误处理和验收清单；新增无副作用的 `examples/hse-service-client.mjs`，并同步 README、API、服务说明与 wire 规格中的当前实现口径。
 - **Phase 4 固定种子全链跨语言参数扫描门禁**：复用 40 个合法快照矩阵（44.1/48/96kHz，63/128/257/512 块，8 固定种子 + 最小/最大边界，全部含 17 帧短尾），由 TS 事实实现显式 `--write` 冻结参数、输入种子与输出；默认脚本仅验证且缺失即失败。TS 与 `hse-parity` 同调度重放并按 1e-6 相对容差比对有限率、非零率及峰值/RMS 数量级摘要，综合退出码覆盖新门禁；既有 72 组逐样本音频向量保持不变。
 
 ## [1.5.0] - 2026-08

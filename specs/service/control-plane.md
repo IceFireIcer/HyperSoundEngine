@@ -61,7 +61,7 @@
 {"jsonrpc":"2.0","id":7,"error":{"code":-32001,"message":"state does not allow configure"}}
 ```
 
-- `error.code` 取值见 §六错误码表；`message` 为面向诊断的英文短句，其措辞不进入兼容契约，
+- `error.code` 取值见 §六错误码表；`message` 为面向诊断的短句，语言和措辞不进入兼容契约，
   客户端只允许依赖 `code` 判定。
 
 ### 形态 D：事件通知（无 id 字段的请求形态）
@@ -104,7 +104,7 @@
     │  └──────────────────── │ starting │ ───────────▶ │ running │
     │                        └──────────┘              └─────────┘
     │                                                       │ stop
-    │  渲染排空＋设备释放完成    ┌──────────┐                   │
+    │  数据面停止＋设备释放完成    ┌──────────┐                   │
     └──────────────────────── │ stopping │ ◀─────────────────┘
                               └──────────┘
 ```
@@ -118,7 +118,7 @@
 | starting | 后端流建立完成 | running | 发 `event.phase {from:"starting",to:"running"}`；随后发 start 成功响应 |
 | starting | 后端初始化失败 | idle | 发 `event.phase {from:"starting",to:"idle"}`；随后发 start 失败响应（-32000） |
 | running | stop | stopping | 发 `event.phase {from:"running",to:"stopping"}` |
-| stopping | 渲染环排空且设备释放完成 | idle | 发 `event.phase {from:"stopping",to:"idle"}`；随后发 stop 成功响应 |
+| stopping | 数据面线程停止且设备释放完成 | idle | 发 `event.phase {from:"stopping",to:"idle"}`；随后发 stop 成功响应 |
 
 约束：
 
@@ -184,7 +184,7 @@ DeviceInfo 字段表：
 |---|---|---|
 | `phase` | string | 四态之一 |
 | `config` | object\|null | 最近一次**成功** configure 的 applied 快照原样回显；从未成功配置过则为 null |
-| `lastParams` | object\|null | 最近一次 setParams 的 params 快照原样回显；从未设置过则为 null |
+| `lastParams` | object\|null | 最近一次成功 setParams 的**规范化 wire 快照**；未知键已移除，已出现模块的缺省子键可能补齐；从未设置过则为 null |
 | `hrtf` | object | HRTF grid 加载状态；未加载为 `{loaded:false}`，已加载时加性包含规范绝对 `path`、`sampleRate`、`azimuthCount`、`elevationCount`、`hrirLength` |
 | `sessions` | array | 活跃推流会话诊断，按 sessionId 升序；每项含 u32 `sessionId` 与 u64 `queuedFrames`/`ingestedFrames`/`consumedFrames`，仅用于消费验收与诊断 |
 | `stats.xrunsIn` | u64 | 输入侧异常累计（捕获过载、推流入环丢块），与 `event.xrun.totalIn` 同源同值 |
@@ -384,8 +384,9 @@ capture 直捕请求示例：
 {"jsonrpc":"2.0","id":5,"result":{"stopped":true}}
 ```
 
-- 前置条件：phase=running。停止次序：停流取新 → 渲染环排空 → 释放设备 → 回 idle；
-  排空期间不再产生新的 xrun 上报；释放阶段的后端异常被吞掉并强制完成回 idle（停止路径不允许卡死）。
+- 前置条件：phase=running。停止次序：置停机旗 → 等待数据面线程退出 → 释放设备 → 回 idle；
+  当前协议不承诺排空尚未渲染的尾块；`sessions[].queuedFrames == 0` 与 `consumedFrames` 只证明会话数据已进入混合前级，不是 WASAPI 或物理播放完成 ACK。需要无截断播放的客户端必须在会话消费后按设备缓冲与效果尾音策略留出余量；
+  停止期间不再产生新的 xrun 上报；释放阶段的后端异常被吞掉并强制完成回 idle（停止路径不允许卡死）。
 
 #### GWT-CP-13：running 正常停止
 - **给定**：phase=running
@@ -518,7 +519,7 @@ capture 直捕请求示例：
 #### GWT-CP-15：合法快照接收并存储
 - **给定**：phase 任意，params.params 为含三个可识别键的对象
 - **当**：发送 `setParams`
-- **则**：响应 {"accepted":true,"warnings":[]}；getState.lastParams 与请求快照逐键相等
+- **则**：响应 {"accepted":true,"warnings":[]}；getState.lastParams 是请求快照的规范化 wire 形态，保留已识别语义并可补齐已出现模块的缺省子键
 
 #### GWT-CP-16：未知键进 warnings 且被忽略
 - **给定**：快照同时含可识别键与未知顶层键 myPluginKey、biquad 内未知子键 order
@@ -603,8 +604,8 @@ capture 直捕请求示例：
 ## 九、并发约束
 
 1. **单客户端假设**：本阶段唯一受支持的形态是至多一个控制面客户端。服务端不为第二个连接
-   提供隔离或仲裁：多个连接的请求进入同一串行控制线程按到达序处理，跨连接的可见性与竞争
-   行为**不构成兼容契约的一部分**。多客户端支持留待后续阶段以向后兼容方式收敛；
+   提供隔离或仲裁：实现为每连接一个处理线程，多个连接共享同一引擎状态，跨连接的请求全序、
+   会话授权与竞争行为**不构成兼容契约的一部分**。多客户端支持留待后续阶段以向后兼容方式收敛；
 2. **心跳暂缓**：应用层心跳/ping 方法本契约不定义；RFC 6455 传输层 Ping/Pong 可按标准处理，
    但不承载任何业务语义，也不得作为存活判定的契约依据；
 3. **串行化保证**：同一连接内请求按发送序处理、响应按序返回、通知按发生序插入该顺序流；

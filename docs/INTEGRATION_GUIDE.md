@@ -1,6 +1,6 @@
 # HyperSoundEngine 接线与 API 指南
 
-> 本文档说明:如何把 HyperSoundEngine 接入你的应用、各 API 怎么调用、UI 如何接入。
+> 本文保留 TS/UI 专项细节。新项目和自动化编码代理应先阅读 [`INTEGRATION.md`](INTEGRATION.md)，由其中的路径选择表决定使用 TS core、浏览器 TS/Rust Host、Rust `hse-service` 或空间 C ABI。服务 wire 契约不在本文重复定义。
 
 ## 目录
 
@@ -475,7 +475,7 @@ createDefaultParams(sampleRate): HyperSoundEngineParams
 // 浏览器宿主
 createHyperSoundEngineHost(opts?): HyperSoundEngineHost
 host.attach(handle, params?): Promise<void>
-host.setParams(p): void
+host.setParams(p): Promise<void> // 必须 await 或处理 reject
 host.dispose(): void
 host.engine: AudioEngine
 

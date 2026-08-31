@@ -3,8 +3,8 @@
 > **规格属性与实施阶段**：本文件是双支线共享规格，为 [ADR-0002](../../docs/adr/0002-dual-audio-ingress.md)
 > 双音频入口中的**推流入口**设计文档；**设计冻结于 Phase 2，实施于 Phase 3**
 > （规划书 §五 Phase 3 第 3 条：会话管理、二进制 PCM 帧、背压策略、混后处理）。
-> 实施前，服务进程对本文件定义的二进制帧行为 = 收到即丢弃（入口未实施）；
-> 控制面六方法契约见 [`control-plane.md`](control-plane.md)，其 §十版本演进规则是本文件新增方法的合法路径。
+> 推流入口已在 Phase 3 实施；当前服务按本文定义处理二进制帧。
+> 控制面九方法契约见 [`control-plane.md`](control-plane.md)，其 §十版本演进规则是本文件新增方法的合法路径。
 > 术语基线见仓库根 [`CONTEXT.md`](../../CONTEXT.md)（推流 / 会话 / 混后处理 / 渲染输出）；书写规范见 [`specs/README.md`](../README.md)。
 
 ---
@@ -40,7 +40,7 @@
 
 1. **分流正交性**：二进制帧永不进入 JSON 解析器；文本帧永不进入音频路径——即使内容看起来像对方形态；
 2. RFC 6455 允许消息分片：服务端把分片聚合为完整消息后再解析（聚合后超限按 §四超大帧处理）；
-3. Phase 2 的已实施子集：二进制帧收到即丢弃且不产生任何响应或通知；文本帧走 control-plane.md 全部契约。
+3. 当前服务已完整实施二进制帧入口；文本和二进制消息按上述规则正交分流。
 
 ## 三、会话生命周期
 
@@ -263,8 +263,8 @@ L0=+0.5、R0=−0.25、L1=+1.0、R1=0.0、L2=−1.0、R2=+0.125。
 | -32001 | Invalid state（状态不允许） | 方法与当前引擎状态不匹配——相位不符或前置状态缺失（非 idle 调 configure、未 configure 即 start、图未配置采样率即 openSession） |
 
 2. 方法表关系：Phase 2 方法表为六方法（listDevices/getState/configure/start/stop/setParams）；
-   Phase 3 实施本文件时以 MINOR 路径新增 openSession/closeSession，方法表扩至八个；
-   既有六方法的签名与语义不变；
+   Phase 3 以 MINOR 路径新增 openSession/closeSession，随后加性新增 loadHrtf，当前方法表共九个；
+   既有方法的签名与语义不变；
 3. 事件通道关系：背压丢弃复用 event.xrun（dir="in"），不新增事件类型；
 4. 标识符纪律：openSession/closeSession/sessionId/seq/format 等标识符一律不带版本字样；
    未来如需协议自述版本，用数字型 schemaVersion 字段（control-plane.md §十）。
