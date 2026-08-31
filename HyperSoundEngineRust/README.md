@@ -79,7 +79,7 @@ shared/exclusive，以及 `hse-real-audio-check` 真机工具均已落地。
 
 | 判据 | 状态 |
 |---|---|
-| 七包 Rust workspace 版本 | 1.5.0 |
+| 七包 Rust workspace 版本 | 1.5.1 |
 | 音频冻结向量 | **72/72 PASS** |
 | Phase 4 全链参数扫描 | **40/40 PASS**（固定 LCG + 结构摘要） |
 | world-listener | **14/14 PASS** |

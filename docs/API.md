@@ -1,6 +1,6 @@
 # HyperSoundEngine —— 对外接口文档（API）
 
-> 适用版本：1.5.0（独立引擎包）。核心 API 自 0.2.0 稳定；当前包含 WAV legacy/standard 双模式与 world-listener 几何公共函数。
+> 适用版本：1.5.1（独立引擎包）。核心 API 自 0.2.0 稳定；当前包含 WAV legacy/standard 双模式与 world-listener 几何公共函数。
 > 分享串为 v2 紧凑格式（HSE2，兼容导入 v1 旧串，见 `src/engine/ShareCodec.ts`）。
 > 核心原则：**小接口、深实现**。大多数接入方只需要 `createEngine` + `HyperSoundEngineParams`。
 
@@ -343,7 +343,7 @@ await host.attach({ audioContext, masterGain, analyser }, params)
 
 ### `host.setParams(params)`
 
-script 路径在主线程原位应用完整参数快照。TS/wasm worklet 路径不修改当前渲染实例：宿主先以新快照构造并等待新节点 `ready`，再通过两个输出 GainNode 在 `workletCrossfadeMs`（默认 20ms，旧 `wasmCrossfadeMs` 仍作为别名）内线性交叉淡变；Promise 仅在 `audioContext.currentTime` 到达淡变终点且旧路径断开后完成，context 暂停时不会因墙钟超时提前清链。该语义不迁移旧引擎的滤波器、动态或混响状态；旧节点尾音仅在淡变窗口内参与输出。新节点构造失败时 Promise reject，当前可听链保持不变；并发调用按调用顺序串行替换，dispose 会立即清理活动与退役路径并结束淡变等待。
+script 路径在主线程原位应用完整参数快照。TS/wasm worklet 路径不修改当前渲染实例：宿主先以新快照构造并等待新节点 `ready`，再以零增益接入并预滚一个 128-frame render quantum，随后通过两个输出 GainNode 在 `workletCrossfadeMs`（默认 20ms，旧 `wasmCrossfadeMs` 仍作为别名）内线性交叉淡变；Promise 仅在 `audioContext.currentTime` 到达淡变终点且旧路径断开后完成，context 暂停时不会因墙钟超时提前清链。该语义不迁移旧引擎的滤波器、动态或混响状态；旧节点尾音仅在淡变窗口内参与输出。新节点构造失败时 Promise reject，当前可听链保持不变；并发调用按调用顺序串行替换，dispose 会立即清理活动与退役路径并结束淡变等待。
 
 ### `host.reset()`
 

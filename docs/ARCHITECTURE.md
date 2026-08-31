@@ -122,7 +122,7 @@ interface ProcessingStage {
 > 多通道：`processBus()` 默认把 N 通道下混为立体声处理（环绕监听语义），
 > `mode:'perChannelPair'` 时按立体声对逐对独立处理（每对独立子引擎），适合 5.1/7.1 各通道独立 DSP；
 
-## 5. Rust 支线边界（1.5.0）
+## 5. Rust 支线边界（1.5.1）
 
 Rust workspace 与 TS 支线零代码依赖，由 `specs/` 共享行为契约：
 
@@ -130,7 +130,7 @@ Rust workspace 与 TS 支线零代码依赖，由 `specs/` 共享行为契约：
 - Rust 第 22 级支持 `instant`、`headLocked`、`world` 与 `stage`：宿主先在控制路径注入 HRTF grid；world 消费完整 listener 姿态、轨迹、playhead、遮挡与相邻快照确定速度，source id 映射到稳定 slot；stage 对齐 preset/seat/roomSize/reverbAmount/customSources，ambience 在同一内联级叠加。物理输出仍固定双耳立体声。
 - `hrtf-core` 已实现 world-listener 完整欧拉姿态、规则 grid、SOFA 解析、44.1/48/96 kHz 确定性重采样、nearest/spherical 插值、time/partitioned 卷积、距离/空气吸收、Doppler、遮挡、声源大小、房间与稳定 slot。共享空间门禁为 world-listener 14/14 + renderer/ABI 14/14 = 28/28；真实 SOFA 资产尚未进入自动门禁。
 - `hse-wasm` 是依赖 `hse-core` 的边界 crate，`HseEngine` 导出默认构造以及 `withSofaBytes` / `withHrtfGrid` 控制路径入口：前者解析 SOFA，后者验证预解析规则 grid，随后统一调用 `EngineChainStage::from_params_with_hrtf_grid` 建立 1–22 级链。`spatial.mode='off'` 的默认构造保持兼容；非 off 且无 HRTF 明确失败。四块预分配 planar 缓冲与 `process(frames)` 原位交换主输入/sidechain，render 稳态不解析 HRTF。
-- TS 与 wasm worklet backend 的参数更新都由 `HyperSoundEngineHost` 在控制路径预建完整 AudioWorkletNode，参数快照只经 `processorOptions` 在构造期应用；wasm Host 还会在主线程 fetch/缓存 SOFA bytes 或复用调用方提供的 `ArrayBuffer`/grid，并在节点替换时复用同一 HRTF 资源与已编译 module。等待 `ready` 后经双 GainNode 短交叉淡变替换，render callback 不解析参数/HRTF、不构链。旧链仅在音频时间窗口内保留尾音，`AudioContext.currentTime` 暂停时不会由墙钟提前断开；dispose 可立即取消等待并清理新旧路径。这不是 DSP 状态迁移。CI 在 headless Chromium 中加载正式 bundle/wasm，以无设备的 `MediaStreamAudioDestinationNode` 驱动真实 AudioWorklet，门禁 `ready`、spatial off 的 1–21 级非静音处理、构造失败静音和参数节点替换淡变；Firefox 尚未纳入自动门禁。
+- TS 与 wasm worklet backend 的参数更新都由 `HyperSoundEngineHost` 在控制路径预建完整 AudioWorkletNode，参数快照只经 `processorOptions` 在构造期应用；wasm Host 还会在主线程 fetch/缓存 SOFA bytes 或复用调用方提供的 `ArrayBuffer`/grid，并在节点替换时复用同一 HRTF 资源与已编译 module。等待 `ready` 后先以零增益接入并预滚一个 128-frame render quantum，再经双 GainNode 短交叉淡变替换，render callback 不解析参数/HRTF、不构链。旧链仅在音频时间窗口内保留尾音，`AudioContext.currentTime` 暂停时不会由墙钟提前断开；dispose 可立即取消等待并清理新旧路径。这不是 DSP 状态迁移。CI 在 headless Chromium 中加载正式 bundle/wasm，以无设备的 `MediaStreamAudioDestinationNode` 驱动真实 AudioWorklet，门禁 `ready`、spatial off 的 1–21 级非静音处理、构造失败静音和参数节点替换淡变；Firefox 尚未纳入自动门禁。
 - `hse-wasm::spatial_abi` 另行导出规划中的 8 个空间 C ABI 函数及生命周期/错误辅助符号；正式 Host 现通过 `HseEngine` 构造入口接入 stage 22，但不直接调用该薄 ABI。
 - `hse-wasapi`/`hse-service` 支持 shared/exclusive、事件等待、排队帧统计与真机验收工具；服务控制面可在 idle 从本地绝对 SOFA 路径预载 HRTF grid，`start` 与运行态 `setParams` 在控制线程构建带 grid 的 1–22 级链并于块边界交换，DSP 线程不解析文件。真实设备 shared/exclusive 端到端延迟与 CPU 必须由用户验收，排队帧统计不得冒充端到端测量。
 - 固定时长测试已删除且不得恢复；异步和实时测试以事件、帧数、块序号或显式超时上限收敛。

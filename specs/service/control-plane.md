@@ -7,7 +7,7 @@
 > 关联决策：[ADR-0001 独立进程形态](../../docs/adr/0001-engine-as-independent-process.md)、
 > [ADR-0002 双音频入口](../../docs/adr/0002-dual-audio-ingress.md)。
 >
-> **1.5.0 实现范围**：控制面已加性支持 `shareMode:"shared"|"exclusive"` 与双环排队帧统计；
+> **1.5.1 实现范围**：控制面已加性支持 `shareMode:"shared"|"exclusive"` 与双环排队帧统计；
 > `hse-real-audio-check` 提供显式门控的真机验收入口。自动门禁不等于真实设备验收，shared/exclusive
 > 端到端延迟、xrun 与整进程 CPU 仍须用户分别实测；固定时长测试已删除且不得恢复。
 

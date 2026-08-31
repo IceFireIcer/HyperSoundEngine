@@ -1,6 +1,6 @@
 # 阶段对照与全量验证记录（Phase 0–5）
 
-> 日期：2026-08-31 · 版本口径：1.5.0 · 依据：《原生化双支线与Windows音频接入规划书》§五、
+> 日期：2026-08-31 · 版本口径：1.5.1 · 依据：《原生化双支线与Windows音频接入规划书》§五、
 > 当前代码、共享规格与本批自动门禁；真实设备结论仅在实际验收后成立，浏览器结论仅覆盖已执行的 Chromium 环境。
 
 ## 一、阶段实态
@@ -14,7 +14,7 @@
 | **Phase 4** 性能冲刺 | 自动实现完成，真机待验收 | 固定参数扫描、release 全时域零分配、服务纯内存 criterion、WASAPI 事件等待、双环排队延迟统计、shared/exclusive 与 `hse-real-audio-check` 已完成；真实设备 shared/exclusive 端到端延迟与整进程 CPU 仍待用户验收 |
 | **Phase 5** 可选扩展 | 主体实现，出口仍有缺口 | 完整 1–22 级 wasm 与正式 Host 可选接入；Rust HRTF grid/SOFA、44.1/48/96 kHz 重采样、nearest/spherical、time/partitioned、距离/空气、Doppler、遮挡、声源大小、房间、稳定 slot、8 函数 ABI及第 22 级四模式已实现；空间门禁 **28/28 PASS** |
 
-## 二、1.5.0 实现边界
+## 二、1.5.1 实现边界
 
 Rust `EngineChainStage` 对齐 TS HyperSoundEngine 第 1–21 级。音频冻结向量仍只覆盖该主链并固定 `spatial.mode='off'`，共 **72 组 / 144 文件**。
 
@@ -26,7 +26,7 @@ Phase 4 自动门禁覆盖 40 个合法全链参数快照，并已由 TS 冻结�
 
 ## 三、验证口径
 
-| 门禁 | 1.5.0 口径 |
+| 门禁 | 1.5.1 口径 |
 |---|---|
 | 冻结音频向量 | 72 个 JSON + 72 个 f32；Rust **72/72 PASS** |
 | Spatial fixture | world-listener **14/14** + renderer/ABI **14/14** = **28/28 PASS** |

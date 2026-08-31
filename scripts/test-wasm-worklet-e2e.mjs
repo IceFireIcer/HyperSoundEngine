@@ -27,6 +27,10 @@ const sinkWorklet = `
 class HseE2eSink extends AudioWorkletProcessor {
   constructor() {
     super()
+    this.pendingBarrier = null
+    this.port.onmessage = ({ data }) => {
+      if (data?.type === 'barrier') this.pendingBarrier = data.id
+    }
     this.port.postMessage({
       capabilities: {
         TextEncoder: typeof TextEncoder,
@@ -44,7 +48,11 @@ class HseE2eSink extends AudioWorkletProcessor {
     const left = input?.[0]
     const right = input?.[1] ?? left
     if (left) {
-      this.port.postMessage({ left: Array.from(left), right: Array.from(right) })
+      this.port.postMessage({ type: 'audio', left: Array.from(left), right: Array.from(right) })
+    }
+    if (this.pendingBarrier !== null) {
+      this.port.postMessage({ type: 'barrier', id: this.pendingBarrier })
+      this.pendingBarrier = null
     }
     for (let channel = 0; channel < output.length; channel++) {
       const source = input?.[channel] ?? input?.[0]
@@ -203,8 +211,15 @@ try {
       const blocks = []
       let waiter = null
       sink.port.onmessage = ({ data }) => {
+        if (data?.type === 'barrier' && waiter?.barrierId === data.id) {
+          const resolve = waiter.resolve
+          waiter = null
+          resolve(blocks.slice())
+          return
+        }
+        if (data?.type !== 'audio') return
         blocks.push(data)
-        if (waiter && blocks.length >= waiter.count) {
+        if (waiter && waiter.count !== undefined && blocks.length >= waiter.count) {
           const resolve = waiter.resolve
           waiter = null
           resolve(blocks.slice())
@@ -218,6 +233,12 @@ try {
         waitFor(count) {
           if (blocks.length >= count) return Promise.resolve(blocks.slice())
           return timeout(new Promise((resolve) => { waiter = { count, resolve } }), `collect ${count} audio blocks`)
+        },
+        async barrier(id) {
+          await timeout(new Promise((resolve) => {
+            waiter = { barrierId: id, resolve }
+            sink.port.postMessage({ type: 'barrier', id })
+          }), `audio barrier ${id}`)
         },
       }
     }
@@ -436,13 +457,14 @@ try {
         })
         await host.attach({ audioContext: context, masterGain, analyser }, initial)
         await collector.waitFor(8)
+        await collector.barrier('before-crossfade')
         collector.clear()
         const oldNode = host.getAudioNode()
         const replacement = structuredClone(initial)
         replacement.stereoWidth = 0
-        const collecting = collector.waitFor(24)
         await host.setParams(replacement)
-        const blocks = await collecting
+        await collector.barrier('after-crossfade')
+        const blocks = collector.blocks.slice()
         const output = stats(blocks)
         if (host.getAudioNode() === oldNode) throw new Error('setParams did not replace the AudioWorkletNode')
         if (output.rms <= 0.02) throw new Error(`crossfade output was silent (rms=${output.rms})`)

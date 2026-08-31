@@ -166,7 +166,7 @@ Host 规则：
 - `mode: 'auto'`：worklet 失败时回退 ScriptProcessor；`mode: 'worklet'`：失败即 reject。
 - `inputChannelCount` 只允许 `2 | 6 | 8`，输出固定 2 路。
 - `attach()` 与 `setParams()` 都返回 Promise，必须 `await` 或显式处理 reject。
-- worklet 参数更新会预建新节点、等待 `ready`，再按音频时间交叉淡变；不要向 worklet 私自发送 `params` 消息。
+- worklet 参数更新会预建新节点、等待 `ready`，以零增益接入并预滚一个 128-frame render quantum，再按音频时间交叉淡变；不要向 worklet 私自发送 `params` 消息。
 - 一个 Host 切换到另一套 AudioContext/节点前，先调用 `dispose()`；`dispose()` 会恢复 `masterGain -> analyser` 直连。
 - `getLastStats()` / `getLastAnalysis()` 是最近一次 TS worklet 消息快照，不应作为 wasm backend 的统计接口。
 

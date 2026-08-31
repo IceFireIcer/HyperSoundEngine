@@ -236,12 +236,15 @@ describe('HyperSoundEngineHost —— worklet 模式', () => {
     expect(workletNodes).toHaveLength(2)
     expect(options[1]).toMatchObject({ processorOptions: { initialParams: p } })
     expect(workletNodes[0].port.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'params' }))
-    expect(gainNodes[0].gain.linearRampToValueAtTime).toHaveBeenCalledWith(0, 10.02)
-    expect(gainNodes[1].gain.linearRampToValueAtTime).toHaveBeenCalledWith(1, 10.02)
+    const quantumSeconds = 128 / 48000
+    expect(gainNodes[0].gain.setValueAtTime).toHaveBeenCalledWith(1, 10 + quantumSeconds)
+    expect(gainNodes[1].gain.setValueAtTime).toHaveBeenCalledWith(0, 10 + quantumSeconds)
+    expect(gainNodes[0].gain.linearRampToValueAtTime).toHaveBeenCalledWith(0, 10.02 + quantumSeconds)
+    expect(gainNodes[1].gain.linearRampToValueAtTime).toHaveBeenCalledWith(1, 10.02 + quantumSeconds)
 
     await vi.advanceTimersByTimeAsync(100)
     expect(workletNodes[0].disconnect).not.toHaveBeenCalled()
-    advanceAudioTime(ctx, 0.02)
+    advanceAudioTime(ctx, 0.02 + quantumSeconds)
     await vi.advanceTimersByTimeAsync(5)
     await replacing
     expect(workletNodes[0].disconnect).toHaveBeenCalledTimes(1)
@@ -271,13 +274,13 @@ describe('HyperSoundEngineHost —— worklet 模式', () => {
     const second = host.setParams(secondParams)
     await vi.advanceTimersByTimeAsync(0)
     expect(workletNodes).toHaveLength(2)
-    advanceAudioTime(ctx, 0.02)
+    advanceAudioTime(ctx, 0.02 + 128 / 48000)
     await vi.advanceTimersByTimeAsync(5)
     await first
     await vi.advanceTimersByTimeAsync(0)
     expect(workletNodes).toHaveLength(3)
     expect(workletNodes[1].disconnect).not.toHaveBeenCalled()
-    advanceAudioTime(ctx, 0.02)
+    advanceAudioTime(ctx, 0.02 + 128 / 48000)
     await vi.advanceTimersByTimeAsync(5)
     await second
     expect(workletNodes[1].disconnect).toHaveBeenCalledTimes(1)
@@ -491,15 +494,16 @@ describe('HyperSoundEngineHost —— wasm worklet', () => {
     expect(masterGain.connect).toHaveBeenCalledWith(workletNodes[1])
     expect(workletNodes[1].connect).toHaveBeenCalledWith(gainNodes[1])
     expect(gainNodes[1].connect).toHaveBeenCalledWith(analyser)
-    expect(gainNodes[0].gain.setValueAtTime).toHaveBeenCalledWith(1, 10)
-    expect(gainNodes[0].gain.linearRampToValueAtTime).toHaveBeenCalledWith(0, 10.02)
-    expect(gainNodes[1].gain.setValueAtTime).toHaveBeenCalledWith(0, 10)
-    expect(gainNodes[1].gain.linearRampToValueAtTime).toHaveBeenCalledWith(1, 10.02)
+    const quantumSeconds = 128 / 48000
+    expect(gainNodes[0].gain.setValueAtTime).toHaveBeenCalledWith(1, 10 + quantumSeconds)
+    expect(gainNodes[0].gain.linearRampToValueAtTime).toHaveBeenCalledWith(0, 10.02 + quantumSeconds)
+    expect(gainNodes[1].gain.setValueAtTime).toHaveBeenCalledWith(0, 10 + quantumSeconds)
+    expect(gainNodes[1].gain.linearRampToValueAtTime).toHaveBeenCalledWith(1, 10.02 + quantumSeconds)
 
     expect(workletNodes[0].disconnect).not.toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(19)
     expect(workletNodes[0].disconnect).not.toHaveBeenCalled()
-    advanceAudioTime(ctx, 0.02)
+    advanceAudioTime(ctx, 0.02 + quantumSeconds)
     await vi.advanceTimersByTimeAsync(1)
     await replacing
     expect(masterGain.disconnect).toHaveBeenCalledWith(workletNodes[0])

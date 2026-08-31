@@ -2,9 +2,13 @@
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-08
+
+### Fixed
+- **AudioWorklet 参数替换无缝切换**：新节点 `ready` 后先以零增益接入并预滚一个 128-frame render quantum，再启动新旧路径互补淡变，避免冷启动节点尚未产出时旧路径已衰减；Chromium E2E 以音频线程 barrier 切分采集窗口，排除 MessagePort 中滞留的初始化块。
+
 ### Added
 - **统一接入指南与 service 客户端示例**：重写 `docs/INTEGRATION.md`，按 TS core、浏览器 TS Host、浏览器 Rust/WASM Host、Rust `hse-service` 与空间 C ABI 明确选择边界、生命周期、参数语义、PCM 帧格式、错误处理和验收清单；新增无副作用的 `examples/hse-service-client.mjs`，并同步 README、API、服务说明与 wire 规格中的当前实现口径。
-- **Phase 4 固定种子全链跨语言参数扫描门禁**：复用 40 个合法快照矩阵（44.1/48/96kHz，63/128/257/512 块，8 固定种子 + 最小/最大边界，全部含 17 帧短尾），由 TS 事实实现显式 `--write` 冻结参数、输入种子与输出；默认脚本仅验证且缺失即失败。TS 与 `hse-parity` 同调度重放并按 1e-6 相对容差比对有限率、非零率及峰值/RMS 数量级摘要，综合退出码覆盖新门禁；既有 72 组逐样本音频向量保持不变。
 
 ## [1.5.0] - 2026-08
 
@@ -16,6 +20,7 @@
 - **TS/wasm Worklet 参数更新移出渲染线程**：`HyperSoundEngineHost.setParams` 对两个 worklet backend 都在宿主控制路径预建带 `processorOptions.initialParams` 的完整新节点，等待 `ready` 后经双 GainNode 在默认 20ms 内线性交叉淡变；旧链仅在 `AudioContext.currentTime` 到达淡变终点后清理，context 暂停不会被墙钟定时器提前断开。运行期 worklet 不再接受参数重建消息，仅保留 `reset`；替换失败保留当前可听链，并发更新串行化，dispose 立即清理并结束等待。
 
 ### Added
+- **Phase 4 固定种子全链跨语言参数扫描门禁**：复用 40 个合法快照矩阵（44.1/48/96kHz，63/128/257/512 块，8 固定种子 + 最小/最大边界，全部含 17 帧短尾），由 TS 事实实现显式 `--write` 冻结参数、输入种子与输出；默认脚本仅验证且缺失即失败。TS 与 `hse-parity` 同调度重放并按 1e-6 相对容差比对有限率、非零率及峰值/RMS 数量级摘要，综合退出码覆盖新门禁；既有 72 组逐样本音频向量保持不变。
 - **Rust EngineChain stage 22 world/stage 参数对等**：`hse-core` 完整消费 world listener position/yaw/pitch/roll、sources/trajectories/playhead/occlusion 与相邻快照确定速度，并按 source id 使用确定性稳定 slot；stage 对齐四套 preset、seat、roomSize、reverbAmount、customSources 与 ambience。`hrtf-core` 新增完整欧拉几何及 Doppler、遮挡、声源大小方向模糊/右耳去相关，保持中性配置和 spatial off 旧路径不变；service 与 wasm 构造路径同步覆盖，新增短块、reset 和稳态零分配门禁。world-listener 共享夹具在保留原 12 case 的基础上追加 pitch/roll 两例，综合空间门禁为 28/28。
 - **正式 wasm AudioWorklet Chromium E2E 门禁**：新增基于 `playwright-core` 的 headless Chromium 测试，按 wasm32 release → wasm-bindgen web glue → core/Host bundle → 生产 worklet bundle 的顺序构建，并从 localhost 加载真实产物；以不连接扬声器或麦克风的 Web Audio 图验证 `ready`、spatial off 的 1–21 级非静音处理、构造失败静音和参数节点替换淡变。Firefox 尚未纳入自动门禁。
 - **Rust stage 22 接入正式 wasm Host 路径**：`hse-wasm::HseEngine` 新增 SOFA bytes 与预解析规则 grid 构造入口，在 AudioWorklet 构造控制阶段统一调用 `EngineChainStage::from_params_with_hrtf_grid`；默认 spatial off 保持兼容，非 off 无 HRTF 明确失败。`HyperSoundEngineHost` 新增互斥的 `hrtfUrl` / `hrtf` 选项，主线程 fetch 并缓存 SOFA bytes、编译 wasm module，参数替换沿现有 crossfade 预建节点并复用两项资源，render callback 不解析 HRTF。

@@ -5,7 +5,7 @@
 
 ## 一、当前版本与阶段
 
-当前收尾版本为 **1.5.0**，npm 与 Cargo workspace 版本同步。
+当前收尾版本为 **1.5.1**，npm 与 Cargo workspace 版本同步。
 
 | 阶段 | 状态 | 当前结论 |
 |---|---|---|
@@ -16,7 +16,7 @@
 | Phase 4 性能冲刺 | 自动实现完成，真机待验收 | 参数扫描、release 零分配、服务基准、事件等待、排队延迟统计、shared/exclusive 与真机工具已落地；真实设备端到端延迟/CPU 待验收 |
 | Phase 5 可选扩展 | 主体实现，出口仍有缺口 | 完整 1–22 级 wasm + 正式 Host 可选接入；Rust HRTF renderer、8 函数 ABI 与 stage 22 四模式已完成，空间门禁 **28/28 PASS** |
 
-1.5.0 的状态结论只覆盖仓库内实现和自动门禁。真实设备 shared/exclusive 延迟与 CPU、真实 SOFA 资产兼容性、Firefox AudioWorklet E2E 以及物理 multichannel 输出均没有自动通过证据，不得写成已验收。
+1.5.1 的状态结论只覆盖仓库内实现和自动门禁。真实设备 shared/exclusive 延迟与 CPU、真实 SOFA 资产兼容性、Firefox AudioWorklet E2E 以及物理 multichannel 输出均没有自动通过证据，不得写成已验收。
 
 ## 二、双支线现状
 
@@ -25,7 +25,7 @@
 - npm 包 `hypersoundengine`，22 级处理链；第 22 级为空间音频，默认 `spatial.mode='off'`。
 - `src/spatial/` 提供 HRTF、卷积、房间与 multichannel 输入到双耳输出的参考实现；Host 支持 `inputChannelCount` 2/6/8，但物理输出仍固定 2 声道。
 - engine-chain 音频向量只冻结第 1–21 级并强制 `spatial.mode='off'`。
-- 正式 `HyperSoundEngineHost` 可选 `engineBackend='wasm'`；控制路径预建新 wasm 节点、等待 ready 后交叉淡变替换。正式 bundle 已在 headless Chromium 中覆盖 ready、1–21 级处理、节点替换及合成 HRTF grid 的非 off stage 22；Firefox 与真实 SOFA 资产仍未纳入自动门禁。
+- 正式 `HyperSoundEngineHost` 可选 `engineBackend='wasm'`；控制路径预建新 wasm 节点、等待 ready 后以零增益接入并预滚一个 128-frame render quantum，再交叉淡变替换。正式 bundle 已在 headless Chromium 中覆盖 ready、1–21 级处理、节点替换及合成 HRTF grid 的非 off stage 22；Firefox 与真实 SOFA 资产仍未纳入自动门禁。
 
 ### Rust 支线
 
@@ -34,7 +34,7 @@
 - `hse-parity`：音频 **72/72 PASS** + world-listener **14/14 PASS** + renderer/ABI **14/14 PASS**，空间合计 **28/28 PASS**。
 - `hse-service` / `hse-wasapi`：WASAPI capture/loopback/render、shared/exclusive、事件等待、完整 1–22 级主链、控制面、推流、双环排队延迟统计与真机验收工具。
 - `hse-wasm`：完整 1–22 级 `HseEngine`、独立 `HseBiquad` 试点与空间 8 函数 C ABI；正式 Host 通过完整引擎构造入口使用 stage 22，薄 ABI 保持独立边界。
-- 七个 workspace 包 `hse-benches` / `hse-core` / `hrtf-core` / `hse-parity` / `hse-service` / `hse-wasapi` / `hse-wasm` 均为 1.5.0；`hse-napi` 仍为未入 workspace 的占位。
+- 七个 workspace 包 `hse-benches` / `hse-core` / `hrtf-core` / `hse-parity` / `hse-service` / `hse-wasapi` / `hse-wasm` 均为 1.5.1；`hse-napi` 仍为未入 workspace 的占位。
 
 ### Phase 4 自动门禁
 
@@ -66,7 +66,7 @@
 - **Windows 独立服务**：localhost JSON-RPC、二进制立体声推流、capture/loopback、独立 render、shared/exclusive 与 Rust stage 22 四模式可用；物理输出固定双耳立体声。
 - **浏览器 Rust/WASM**：完整 1–22 级主链已有正式 Host 可选接入，Chromium E2E 已覆盖；Firefox 尚未自动门禁。
 - **Rust 空间**：renderer 与 world/stage 参数投影已实现；真实 SOFA 自动门禁未完成。
-- **外部发布**：源码版本为 1.5.0；没有证据表明 npm/crates.io 已发布对应包，不能假定注册表可用。
+- **外部发布**：源码版本为 1.5.1；没有证据表明 npm/crates.io 已发布对应包，不能假定注册表可用。
 - **明确不支持**：MIDI 与 ASIO。
 
 ## 五、常用门禁

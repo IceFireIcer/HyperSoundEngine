@@ -641,7 +641,11 @@ export class HyperSoundEngineHost {
         throw error
       }
 
-      const startTime = handle.audioContext.currentTime ?? 0
+      const now = handle.audioContext.currentTime ?? 0
+      const renderQuantumSeconds = this.workletCrossfadeMs === 0
+        ? 0
+        : 128 / handle.audioContext.sampleRate
+      const startTime = now + renderQuantumSeconds
       const endTime = startTime + this.workletCrossfadeMs / 1000
       this.fadeGain(oldGain, 1, 0, startTime, endTime)
       this.fadeGain(nextGain, 0, 1, startTime, endTime)

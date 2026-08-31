@@ -9,9 +9,9 @@ HyperSoundEngine 是一个**不依赖任何特定宿主**的独立软件 DSP 音
 - 核心零 DOM / AudioContext / React 依赖，可跑在 Node、浏览器、Electron、AudioWorklet；
 - 浏览器宿主（`HyperSoundEngineHost`）与 WaveForge 适配层分离，其他软件可直接接入。
 
-> 当前生成代号 **HyperSoundEngine v1**，稳定包版本 **1.5.0**；版本与命名规则见 [docs/VERSIONING.md](docs/VERSIONING.md)。
+> 当前生成代号 **HyperSoundEngine v1**，稳定包版本 **1.5.1**；版本与命名规则见 [docs/VERSIONING.md](docs/VERSIONING.md)。
 >
-> **1.5.0 状态**：共享规格为 25 份（17 DSP + 4 engine + 1 I/O + 3 spatial），72 组音频冻结向量 / 144 文件，另有 4 个引擎结构夹具、40 case 参数扫描、1 个 standard WAV 夹具、14 个 world-listener case 与 14 个 renderer/ABI case；综合 Rust 门禁为音频 72/72 + 空间 28/28，参数扫描结构摘要为 40/40。Rust 第 22 级已对等 `instant`/`headLocked`/`world`/`stage`，含完整 listener 姿态、轨迹与确定速度、遮挡、声源大小、stage seat/room/ambience 和稳定 slot；正式 wasm AudioWorklet 的 headless Chromium E2E 已纳入 CI，并用预解析合成 HRTF grid 覆盖成功的非 `off` stage 22 渲染。真实 SOFA 资产兼容性、Firefox E2E 与物理 multichannel 输出仍未自动验证；真实设备 shared/exclusive 端到端延迟与 CPU 仍待用户验收。Windows 音频后端仅支持 WASAPI；项目不提供 MIDI 或 ASIO。
+> **1.5.1 状态**：共享规格为 25 份（17 DSP + 4 engine + 1 I/O + 3 spatial），72 组音频冻结向量 / 144 文件，另有 4 个引擎结构夹具、40 case 参数扫描、1 个 standard WAV 夹具、14 个 world-listener case 与 14 个 renderer/ABI case；综合 Rust 门禁为音频 72/72 + 空间 28/28，参数扫描结构摘要为 40/40。Rust 第 22 级已对等 `instant`/`headLocked`/`world`/`stage`，含完整 listener 姿态、轨迹与确定速度、遮挡、声源大小、stage seat/room/ambience 和稳定 slot；正式 wasm AudioWorklet 的 headless Chromium E2E 已纳入 CI，并用预解析合成 HRTF grid 覆盖成功的非 `off` stage 22 渲染。真实 SOFA 资产兼容性、Firefox E2E 与物理 multichannel 输出仍未自动验证；真实设备 shared/exclusive 端到端延迟与 CPU 仍待用户验收。Windows 音频后端仅支持 WASAPI；项目不提供 MIDI 或 ASIO。
 
 ## 快速开始
 
