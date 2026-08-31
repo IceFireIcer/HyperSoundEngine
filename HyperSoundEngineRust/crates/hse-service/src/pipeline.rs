@@ -368,6 +368,24 @@ mod tests {
     }
 
     #[test]
+    fn 渲染欠供不拆分交错帧块() {
+        let (mut prod, mut cons) = RingBuffer::<f32>::new(8);
+        for sample in [1.0, 2.0, 3.0] {
+            prod.push(sample).unwrap();
+        }
+        let mut out = [9.0_f32; 4];
+
+        assert!(!pop_complete_render_block(&mut cons, &mut out, 4));
+        assert_eq!(out, [0.0; 4]);
+        assert_eq!(cons.slots(), 3, "欠供时不得消费部分交错块");
+
+        prod.push(4.0).unwrap();
+        assert!(pop_complete_render_block(&mut cons, &mut out, 4));
+        assert_eq!(out, [1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(cons.slots(), 0);
+    }
+
+    #[test]
     fn 热换旧值在回收侧析构且环满时保留所有权() {
         use std::sync::atomic::AtomicUsize;
 
@@ -401,6 +419,17 @@ mod tests {
         drop(active.take());
         assert_eq!(drops.load(Ordering::SeqCst), 3);
     }
+}
+
+fn pop_complete_render_block(cons: &mut Consumer<f32>, outbuf: &mut [f32], want: usize) -> bool {
+    if cons.slots() < want {
+        outbuf[..want].fill(0.0);
+        return false;
+    }
+    for slot in &mut outbuf[..want] {
+        *slot = cons.pop().expect("完整渲染块容量检查后读取失败");
+    }
+    true
 }
 
 /// 渲染线程：开流 → 握手 → 就绪门开启后 出环 → render.push。欠供补零并计 xrunsOut。
@@ -443,18 +472,13 @@ fn render_loop(
             std::hint::spin_loop();
             continue;
         }
-        let avail = cons.slots().min(want);
-        for i in 0..avail {
-            outbuf[i] = cons.pop().unwrap_or(0.0);
-        }
+        let complete = pop_complete_render_block(&mut cons, &mut outbuf, want);
         stats.observe_output_ring_samples(cons.slots());
-        if avail < want {
-            for slot in outbuf[avail..want].iter_mut() {
-                *slot = 0.0;
-            }
-            let missed = ((want - avail) / 2) as u64;
-            stats.xruns_out.fetch_add(missed, Ordering::Relaxed);
-            maybe_emit_xrun(events, &mut last_emit, "out", missed);
+        if !complete {
+            stats
+                .xruns_out
+                .fetch_add(block_frames as u64, Ordering::Relaxed);
+            maybe_emit_xrun(events, &mut last_emit, "out", block_frames as u64);
         }
         // 后端内部 xrun 计数聚合（渲染侧）
         aggregate_backend_xruns(
