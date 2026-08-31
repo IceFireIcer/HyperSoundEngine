@@ -401,7 +401,7 @@ export interface SpatialSettings {
   world: WorldSettings
   /** 模式 D：舞台/影院（场景预设 + 座位/房间调节） */
   stage: StageSettings
-  /** 环境声 Ambisonics 上混（FOA 动态混合是处理器层能力；内联级保留字段，暂不影响渲染） */
+  /** 环境声 Ambisonics 上混（enabled/amount 由内联空间级直接渲染） */
   ambience: AmbienceSettings
   /** 卷积模式：partitioned=FFT 分区（默认）/ time=时域直接卷积 */
   convolution: ConvolutionMode

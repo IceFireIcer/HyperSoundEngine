@@ -1,0 +1,75 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Phase 4 full-chain parameter scan fixture",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "generator", "tolerance", "cases"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "generator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "caseCount"],
+      "properties": {
+        "algorithm": { "const": "phase4-lcg-1664525-1013904223" },
+        "caseCount": { "const": 40 }
+      }
+    },
+    "tolerance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value", "floor"],
+      "properties": {
+        "kind": { "const": "relative" },
+        "value": { "const": 0.000001 },
+        "floor": { "const": 1e-9 }
+      }
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 40,
+      "maxItems": 40,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind", "sampleRate", "blockSize", "frames", "inputSeed", "params", "expected"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+          "kind": { "enum": ["seed", "minimum", "maximum"] },
+          "sampleRate": { "enum": [44100, 48000, 96000] },
+          "blockSize": { "enum": [63, 128, 257, 512] },
+          "frames": { "type": "integer", "minimum": 1 },
+          "inputSeed": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+          "params": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["overrides"],
+            "properties": { "overrides": { "type": "object" } }
+          },
+          "expected": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["left", "right"],
+            "properties": {
+              "left": { "$ref": "#/definitions/summary" },
+              "right": { "$ref": "#/definitions/summary" }
+            }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["finiteRatio", "nonZeroRatio", "peakOrder", "rmsOrder"],
+      "properties": {
+        "finiteRatio": { "type": "number", "minimum": 0, "maximum": 1 },
+        "nonZeroRatio": { "type": "number", "minimum": 0, "maximum": 1 },
+        "peakOrder": { "type": "integer" },
+        "rmsOrder": { "type": "integer" }
+      }
+    }
+  }
+}

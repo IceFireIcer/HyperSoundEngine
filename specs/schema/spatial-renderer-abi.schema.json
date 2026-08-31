@@ -1,0 +1,132 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/IceFireIcer/HyperSoundEngine/specs/schema/spatial-renderer-abi.schema.json",
+  "title": "HyperSoundEngine spatial renderer ABI fixture",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "fixture", "scope", "abi", "tolerance", "grid", "distance", "nearestCases", "rendererCases"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "fixture": { "const": "renderer-abi" },
+    "scope": {
+      "type": "object", "additionalProperties": false,
+      "required": ["interpolation", "convolution", "sourceCount", "room", "excludedNumericParity"],
+      "properties": {
+        "interpolation": { "const": "nearest" },
+        "convolution": { "const": "time-domain" },
+        "sourceCount": { "const": 1 },
+        "room": { "const": "off-only" },
+        "excludedNumericParity": { "const": ["spherical", "room-nonzero"] }
+      }
+    },
+    "abi": {
+      "type": "object", "additionalProperties": false,
+      "required": ["inputLayout", "inputStrideUnit", "objectSlotsUnit", "objectParams", "outputLayout", "lengthUnit", "successCode"],
+      "properties": {
+        "inputLayout": { "const": "object-major-planar-mono" },
+        "inputStrideUnit": { "const": "f32-elements" },
+        "objectSlotsUnit": { "const": "u32-elements" },
+        "objectParams": { "const": ["azimuthDeg", "elevationDeg", "distance", "gain"] },
+        "outputLayout": { "const": "planar-stereo" },
+        "lengthUnit": { "const": "f32-elements" },
+        "successCode": { "const": 0 }
+      }
+    },
+    "tolerance": { "$ref": "#/definitions/tolerance" },
+    "grid": {
+      "type": "object", "additionalProperties": false,
+      "required": ["sampleRate", "azimuths", "elevations", "hrirLength", "directions"],
+      "properties": {
+        "sampleRate": { "type": "integer", "minimum": 1 },
+        "azimuths": { "$ref": "#/definitions/nonEmptyNumbers" },
+        "elevations": { "$ref": "#/definitions/nonEmptyNumbers" },
+        "hrirLength": { "type": "integer", "minimum": 1 },
+        "directions": {
+          "type": "array", "minItems": 1,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["azimuthDeg", "elevationDeg", "left", "right"],
+            "properties": {
+              "azimuthDeg": { "type": "number" }, "elevationDeg": { "type": "number" },
+              "left": { "$ref": "#/definitions/nonEmptyNumbers" }, "right": { "$ref": "#/definitions/nonEmptyNumbers" }
+            }
+          }
+        }
+      }
+    },
+    "distance": {
+      "type": "object", "additionalProperties": false, "required": ["params", "cases"],
+      "properties": {
+        "params": { "$ref": "#/definitions/distanceParams" },
+        "cases": {
+          "type": "array", "minItems": 4, "maxItems": 4,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["id", "model", "distance", "expectedGain", "expectedAirCoefficient"],
+            "properties": {
+              "id": { "$ref": "#/definitions/id" }, "model": { "$ref": "#/definitions/model" },
+              "distance": { "type": "number", "minimum": 0 }, "expectedGain": { "type": "number", "minimum": 0, "maximum": 1 },
+              "expectedAirCoefficient": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
+            }
+          }
+        }
+      }
+    },
+    "nearestCases": {
+      "type": "array", "minItems": 5, "maxItems": 5,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "azimuthDeg", "elevationDeg", "expected"],
+        "properties": {
+          "id": { "$ref": "#/definitions/id" }, "azimuthDeg": { "type": "number" }, "elevationDeg": { "type": "number" },
+          "expected": {
+            "type": "object", "additionalProperties": false,
+            "required": ["azimuthIndex", "elevationIndex", "left", "right"],
+            "properties": {
+              "azimuthIndex": { "type": "integer", "minimum": 0 }, "elevationIndex": { "type": "integer", "minimum": 0 },
+              "left": { "$ref": "#/definitions/nonEmptyNumbers" }, "right": { "$ref": "#/definitions/nonEmptyNumbers" }
+            }
+          }
+        }
+      }
+    },
+    "rendererCases": {
+      "type": "array", "minItems": 5, "maxItems": 5,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "input", "inputStride", "objectSlots", "blockSizes", "azimuthDeg", "elevationDeg", "distance", "gain", "distanceModel", "roomMode", "resetReplay", "expected"],
+        "properties": {
+          "id": { "$ref": "#/definitions/id" }, "input": { "$ref": "#/definitions/nonEmptyNumbers" },
+          "inputStride": { "type": "integer", "minimum": 1 },
+          "objectSlots": { "const": [0] },
+          "blockSizes": { "type": "array", "minItems": 1, "items": { "type": "integer", "minimum": 1 } },
+          "azimuthDeg": { "type": "number" }, "elevationDeg": { "type": "number" }, "distance": { "type": "number", "minimum": 0 },
+          "gain": { "type": "number" }, "distanceModel": { "$ref": "#/definitions/model" },
+          "roomMode": { "enum": ["off", "configured-zero"] }, "resetReplay": { "type": "boolean" },
+          "expected": {
+            "type": "object", "additionalProperties": false, "required": ["left", "right"],
+            "properties": { "left": { "$ref": "#/definitions/nonEmptyNumbers" }, "right": { "$ref": "#/definitions/nonEmptyNumbers" } }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+    "model": { "enum": ["inverse", "linear", "exponential"] },
+    "nonEmptyNumbers": { "type": "array", "minItems": 1, "items": { "type": "number" } },
+    "distanceParams": {
+      "type": "object", "additionalProperties": false,
+      "required": ["referenceDistance", "maximumDistance", "rolloffFactor"],
+      "properties": {
+        "referenceDistance": { "type": "number", "exclusiveMinimum": 0 },
+        "maximumDistance": { "type": "number", "exclusiveMinimum": 0 },
+        "rolloffFactor": { "type": "number", "minimum": 0 }
+      }
+    },
+    "tolerance": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "value", "floor"],
+      "properties": { "kind": { "const": "relative" }, "value": { "const": 0.00001 }, "floor": { "const": 1e-7 } }
+    }
+  }
+}

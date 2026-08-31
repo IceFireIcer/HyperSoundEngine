@@ -9,4 +9,5 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+hrtf-core = { path = "../hrtf-core" }
 serde_json = { workspace = true }

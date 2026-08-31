@@ -134,12 +134,12 @@ export class Limiter {
   }
 
   /** 就地处理立体声（l/r 原地改写）。输出相对输入延迟 lookahead 样本。 */
-  processStereo(l: Float32Array, r: Float32Array): void {
+  processStereo(l: Float32Array, r: Float32Array, frameCount?: number): void {
     if (!this.enabled) {
       this.reductionDb = 0
       return
     }
-    const n = l.length
+    const n = Math.max(0, Math.min(Math.floor(frameCount ?? l.length), l.length, r.length))
     const thr = this.thresholdLin
     const dsize = this.delayL.length
     const lookahead = this.lookahead

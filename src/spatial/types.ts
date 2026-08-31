@@ -185,10 +185,12 @@ export interface Vec3 {
   z: number
 }
 
-/** world listener 几何契约仅消费位置与水平偏航。 */
+/** world listener 几何契约消费位置与完整欧拉朝向；pitch/roll 可选以兼容旧共享夹具。 */
 export interface WorldListenerPose {
   position: Vec3
   yaw: number
+  pitch?: number
+  roll?: number
 }
 
 /** 听者状态（世界坐标 + 欧拉朝向；波 1 各模式均固定原点朝前） */
@@ -252,6 +254,8 @@ export interface SpatialRenderConfig {
   speakers: VirtualSpeaker[]
   room: RoomPreset
   roomAmount: number
+  /** 舞台房间几何缩放；stage.roomSize 经控制路径透传，缺省 1。 */
+  roomSizeScale?: number
   /** 干湿混合（空间化强度） */
   amount: number
   distanceModel: DistanceModel
@@ -263,7 +267,7 @@ export interface SpatialRenderConfig {
   convolution: ConvolutionMode
   masterGain: number
   /** 多普勒（§4.6，模式 C 专属）：听者速度（世界坐标 m/s）。缺省 = 无多普勒。
-   *  fusion world 分支填默认 {0,0,0}，UI 层移动听者时随 config 更新（本波引擎侧只留接口）。 */
+   *  引擎 world 分支由相邻 listener/playhead 参数快照推导；首次或非递增时间差固定为零。 */
   dopplerVelocity?: { x: number; y: number; z: number }
   /** 遮挡/衍射简化（§4.7，模式 C）：0..1 全局遮挡量——每 speaker 增益
    *  gain·(1−0.8·occlusion) + 空气式低通 fc = 12000·(1−occlusion) Hz（系数公式与

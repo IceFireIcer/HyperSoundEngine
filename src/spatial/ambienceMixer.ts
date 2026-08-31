@@ -19,6 +19,7 @@
  */
 
 import { AMBIENCE_SPEAKERS, decodeFoaToSpeakers, stereoToFoa } from './ambisonics'
+import type { AmbisonicBuffer } from './ambisonics'
 
 /** 环境扬声器数量（= AMBIENCE_SPEAKERS 4 方向 45/135/225/315） */
 export const AMBIENCE_CHANNELS = AMBIENCE_SPEAKERS.length
@@ -51,35 +52,91 @@ export function ambienceDelaySamples(sampleRate: number, k: number): number {
  *
  * @param l 左声道块（长度须 ≥ block）
  * @param r 右声道块
- * @param block 名义块长契约（stereoToFoa 整块整体 RMS，块长/划分任意输出一致）
- * @param out 可选预分配输出数组（长度 ≥ AMBIENCE_CHANNELS，复用避免每块分配）；
- *   未传时仍分配新数组（向后兼容——调用方未适配预分配路径仍可用）。
- *   注意：当前调用方 SpatialProcessor.renderAmbience（src/spatial/SpatialProcessor.ts）
- *   尚未传入预分配数组（该文件在禁改名单内，收口阶段由后续 PR 适配——持有一个
- *   `private readonly ambienceTargetsBuf: number[] = new Array(AMBIENCE_CHANNELS)`
- *   并传入）。本函数签名已就绪，调用方零改动亦兼容。
- * @returns 4 路增益（AMBIENCE_SPEAKERS 顺序 45/135/225/315）；传入 out 时返回同一引用
+ * @param frameCount 本次有效帧数；可小于输入缓冲容量
+ * @param foa 调用方预分配的 4 元素 FOA scratch
+ * @param out 调用方预分配输出数组（长度 ≥ AMBIENCE_CHANNELS）
+ * @returns out 原引用
  */
 export function foaAmbienceGains(
   l: Float32Array,
   r: Float32Array,
-  block: number,
-  out?: number[],
-): number[] {
-  const foa = stereoToFoa(l, r, block)
-  const gains = decodeFoaToSpeakers(foa, AMBIENCE_AZIMUTHS as number[])
-  // 复用调用方预分配缓冲（O1 审计 3.3）：避免每块分配新数组（4 元素）；
-  // 缺省回退新数组（向后兼容）；decodeFoaToSpeakers 内部已 map 分配一次，
-  // 此处拷回复用缓冲——下一轮可进一步让 decode 接受 out 参数（留收口）。
-  if (out !== undefined && out.length >= gains.length) {
-    for (let k = 0; k < gains.length; k++) {
-      // clamp 到 [-1,1]（防御性——正常音乐输入下 |g_k| ≤ 1）
-      out[k] = Math.max(-1, Math.min(1, gains[k]))
+  frameCount: number,
+  foa: AmbisonicBuffer,
+  out: AmbisonicBuffer,
+): AmbisonicBuffer {
+  if (out.length < AMBIENCE_CHANNELS) throw new Error('foaAmbienceGains: output buffer is too small')
+  stereoToFoa(l, r, frameCount, foa)
+  decodeFoaToSpeakers(foa, AMBIENCE_AZIMUTHS, out)
+  for (let k = 0; k < AMBIENCE_CHANNELS; k++) {
+    out[k] = Math.max(-1, Math.min(1, out[k]))
+  }
+  return out
+}
+
+/** 内联空间级使用的有状态环境渲染器；所有缓冲在构造/prepare 控制路径分配。 */
+export class AmbienceRenderer {
+  private readonly foa = new Float64Array(4)
+  private readonly targets = new Float64Array(AMBIENCE_CHANNELS)
+  private readonly current = new Float64Array(AMBIENCE_CHANNELS)
+  private readonly delays: Int32Array
+  private readonly lines: Float32Array[] = []
+  private readonly positions = new Int32Array(AMBIENCE_CHANNELS)
+  private readonly panL = new Float64Array(AMBIENCE_CHANNELS)
+  private readonly panR = new Float64Array(AMBIENCE_CHANNELS)
+  private readonly smoothCoef: number
+
+  constructor(sampleRate: number) {
+    this.delays = new Int32Array(AMBIENCE_CHANNELS)
+    this.smoothCoef = Math.exp(-1 / (Math.max(1, sampleRate) * 0.02))
+    for (let k = 0; k < AMBIENCE_CHANNELS; k++) {
+      const delay = Math.max(1, ambienceDelaySamples(sampleRate, k))
+      this.delays[k] = delay
+      this.lines.push(new Float32Array(delay))
+      const pan = (Math.sin((AMBIENCE_AZIMUTHS[k] * Math.PI) / 180) + 1) * 0.5
+      this.panL[k] = Math.sqrt(1 - pan)
+      this.panR[k] = Math.sqrt(pan)
     }
-    return out
   }
-  for (let k = 0; k < gains.length; k++) {
-    gains[k] = Math.max(-1, Math.min(1, gains[k]))
+
+  prepare(_maxBlockSize: number): void {
+    // 延迟线容量只由采样率和固定最大延迟决定，构造时已完成分配。
   }
-  return gains
+
+  processAdd(
+    inL: Float32Array,
+    inR: Float32Array,
+    outL: Float32Array,
+    outR: Float32Array,
+    frameCount: number,
+    amount: number,
+  ): void {
+    const mix = Math.min(1, Math.max(0, amount)) * 0.5
+    if (mix <= 0 || frameCount <= 0) return
+    foaAmbienceGains(inL, inR, frameCount, this.foa, this.targets)
+    for (let i = 0; i < frameCount; i++) {
+      let addL = 0
+      let addR = 0
+      for (let k = 0; k < AMBIENCE_CHANNELS; k++) {
+        const line = this.lines[k]
+        const pos = this.positions[k]
+        const delayed = line[pos]
+        line[pos] = k < 2 ? inR[i] : inL[i]
+        this.positions[k] = pos + 1 >= this.delays[k] ? 0 : pos + 1
+        const gain = this.targets[k] + this.smoothCoef * (this.current[k] - this.targets[k])
+        this.current[k] = gain
+        addL += delayed * gain * this.panL[k]
+        addR += delayed * gain * this.panR[k]
+      }
+      outL[i] += addL * mix
+      outR[i] += addR * mix
+    }
+  }
+
+  reset(): void {
+    this.foa.fill(0)
+    this.targets.fill(0)
+    this.current.fill(0)
+    this.positions.fill(0)
+    for (let k = 0; k < this.lines.length; k++) this.lines[k].fill(0)
+  }
 }

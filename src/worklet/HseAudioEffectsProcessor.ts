@@ -10,8 +10,8 @@
  *
  * 线程模型：
  *   - 构造：以全局 sampleRate 创建 HyperSoundEngine（2 声道）；
- *   - port.onmessage：接收主线程 {type:'params', params: HyperSoundEngineParams} 与
- *     {type:'reset'} 消息，参数快照语义（setParams 整体替换）；
+ *   - 构造：从 processorOptions.initialParams 应用完整参数快照，完成后回传 ready；
+ *   - port.onmessage：仅接收 {type:'reset'} 轻量命令，运行期不解析参数或重建处理链；
  *   - 每 STATS_INTERVAL_CALLBACKS 次 process 回调（约 30×128 帧 ≈ 80ms @48kHz）
  *     向主线程回传一次 {type:'stats', stats: EngineStats}。
  */
@@ -47,26 +47,49 @@ const STATS_INTERVAL_CALLBACKS = 30
 
 export class HseAudioEffectsProcessor extends AudioWorkletProcessor {
   private readonly engine: HyperSoundEngine
+  private readonly inputChannelCount: number
+  private readonly inputRefs: Float32Array[]
+  private readonly outputRefs: Float32Array[]
   private callbackCount = 0
-  private scratch: Float32Array = new Float32Array(0)
-  private silence: Float32Array = new Float32Array(0)
+  private scratch: Float32Array
+  private silence: Float32Array
 
-  constructor() {
-    super()
-    // 全局 sampleRate 在 AudioWorklet 全局作用域恒存在（48kHz/44.1kHz 等）
-    this.engine = new HyperSoundEngine(sampleRate, 2)
-    // 预分配：AudioWorklet 渲染量子通常为 128，避免首帧在音频线程分配
-    this.engine.prepare(128)
+  constructor(options?: AudioWorkletProcessorOptions) {
+    super(options)
+    const processorOptions = options?.processorOptions as {
+      inputChannelCount?: number
+      initialParams?: HyperSoundEngineParams
+      requestId?: string
+    } | undefined
+    const requested = processorOptions?.inputChannelCount
+    this.inputChannelCount = requested === 6 || requested === 8 ? requested : 2
+    // 输入/输出引用数组在构造期固定，process 回调只替换元素，不创建数组。
+    this.inputRefs = new Array<Float32Array>(this.inputChannelCount)
+    this.outputRefs = new Array<Float32Array>(2)
     this.silence = new Float32Array(128)
     this.scratch = new Float32Array(128)
+    // 全局 sampleRate 在 AudioWorklet 全局作用域恒存在（48kHz/44.1kHz 等）
+    this.engine = new HyperSoundEngine(sampleRate, this.inputChannelCount)
+    this.engine.prepare(128)
+    try {
+      if (processorOptions?.initialParams) this.engine.setParams(processorOptions.initialParams)
+    } catch (error) {
+      this.port.postMessage({
+        type: 'error',
+        phase: 'construct',
+        requestId: processorOptions?.requestId,
+        message: error instanceof Error ? error.message : String(error),
+      })
+      return
+    }
     this.port.onmessage = (event: MessageEvent) => {
-      const msg = event.data as { type?: string; params?: HyperSoundEngineParams }
-      if (msg === null || typeof msg !== 'object') return
-      if (msg.type === 'params' && msg.params) {
-        this.engine.setParams(msg.params)
-      } else if (msg.type === 'reset') {
+      const msg = event.data as { type?: string }
+      if (msg !== null && typeof msg === 'object' && msg.type === 'reset') {
         this.engine.reset()
       }
+    }
+    if (processorOptions?.requestId) {
+      this.port.postMessage({ type: 'ready', requestId: processorOptions.requestId })
     }
   }
 
@@ -74,19 +97,30 @@ export class HseAudioEffectsProcessor extends AudioWorkletProcessor {
     const outChannels = outputs.length > 0 ? outputs[0] : []
     if (outChannels.length === 0) return true // 无输出通道，保持处理器存活
     const frameCount = outChannels[0].length
-    // 缓冲按渲染量子预分配/按需扩容（仅尺寸变化时分配一次）
-    if (this.silence.length < frameCount) this.silence = new Float32Array(frameCount)
-    if (this.scratch.length < frameCount) this.scratch = new Float32Array(frameCount)
+    // Web Audio 渲染量子当前固定为 128；超出预分配容量时静音而不在实时线程扩容。
+    if (frameCount > this.silence.length) {
+      for (let channel = 0; channel < outChannels.length; channel++) outChannels[channel].fill(0)
+      return true
+    }
 
     const inChannels = inputs.length > 0 ? inputs[0] : []
-    const l = inChannels[0] ?? this.silence // 无输入时静音
-    const r = inChannels[1] ?? l // 单声道输入复制到双声道
-
-    if (outChannels.length >= 2) {
-      this.engine.process([l, r], [outChannels[0], outChannels[1]])
+    this.outputRefs[0] = outChannels[0]
+    this.outputRefs[1] = outChannels.length >= 2 ? outChannels[1] : this.scratch
+    if (this.inputChannelCount > 2) {
+      for (let channel = 0; channel < this.inputChannelCount; channel++) {
+        this.inputRefs[channel] = inChannels[channel] ?? this.silence
+      }
+      // 多声道专用拓扑由引擎保证：先双耳化全部输入，再执行共享 1–21 级主链。
+      this.engine.processMulti(this.inputRefs, this.outputRefs)
     } else {
-      // 单声道输出：引擎按立体声处理，再把两声道各取半混合回单声道
-      this.engine.process([l, r], [outChannels[0], this.scratch])
+      const left = inChannels[0] ?? this.silence
+      this.inputRefs[0] = left
+      this.inputRefs[1] = inChannels[1] ?? left
+      this.engine.process(this.inputRefs, this.outputRefs)
+    }
+
+    if (outChannels.length < 2) {
+      // 防御性单声道宿主：节点正常协商时 outputChannelCount 固定为 2。
       for (let i = 0; i < frameCount; i++) {
         outChannels[0][i] = (outChannels[0][i] + this.scratch[i]) * 0.5
       }

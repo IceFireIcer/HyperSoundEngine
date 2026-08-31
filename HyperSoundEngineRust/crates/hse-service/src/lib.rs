@@ -31,6 +31,7 @@ pub mod engine;
 pub mod fake_backend;
 pub mod params;
 pub mod pipeline;
+pub mod real_audio_check;
 pub mod rpc;
 pub mod server;
 pub mod sessions;

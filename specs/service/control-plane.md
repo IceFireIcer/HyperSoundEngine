@@ -6,6 +6,10 @@
 > 术语基线见仓库根 [`CONTEXT.md`](../../CONTEXT.md)；书写规范见 [`specs/README.md`](../README.md)。
 > 关联决策：[ADR-0001 独立进程形态](../../docs/adr/0001-engine-as-independent-process.md)、
 > [ADR-0002 双音频入口](../../docs/adr/0002-dual-audio-ingress.md)。
+>
+> **1.5.0 实现范围**：控制面已加性支持 `shareMode:"shared"|"exclusive"` 与双环排队帧统计；
+> `hse-real-audio-check` 提供显式门控的真机验收入口。自动门禁不等于真实设备验收，shared/exclusive
+> 端到端延迟、xrun 与整进程 CPU 仍须用户分别实测；固定时长测试已删除且不得恢复。
 
 ---
 
@@ -16,7 +20,7 @@
   仅以状态机相位与统计计数器的形式在结果中显影。
 - **控制面与数据面分离**（规划书 §2.2）：控制面连接可以随时断开重连，不影响已建立的音频流；
   数据面异常通过事件通知与统计计数器上报，不要求控制面在线。
-- **当前实现范围**：服务数据面运行 `hse-core::EngineChainStage` 第 1–21 级完整主链，空间第 22 级固定为 off；`setParams` 保留兼容 wire 键并投影为完整 canonical 参数，未暴露级使用核心默认值。音频入口为回环拦截、捕获端点直捕与推流。
+- **当前实现范围**：服务数据面运行 `hse-core::EngineChainStage` 1–22 级完整链；第 22 级四模式通过 idle-only `loadHrtf` 从本地 SOFA 预载 grid 后可启用，无 grid 时仅允许 off。`setParams` 保留兼容 wire 键并投影为完整 canonical 参数，world 相邻快照确定速度在控制线程推导。音频入口为回环拦截、捕获端点直捕与推流。
   推流入口的同端口复用分流规则见 [`push-stream.md`](push-stream.md)。
 
 ## 二、传输与寻址
@@ -125,7 +129,7 @@
 
 ## 五、方法规格
 
-> 基础方法六个，推流方法两个。规划书草案阶段的独立 getStats 方法已并入
+> 基础方法六个、HRTF 加载方法一个、推流方法两个。规划书草案阶段的独立 getStats 方法已并入
 > `getState.stats` 字段，以本契约为准。
 
 ### 5.1 listDevices —— 枚举音频端点
@@ -173,7 +177,7 @@ DeviceInfo 字段表：
 成功结果示例：
 
 ```json
-{"jsonrpc":"2.0","id":2,"result":{"phase":"idle","config":null,"stats":{"xrunsIn":0,"xrunsOut":0,"framesProcessed":0,"uptimeMs":15230},"lastParams":null}}
+{"jsonrpc":"2.0","id":2,"result":{"phase":"idle","config":null,"stats":{"xrunsIn":0,"xrunsOut":0,"framesProcessed":0,"uptimeMs":15230,"inputRingDepthFrames":0,"inputRingHighWaterFrames":0,"outputRingDepthFrames":0,"outputRingHighWaterFrames":0,"blockSequence":0,"latencyFrames":{"current":0,"p50":0,"p95":0,"max":0,"samples":0}},"sessions":[],"lastParams":null,"hrtf":{"loaded":false}}}
 ```
 
 | 字段 | 类型 | 说明 |
@@ -181,22 +185,46 @@ DeviceInfo 字段表：
 | `phase` | string | 四态之一 |
 | `config` | object\|null | 最近一次**成功** configure 的 applied 快照原样回显；从未成功配置过则为 null |
 | `lastParams` | object\|null | 最近一次 setParams 的 params 快照原样回显；从未设置过则为 null |
+| `hrtf` | object | HRTF grid 加载状态；未加载为 `{loaded:false}`，已加载时加性包含规范绝对 `path`、`sampleRate`、`azimuthCount`、`elevationCount`、`hrirLength` |
+| `sessions` | array | 活跃推流会话诊断，按 sessionId 升序；每项含 u32 `sessionId` 与 u64 `queuedFrames`/`ingestedFrames`/`consumedFrames`，仅用于消费验收与诊断 |
 | `stats.xrunsIn` | u64 | 输入侧异常累计（捕获过载、推流入环丢块），与 `event.xrun.totalIn` 同源同值 |
 | `stats.xrunsOut` | u64 | 输出侧欠载累计，与 `event.xrun.totalOut` 同源同值 |
 | `stats.framesProcessed` | u64 | DSP 线程累计处理帧数（立体声帧，每声道计一帧），跨 start/stop 周期累计不清零 |
-| `stats.uptimeMs` | u64 | 进程启动至今毫秒数（时钟读取仅发生在控制面线程，不违反核心确定性铁律） |
+| `stats.uptimeMs` | u64 | 当前运行周期自成功 start 至今的毫秒数；非 running 时为 0（时钟读取仅发生在控制面线程，不违反核心确定性铁律） |
+| `stats.inputRingDepthFrames` | u64 | 最近观测到的 capture→DSP 输入环当前占用帧数；仅计环内帧，不含 DSP 已取出的当前块 |
+| `stats.inputRingHighWaterFrames` | u64 | 当前成功 start 周期内输入环占用高水位（帧） |
+| `stats.outputRingDepthFrames` | u64 | 最近观测到的 DSP→render 输出环当前占用帧数 |
+| `stats.outputRingHighWaterFrames` | u64 | 当前成功 start 周期内输出环占用高水位（帧） |
+| `stats.blockSequence` | u64 | 当前成功 start 周期内已完成并写入输出环的 DSP 块序号；每块恰加 1 |
+| `stats.latencyFrames.current` | u64 | 最近完成块的确定性服务排队帧估算：该块进入处理时输入环待处理帧 + 当前块帧 + 该块写入后输出环待渲染帧 |
+| `stats.latencyFrames.p50` / `p95` | u64 | 当前周期全部已完成块的帧延迟分布估算；使用预分配的 2 的幂直方图桶，返回命中桶下界，满足 p50 ≤ p95 ≤ max |
+| `stats.latencyFrames.max` | u64 | 当前周期块延迟估算最大值，单调不减 |
+| `stats.latencyFrames.samples` | u64 | 纳入分布的块数，恒等于 `blockSequence` |
 
 全部状态驻内存：进程重启即回到 config=null、lastParams=null、计数器归零，无持久化。
+上述 `latencyFrames` 是不读取数据面时钟的**服务排队帧估算**，用于静音/fake 自动门禁和运行期拥塞诊断；它不包含设备驱动、安全缓冲、DAC/ADC 或声学传播，不能替代真实 WASAPI 端到端延迟测量。数据面更新环深度、高水位、块序号和直方图时只允许原子操作与启动期预分配存储，DSP 稳态路径不得加锁、分配或读取时钟。
 
-#### GWT-CP-03：状态查询字段完备
+周期语义：每次 `start` 仅在后端握手、格式校验与初始链装配全部成功后清零环深度/高水位、`blockSequence` 与 `latencyFrames`；启动失败保留上一成功周期摘要。`stop` 完成后两项 current depth 归零，刚结束周期的高水位、块序号和延迟分布保留到下次成功 start。`xrunsIn`、`xrunsOut` 与 `framesProcessed` 继续跨 start/stop 周期累计。
+
+#### GWT-CP-03：状态查询字段完备且旧字段兼容
 - **给定**：服务处于任意相位
 - **当**：发送 `getState`
-- **则**：结果含 `phase`/`config`/`stats`/`lastParams` 四个顶层键；`stats` 含四个计数键；`phase` 值属于四态枚举；`config` 与 `lastParams` 要么为 null 要么为对象
+- **则**：结果含 `phase`/`config`/`stats`/`lastParams` 四个既有顶层键与加性 `hrtf`/`sessions` 键；`stats` 保留 `xrunsIn`/`xrunsOut`/`framesProcessed`/`uptimeMs` 四个既有 u64 键，并加性包含四个环深度/高水位键、`blockSequence` 与 `latencyFrames`；`phase` 值属于四态枚举；`config` 与 `lastParams` 要么为 null 要么为对象；`hrtf.loaded` 为 bool；`sessions` 为按 sessionId 升序的数组
 
-#### GWT-CP-04：计数器单调不减
-- **给定**：服务已启动并至少经历一次 start/stop 循环
-- **当**：间隔任意时长先后两次调用 `getState`
-- **则**：第二次的四个 stats 计数值均 ≥ 第一次对应值
+#### GWT-CP-04：计数与周期高水位单调不减
+- **给定**：服务正在同一个成功 start 周期内处理音频
+- **当**：以 `blockSequence` 已推进为屏障先后两次调用 `getState`
+- **则**：第二次的 `xrunsIn`/`xrunsOut`/`framesProcessed`、两项环高水位、`blockSequence`、`latencyFrames.max` 与 `latencyFrames.samples` 均 ≥ 第一次对应值；current depth 与 current latency 可随生产/消费变化
+
+#### GWT-CP-04A：帧延迟统计有序且无时钟依赖
+- **给定**：当前周期至少完成一个 DSP 块
+- **当**：发送 `getState`
+- **则**：`latencyFrames.samples == blockSequence`，且 `p50 <= p95 <= max`、`current <= max`；所有值以帧表示，并只由块大小和双环占用确定，不读取数据面墙钟
+
+#### GWT-CP-04B：成功重启复位周期统计
+- **给定**：服务已完成一个含统计样本的 start/stop 周期
+- **当**：stop 完成后查询，再成功 start 并在数据面放行前查询
+- **则**：stop 后 input/output current depth 均为 0，而高水位、块序号和延迟分布仍保留；下一次成功 start 将这些周期字段全部重置为 0；进程级 xrun 与 `framesProcessed` 累计不清零；若 start 失败则旧周期摘要不变
 
 ### 5.3 configure —— 设置入口配置（仅 idle）
 
@@ -224,13 +252,15 @@ capture 直捕请求示例：
 | `renderDeviceId` | string\|null | loopback 必填；非法引用 → -32000 | loopback 模式的被捕获渲染端点；null 表示默认渲染端点。旧四字段请求保持此语义 |
 | `captureDeviceId` | string\|null | capture 必填；非法引用 → -32000 | capture 模式的直捕端点；null 表示默认捕获端点 |
 | `outputDeviceId` | string\|null | 可选；非法引用 → -32000 | 最终渲染端点；省略或 null 表示默认渲染端点。省略时旧请求的 applied/config 保持四字段形态 |
+| `shareMode` | string | 可选；非 `"shared"` / `"exclusive"` → -32602 | WASAPI 访问模式，省略时为 shared；只有显式携带时才进入 applied/config 回显 |
 | `sampleRate` | u32 | 非 8000..384000 整数 → -32602 | 期望采样率；捕获与渲染协商结果都必须等于该值，否则 start 报 -32000 |
 | `blockSizeFrames` | u32 | 非 16..8192 整数 → -32602 | 期望每块帧数（事件驱动轮询周期）；后端能力上限校验失败在 start 时报 -32000 |
 
 - **仅 phase=idle 可调用**，否则报 -32001 且状态（含既有 config）不变；
 - 字段组合：loopback 必须携带 `renderDeviceId` 且不得携带 `captureDeviceId`；capture 必须携带 `captureDeviceId` 且不得携带 `renderDeviceId`；违反组合约束报 -32602；
-- 校验分两级：结构与静态域检查在 configure 内完成；所有显式设备 id 在提交前按类别校验，未知或类别错误报 -32000；格式协商与捕获/渲染采样率一致性在 start 检查；
-- 兼容性：既有 `{mode:"loopback",renderDeviceId,sampleRate,blockSizeFrames}` 请求继续有效，且未显式携带 `outputDeviceId` 时 applied/getState.config 不新增该键。
+- `shareMode` 缺省为 `"shared"` 并保持既有 WASAPI shared 行为。`"exclusive"` 只允许普通 capture 与 render；loopback+exclusive 在 configure 阶段固定报 -32602，config 不变，绝不静默回退 shared；
+- 校验分两级：结构与静态域检查在 configure 内完成；所有显式设备 id 在提交前按类别校验，未知或类别错误报 -32000；格式协商与捕获/渲染采样率一致性在 start 检查。exclusive 必须使用设备原生支持的目标采样率立体声 f32 格式并禁用自动转换，任一端不支持目标格式、独占被占用或周期/缓冲初始化失败均使 start 报 -32000 并回滚 idle；`blockSizeFrames` 换算为 exclusive 目标 period，最终按 wasapi 0.24 的设备最小周期与对齐 API 处理；
+- 兼容性：既有 `{mode:"loopback",renderDeviceId,sampleRate,blockSizeFrames}` 请求继续有效，且未显式携带 `outputDeviceId` 或 `shareMode` 时 applied/getState.config 不新增对应键。
 
 #### GWT-CP-05：idle 合法配置生效
 - **给定**：phase=idle，参数通过结构校验，显式设备 id 均存在于对应类别
@@ -252,6 +282,11 @@ capture 直捕请求示例：
 - **当**：发送 start
 - **则**：返回 -32000，phase 回到 idle，config 保留，所有已启动线程被停止并回收
 
+#### GWT-CP-05D：shared 缺省兼容与 exclusive 严格打开
+- **给定**：phase=idle；分别准备省略 shareMode、显式 shared、普通 capture+exclusive 与 loopback+exclusive 配置
+- **当**：依次发送 configure；对成功的普通 capture+exclusive 再发送 start
+- **则**：省略 shareMode 时行为为 shared 且 applied/config 不新增该键；显式 shared/exclusive 原样回显；loopback+exclusive 在 configure 报 -32602 且 config 不变；普通 capture+exclusive 的捕获与渲染均以 EventsExclusive 打开，目标立体声 f32 格式必须由设备原生支持、禁止 autoconvert，period 以 blockSizeFrames 为目标按后端 API 对齐；任一端不支持或打开失败时 start 报 -32000 并回滚 idle，绝不回退 shared
+
 #### GWT-CP-06：非 idle 一律拒绝
 - **给定**：phase ∈ {starting, running, stopping}
 - **当**：发送任意 `configure`（无论内容是否合法）
@@ -266,6 +301,40 @@ capture 直捕请求示例：
 - **给定**：phase=idle，任一显式源设备或输出设备 id 设为枚举结果中不存在或类别不匹配的字符串
 - **当**：发送 `configure`
 - **则**：响应 error code=-32000；getState.config 不变
+
+### 5.3A loadHrtf —— 从本地 SOFA 预载 HRTF grid（仅 idle）
+
+请求与成功结果：
+
+```json
+{"jsonrpc":"2.0","id":30,"method":"loadHrtf","params":{"path":"C:\\hrtf\\subject.sofa"}}
+```
+
+```json
+{"jsonrpc":"2.0","id":30,"result":{"loaded":true,"path":"C:\\hrtf\\subject.sofa","sampleRate":48000,"azimuthCount":72,"elevationCount":37,"hrirLength":256}}
+```
+
+- 前置条件：phase=idle 且已有成功 `configure`；否则 -32001；
+- `path` 是唯一参数，必须为非空本机绝对路径、扩展名大小写不敏感等于 `.sofa`，且指向可访问普通文件；结构或路径校验失败报 -32602；
+- 服务在控制线程按当前 `config.sampleRate` 调用 `hrtf-core::load_sofa_file`，SOFA 约定、内容、采样率转换或 grid 构建失败报 -32602；DSP 线程不得读取、打开或解析文件；
+- 成功后原子替换 `EngineHandle` 中的 grid 与规范绝对路径；失败时保留此前 grid。再次成功 configure 且采样率变化时清除旧 grid，采样率不变时保留；
+- 已加载 grid 只为后续 `start` 或运行态 `setParams` 的控制线程构链提供输入。`loadHrtf` 本身禁止在 running 调用，因此运行期不会直接切换 grid；
+- 该方法是加性协议扩展，既有客户端无需调用，旧请求/响应语义不变。
+
+#### GWT-CP-08A：路径与解析失败不留痕
+- **给定**：phase=idle 且已 configure，并已记录调用前 `getState.hrtf`
+- **当**：分别以相对路径、非 `.sofa` 路径、目录、不存在文件或内容非法的临时 `.sofa` 调用 `loadHrtf`
+- **则**：每次响应 -32602，调用前 HRTF 状态和 grid 保持不变，数据面线程未执行任何文件 I/O
+
+#### GWT-CP-08B：真实 SOFA 在控制路径加载
+- **给定**：`HSE_TEST_SOFA` 指向本机真实 SimpleFreeFieldHRIR 文件，phase=idle 且 config.sampleRate 为支持目标采样率
+- **当**：以该绝对路径调用 `loadHrtf`
+- **则**：返回 loaded:true 及有限的 grid 元数据，`getState.hrtf` 与结果一致；该资产依赖测试默认 ignored，不下载或捆绑真实 SOFA
+
+#### GWT-CP-08C：相位与采样率绑定
+- **给定**：分别处于未 configure、running，以及已加载 grid 后重新 configure 为不同采样率三种状态
+- **当**：前两者调用 `loadHrtf`，后者调用 `getState`
+- **则**：前两者均报 -32001；重新配置不同采样率后 `getState.hrtf == {loaded:false}`，不得把旧采样率 grid 交给新链
 
 ### 5.4 start —— 启动引擎链路
 
@@ -350,12 +419,12 @@ capture 直捕请求示例：
 - 可识别顶层键内部的子键域与 clamp 行为以对应模块规格为准
   （[`biquad`](../dsp/biquad.md) §三、[`reverb-simple`](../dsp/reverb-simple.md)、[`limiter`](../dsp/limiter.md)），
   协议层只做键存在性与 JSON 类型匹配的结构检查；数值越界由模块自身 clamp，不产生 warnings、不算错误；
-- **热应用**：phase=running 时，控制面先解析完整候选快照、构建新链并完成 `prepare(maxBlockSize)`，再经无锁命令通道送 DSP 线程；在**下一块边界**整快照生效；
+- **热应用**：phase=running 时，控制面先解析完整候选快照、使用当前预载 HRTF grid 构建新链并完成 `prepare(maxBlockSize)`，再经无锁命令通道送 DSP 线程；在**下一块边界**整快照生效；
   正在处理的块不受影响；控制面线程不得持任何 DSP 内部锁、不得在音频回调路径分配（架构铁律）；
 - **事务提交**：running 时，候选快照只有在解析、构链、prepare 和命令投递全部成功后，才同时替换 `lastParams` 与后续 start 使用的参数；任一步失败均返回错误，`lastParams`、后续启动参数和运行链保持调用前旧值；命令环满按 -32000 拒绝，不以 accepted:true 或 warning 表示丢弃；
 - 非 running 时保持既有延迟校验语义：通过结构解析后立即存储规范化快照，不提前构链；下次 start 再按实际协商格式构链，届时构建失败按启动失败回滚；
 
-#### 可识别 wire 键表（投影到 1–21 级完整 EngineChainStage）
+#### 可识别 wire 键表（投影到 1–22 级完整 EngineChainStage）
 
 | 顶层键 | 子键 | 类型 | 说明 |
 |---|---|---|---|
@@ -416,6 +485,8 @@ capture 直捕请求示例：
 | `modMatrix` | `routes` | array | 元素 `{source:string("lfo"\|"envelope"), target:string("masterGain"\|"stereoWidth"), amount:number, offset?:number}`；source/target 枚举外按 TS 求值语义回退（envelope / stereoWidth）；offset 缺省 0 |
 | | `lfo` | object | `{shape:string(sine\|triangle\|square\|saw), rateHz:number, depth:number}`（shape 枚举外按 sine） |
 | | `envelope` | object | `{attackMs:number, releaseMs:number, amount:number}` |
+| `spatial` | `mode` | string | `off`（缺省）/ `instant` / `headLocked` / `world` / `stage`；非 off 要求已通过 `loadHrtf` 预载与图采样率一致的 grid，否则 start 报 -32000、running setParams 报 -32602 |
+| | 其余字段 | object/scalar | 按完整 TS `SpatialSettings` 深合并：world 消费 listener position/yaw/pitch/roll、sources/trajectories/playhead/occlusion；stage 消费 preset/seat/roomSize/reverbAmount/customSources；共享 masterGain/instant/ambience/convolution/hrtfInterp/distanceModel/refDistance/maxDistance 同步生效。服务仍固定立体声输入与双耳输出，不增加物理 multichannel 输出 |
 | `limiter` | `enabled` | bool | 限幅级旁路开关 |
 | | `thresholdDb` | number（dB） | 门限 |
 | | `lookaheadMs` | number（ms） | 前瞻 |
@@ -519,14 +590,15 @@ capture 直捕请求示例：
 
 ## 八、服务完整链及 wire 参数适配
 
-服务数据面实际构造并运行 `hse-core::EngineChainStage` 第 1–21 级；级序、旁路、sidechain 与分析语义以 [`engine/chain.md`](../engine/chain.md) 为准。`PilotParams` 只是控制协议兼容层：将本节可识别 wire 键投影到完整 canonical `EngineChainParams`，未暴露级使用核心默认值。空间第 22 级强制 `off`，`HseStretch` 保持链外能力。
+服务数据面实际构造并运行 `hse-core::EngineChainStage` 1–22 级；前 21 级的级序、旁路、sidechain 与分析语义以 [`engine/chain.md`](../engine/chain.md) 为准。`PilotParams` 只是控制协议兼容层：将本节可识别 wire 键投影到完整 canonical `EngineChainParams`，未暴露级使用核心默认值。第 22 级支持 `off` / `instant` / `headLocked` / `world` / `stage`，非 off 必须消费控制面预载的 HRTF grid；world 运行态热更新以相邻已提交快照的 listener position/playhead 推导确定速度，首次与非递增 playhead 固定为零。`HseStretch` 保持链外能力。
 
 约束：
 
 1. 各级行为以冻结向量 + 各模块规格为准，控制面协议不重复定义 DSP 行为；
 2. 数据布局契约（`hse-wasapi/src/lib.rs`）：进程内统一交错立体声 f32；planar 转换只发生在 DSP 线程边界；
 3. wire 键扩展只改变兼容适配层，不改变 `EngineChainStage` 的完整级序；
-4. 缺省直通回归锚仍为：全键缺省 + reverbSimple 全干 + limiter 禁用，整链逐位直通。
+4. 缺省直通回归锚仍为：全键缺省 + reverbSimple 全干 + limiter 禁用 + spatial off，整链逐位直通；
+5. SOFA 读取、解析、重采样、grid 与 renderer/链构建全部发生在控制线程；DSP 线程只接收已 prepare 的整链，在块边界交换，不得解析路径或文件。
 
 ## 九、并发约束
 
@@ -558,7 +630,11 @@ capture 直捕请求示例：
 5. 每次对本文件的实质修订按 docs/VERSIONING.md 记录进仓库根 CHANGELOG.md；
 6. 客户端兼容义务：对未知 method 返回的 -32601、未知键产生的 warnings、未知事件通知
    必须容忍并忽略，禁止硬失败；
-7. **1.3.0 加性演进**：`configure` 新增 capture 模式、`captureDeviceId` 与可选 `outputDeviceId`；既有 loopback 四字段请求及其 applied/config 形态保持不变。
+7. **1.3.0 加性演进（历史兼容基线）**：`configure` 新增 capture 模式、`captureDeviceId` 与可选 `outputDeviceId`；既有 loopback 四字段请求及其 applied/config 形态保持不变。
+8. **WASAPI 访问模式加性演进**：`configure` 新增可选 `shareMode:"shared"|"exclusive"`；省略时保持 shared 行为及旧回显形态。exclusive 只支持普通 capture/render，loopback+exclusive 固定在 configure 报 -32602。
+9. **延迟可观测性加性演进**：`getState.stats` 新增双环 current/high-water 帧数、当前周期 `blockSequence` 与 `latencyFrames` 确定性帧延迟分布；旧四统计键名称、类型与累计语义保持不变。
+10. **HRTF 服务路径加性演进**：新增 `loadHrtf{path}` 与 `getState.hrtf`，既有方法和既有结果字段保持不变；文件仅在 idle 控制路径解析，非 off spatial 通过预建整链在块边界生效。
+11. **推流消费诊断加性演进**：`getState.sessions` 按 sessionId 升序暴露每条活跃会话的排队、累计接收与累计消费帧数；旧顶层键与 `stats` 语义保持不变。
 
 ## 十一、关联文件
 

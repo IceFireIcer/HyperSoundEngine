@@ -27,10 +27,17 @@ export interface AudioEngine {
   /** 预分配内部工作缓冲；实时处理前调用一次，之后 process 内零分配 */
   prepare(maxBlockSize: number): void
   /**
-   * 就地处理多声道块（当前实现为单声道/立体声，但接口按通道数组设计）。
+   * 就地处理单声道/立体声块。
    * `sidechain` 为可选外部侧链输入；只有开启 sidechain 的效果器会使用它。
    */
   process(inputs: Float32Array[], outputs: Float32Array[], sidechain?: Float32Array[]): void
+  /**
+   * 实时安全的多声道输入入口：3–8 路非交错输入渲染为双声道输出。
+   * spatial 开启时固定执行“多声道双耳化 → 第 1–21 级主链”，与 process 的
+   * “第 1–21 级 → 第 22 级 spatial”冻结顺序有意不同；关闭时仅取 ch0/ch1。
+   * 调用方持有并复用 inputs/outputs 数组与通道缓冲；prepare 后稳态零分配。
+   */
+  processMulti?(inputs: Float32Array[], outputs: Float32Array[], sidechain?: Float32Array[]): void
   /** 引擎统计：LUFS、LRA、峰值、限幅衰减、延迟 */
   getStats(): EngineStats
   /** 最近一帧频谱与特征；未分析到时为 null */
@@ -53,8 +60,8 @@ export interface AudioEngineFactory {
 export interface StereoProcessor<TParams = unknown> {
   /** 更新处理器参数（实现方可定义更具体的参数类型） */
   setParams(params: TParams): void
-  /** 就地处理左右声道 */
-  processStereo(left: Float32Array, right: Float32Array): void
+  /** 就地处理左右声道；frameCount 缺省时处理完整缓冲 */
+  processStereo(left: Float32Array, right: Float32Array, frameCount?: number): void
   /** 复位内部状态 */
   reset(): void
 }
@@ -62,7 +69,7 @@ export interface StereoProcessor<TParams = unknown> {
 /**
  * 处理链中的一个阶段（Stage）。
  *
- * `HyperSoundEngine` 内部用 `ProcessingStage[]` 描述 14 级处理链：
+ * `HyperSoundEngine` 内部用 `ProcessingStage[]` 描述 22 级处理链：
  *  - `active()` 决定本块是否执行（旁路语义）；
  *  - `run()` 对左右声道就地处理；
  *  - 顺序即数组顺序，新增/调整处理阶段只需增删数组元素。

@@ -17,6 +17,17 @@ pub struct WorldListener {
     pub yaw_deg: f64,
 }
 
+/// Listener position and complete Euler orientation.
+///
+/// Rotation order matches the TypeScript reference: inverse yaw, then inverse pitch and roll.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WorldListenerPose {
+    pub position: Vec3,
+    pub yaw_deg: f64,
+    pub pitch_deg: f64,
+    pub roll_deg: f64,
+}
+
 /// Direction from a listener to a source.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RelativeDirection {
@@ -37,7 +48,20 @@ pub fn wrap_azimuth_deg(angle: f64) -> f64 {
 ///
 /// Panics when any listener or source component is not finite.
 pub fn relative_direction(listener: WorldListener, source: Vec3) -> RelativeDirection {
-    assert_finite(listener, source);
+    relative_direction_pose(
+        WorldListenerPose {
+            position: listener.position,
+            yaw_deg: listener.yaw_deg,
+            pitch_deg: 0.0,
+            roll_deg: 0.0,
+        },
+        source,
+    )
+}
+
+/// Converts a world-space source position using the listener's complete Euler orientation.
+pub fn relative_direction_pose(listener: WorldListenerPose, source: Vec3) -> RelativeDirection {
+    assert_finite_pose(listener, source);
 
     let dx = source.x - listener.position.x;
     let dy = source.y - listener.position.y;
@@ -52,12 +76,22 @@ pub fn relative_direction(listener: WorldListener, source: Vec3) -> RelativeDire
         };
     }
 
-    let world_azimuth_deg = dx.atan2(dz).to_degrees();
-    let elevation_ratio = (dy / distance).clamp(-1.0, 1.0);
+    let yaw = -listener.yaw_deg.to_radians();
+    let pitch = listener.pitch_deg.to_radians();
+    let roll = -listener.roll_deg.to_radians();
+    let (sin_yaw, cos_yaw) = yaw.sin_cos();
+    let (sin_pitch, cos_pitch) = pitch.sin_cos();
+    let (sin_roll, cos_roll) = roll.sin_cos();
+    let yaw_x = cos_yaw * dx + sin_yaw * dz;
+    let yaw_z = -sin_yaw * dx + cos_yaw * dz;
+    let pitch_y = cos_pitch * dy - sin_pitch * yaw_z;
+    let pitch_z = sin_pitch * dy + cos_pitch * yaw_z;
+    let head_x = cos_roll * yaw_x + sin_roll * pitch_y;
+    let head_y = -sin_roll * yaw_x + cos_roll * pitch_y;
 
     RelativeDirection {
-        azimuth_deg: wrap_azimuth_deg(world_azimuth_deg - listener.yaw_deg),
-        elevation_deg: elevation_ratio.asin().to_degrees(),
+        azimuth_deg: wrap_azimuth_deg(head_x.atan2(pitch_z).to_degrees()),
+        elevation_deg: (head_y / distance).clamp(-1.0, 1.0).asin().to_degrees(),
         distance,
     }
 }
@@ -71,6 +105,20 @@ fn assert_finite(listener: WorldListener, source: Vec3) {
             && source.x.is_finite()
             && source.y.is_finite()
             && source.z.is_finite(),
+        "listener and source values must be finite"
+    );
+}
+
+fn assert_finite_pose(listener: WorldListenerPose, source: Vec3) {
+    assert_finite(
+        WorldListener {
+            position: listener.position,
+            yaw_deg: listener.yaw_deg,
+        },
+        source,
+    );
+    assert!(
+        listener.pitch_deg.is_finite() && listener.roll_deg.is_finite(),
         "listener and source values must be finite"
     );
 }
@@ -261,5 +309,45 @@ mod tests {
                 distance: 0.0,
             }
         );
+    }
+
+    #[test]
+    fn applies_pitch_and_roll_after_inverse_yaw() {
+        let origin = Vec3 {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+        };
+        let pitched = relative_direction_pose(
+            WorldListenerPose {
+                position: origin,
+                yaw_deg: 0.0,
+                pitch_deg: 30.0,
+                roll_deg: 0.0,
+            },
+            Vec3 {
+                x: 0.0,
+                y: 0.0,
+                z: 2.0,
+            },
+        );
+        assert_close(pitched.azimuth_deg, 0.0);
+        assert_close(pitched.elevation_deg, -30.0);
+
+        let rolled = relative_direction_pose(
+            WorldListenerPose {
+                position: origin,
+                yaw_deg: 0.0,
+                pitch_deg: 0.0,
+                roll_deg: 30.0,
+            },
+            Vec3 {
+                x: 2.0,
+                y: 0.0,
+                z: 0.0,
+            },
+        );
+        assert_close(rolled.azimuth_deg, 90.0);
+        assert_close(rolled.elevation_deg, 30.0);
     }
 }

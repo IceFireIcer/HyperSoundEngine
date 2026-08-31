@@ -23,6 +23,22 @@
 | spleeter（Deezer） / demucs（Meta） | MIT | 声源分离（离线适配层，模型权重按各仓库声明） | research/audio-libs/spleeter, demucs |
 | crepe（Marl/CMU） | MIT | 音高检测（离线可选） | research/audio-libs/crepe |
 
+## npm 开发依赖
+
+- `playwright-core`：Apache-2.0，Copyright Microsoft Corporation。仅用于 headless Chromium AudioWorklet E2E，不进入引擎运行时包。
+
+## Rust 运行时与构建依赖
+
+| 库 | 许可 | 用途 |
+|---|---|---|
+| `rustfft` | MIT OR Apache-2.0 | Rust HRTF 分区卷积 FFT |
+| `sofar` | MIT OR Apache-2.0 | 纯 Rust SOFA / HDF5 解析控制路径；禁用默认 DSP/resample features |
+| `wasapi` | MIT | Windows shared/exclusive 音频设备后端 |
+| `rtrb` | MIT OR Apache-2.0 | 服务实时 SPSC 环形缓冲 |
+| `wasm-bindgen` | MIT OR Apache-2.0 | Rust wasm32 边界与浏览器 glue |
+
+`sofar` 基于 BSD-3-Clause 的 libmysofa 设计进行纯 Rust 重写；分发 Rust 二进制时应同时保留其 MIT/Apache-2.0 许可和项目内列出的上游归属。仓库当前不捆绑第三方 SOFA 数据文件；用户提供的数据集许可由调用方负责，未来随包加入数据集前必须单独记录来源、版本、校验和、署名与再分发条款。
+
 ## 可选 npm 依赖（均 MIT）
 
 - `meyda`：MIT，Copyright (c) 2014 Hugh A. Rawlinson, Nevo Segal, Jakub Fiala

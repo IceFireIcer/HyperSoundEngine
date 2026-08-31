@@ -25,7 +25,8 @@
 /** 卷积引擎共用接口（TimeConvolver 与 dsp/Convolver 结构一致，可在后端互换） */
 export interface StereoConvEngine {
   loadIR(ir: Float32Array, irName?: string): void
-  processStereo(l: Float32Array, r: Float32Array): void
+  prepare(maxFrames: number): void
+  processStereo(l: Float32Array, r: Float32Array, frameCount?: number): void
   reset(): void
 }
 
@@ -60,6 +61,8 @@ export class TimeConvolver implements StereoConvEngine {
   private totalOut = 0
   /** 已放行的湿路样本总数（严格按序放行依据） */
   private totalWetOut = 0
+  private maxFrames = 0
+  private explicitlyPrepared = false
 
   constructor(fs: number, opts?: { partitionSize?: number; dePeriodize?: boolean }) {
     if (fs <= 0 || !Number.isFinite(fs)) {
@@ -107,7 +110,7 @@ export class TimeConvolver implements StereoConvEngine {
     this.inputBlockR = new Float32Array(L)
     this.histL = new Float32Array(M)
     this.histR = new Float32Array(M)
-    const pendingCap = 3 * L // (P+2)·L，P=1（时域单分区语义）
+    const pendingCap = this.pendingCapacity(L)
     this.pendingWetL = new Float32Array(pendingCap)
     this.pendingWetR = new Float32Array(pendingCap)
 
@@ -122,16 +125,42 @@ export class TimeConvolver implements StereoConvEngine {
     this.irLoaded = true
   }
 
+  prepare(maxFrames: number): void {
+    const frames = Number.isFinite(maxFrames) ? Math.max(0, Math.floor(maxFrames)) : 0
+    this.explicitlyPrepared = frames > 0
+    this.ensurePendingCapacity(frames)
+  }
+
+  private ensurePendingCapacity(frames: number): void {
+    if (frames <= this.maxFrames) return
+    this.maxFrames = frames
+    if (!this.irLoaded) return
+    const capacity = this.pendingCapacity(this.partitionSize)
+    if (this.pendingWetL.length < capacity) {
+      this.pendingWetL = new Float32Array(capacity)
+      this.pendingWetR = new Float32Array(capacity)
+      this.pendingLen = 0
+      this.pendingPos = 0
+    }
+  }
+
+  private pendingCapacity(partitionSize: number): number {
+    const produced = Math.ceil(Math.max(this.maxFrames, partitionSize) / partitionSize)
+    return Math.max(3, produced + 2) * partitionSize
+  }
+
   /**
    * 流式立体声就地处理（与 Convolver.processStereo 同调度）：
    * 湿路 = 时域直接卷积（块装配 + 待放行队列），out[i] = wet[i]，相对输入延迟 L。
    * 未载入 IR 时抛错。
    */
-  processStereo(l: Float32Array, r: Float32Array): void {
+  processStereo(l: Float32Array, r: Float32Array, frameCount?: number): void {
     if (!this.irLoaded) {
       throw new Error('no impulse response loaded')
     }
-    const B = Math.min(l.length, r.length)
+    const requested = frameCount === undefined ? Math.min(l.length, r.length) : Math.floor(frameCount)
+    const B = Math.max(0, Math.min(requested, l.length, r.length))
+    if (!this.explicitlyPrepared && B > this.maxFrames) this.ensurePendingCapacity(B)
     const L = this.partitionSize
 
     // 先喂入输入块；块满时直接时域卷积产出湿块（同 Convolver 的块调度与
@@ -151,13 +180,10 @@ export class TimeConvolver implements StereoConvEngine {
           }
           this.pendingPos = 0
           if (this.pendingLen + L > this.pendingWetL.length) {
-            const newCap = Math.max(cap * 2, this.pendingLen + L)
-            const nl = new Float32Array(newCap)
-            nl.set(this.pendingWetL.subarray(0, this.pendingLen))
-            this.pendingWetL = nl
-            const nr = new Float32Array(newCap)
-            nr.set(this.pendingWetR.subarray(0, this.pendingLen))
-            this.pendingWetR = nr
+            if (this.explicitlyPrepared) {
+              throw new Error(`TimeConvolver block ${B} exceeds prepared pending capacity`)
+            }
+            this.ensurePendingCapacity(B)
           }
         }
         const writeAt = this.pendingPos + this.pendingLen

@@ -8,13 +8,15 @@
 //! 启动时序：starting（可见）→ 数据面线程各自开流并握手回报协商格式 →
 //! 引擎校验声道/构建初始子链经命令环送达 → ready 门开启 → running。
 
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use hse_wasapi::{DeviceKind, OpenOptions};
+use hrtf_core::{load_sofa_file, HrtfGrid, SofaGridOptions};
+use hse_wasapi::{AccessMode, DeviceKind, OpenOptions};
 use rtrb::Producer;
 use serde_json::{json, Map, Value};
 
@@ -72,6 +74,8 @@ struct EngineInner {
     config: Option<ServiceConfig>,
     last_params_value: Option<Value>,
     pilot_params: PilotParams,
+    hrtf_grid: Option<HrtfGrid>,
+    hrtf_path: Option<PathBuf>,
     stats: Arc<StatsAtomic>,
     started_at: Option<Instant>,
     run_flag: Arc<AtomicBool>,
@@ -102,6 +106,8 @@ impl EngineHandle {
                 config: None,
                 last_params_value: None,
                 pilot_params: PilotParams::default(),
+                hrtf_grid: None,
+                hrtf_path: None,
                 stats,
                 started_at: None,
                 run_flag: Arc::new(AtomicBool::new(false)),
@@ -145,12 +151,92 @@ impl EngineHandle {
     /// getState：相位 + 配置 + 统计 + 最近参数快照。
     pub fn get_state(&self) -> Value {
         let g = self.inner.lock().unwrap();
+        let hrtf = match (&g.hrtf_grid, &g.hrtf_path) {
+            (Some(grid), Some(path)) => json!({
+                "loaded": true,
+                "path": path.to_string_lossy(),
+                "sampleRate": grid.sample_rate(),
+                "azimuthCount": grid.azimuths().len(),
+                "elevationCount": grid.elevations().len(),
+                "hrirLength": grid.hrir_length(),
+            }),
+            _ => json!({"loaded": false}),
+        };
         json!({
             "phase": g.phase.as_str(),
             "config": g.config.as_ref().map(|c| c.to_json()).unwrap_or(Value::Null),
             "stats": g.stats.snapshot(g.started_at),
+            "sessions": self.sessions.diagnostics(),
             "lastParams": g.last_params_value.clone().unwrap_or(Value::Null),
+            "hrtf": hrtf,
         })
+    }
+
+    /// loadHrtf：仅 idle 且已配置采样率时，从本地绝对 SOFA 路径构建并提交 grid。
+    pub fn load_hrtf(&self, params_obj: &Map<String, Value>) -> Result<Value, RpcFault> {
+        let mut g = self.inner.lock().unwrap();
+        if g.phase != Phase::Idle {
+            return Err(RpcFault::state_forbidden(format!(
+                "phase={} 时禁止 loadHrtf（仅 idle 可加载）",
+                g.phase.as_str()
+            )));
+        }
+        let sample_rate = g
+            .config
+            .as_ref()
+            .map(|config| config.sample_rate)
+            .ok_or_else(|| RpcFault::state_forbidden("尚未成功 configure，禁止 loadHrtf"))?;
+        if params_obj.len() != 1 {
+            return Err(RpcFault::invalid_params("loadHrtf 只接受 path 字段"));
+        }
+        let raw_path = params_obj
+            .get("path")
+            .and_then(Value::as_str)
+            .ok_or_else(|| RpcFault::invalid_params("loadHrtf.path 必须为非空绝对路径字符串"))?;
+        if raw_path.is_empty() {
+            return Err(RpcFault::invalid_params(
+                "loadHrtf.path 必须为非空绝对路径字符串",
+            ));
+        }
+        let path = Path::new(raw_path);
+        if !path.is_absolute() {
+            return Err(RpcFault::invalid_params("loadHrtf.path 必须为绝对路径"));
+        }
+        if !path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("sofa"))
+        {
+            return Err(RpcFault::invalid_params(
+                "loadHrtf.path 必须使用 .sofa 扩展名",
+            ));
+        }
+        let metadata = std::fs::metadata(path).map_err(|error| {
+            RpcFault::invalid_params(format!("loadHrtf.path 不可访问：{error}"))
+        })?;
+        if !metadata.is_file() {
+            return Err(RpcFault::invalid_params("loadHrtf.path 必须指向普通文件"));
+        }
+        let canonical_path = std::fs::canonicalize(path).map_err(|error| {
+            RpcFault::invalid_params(format!("loadHrtf.path 无法规范化：{error}"))
+        })?;
+        let options = SofaGridOptions {
+            sample_rate,
+            ..SofaGridOptions::default()
+        };
+        let grid = load_sofa_file(&canonical_path, &options)
+            .map_err(|error| RpcFault::invalid_params(format!("SOFA 加载失败：{error}")))?;
+        let result = json!({
+            "loaded": true,
+            "path": canonical_path.to_string_lossy(),
+            "sampleRate": grid.sample_rate(),
+            "azimuthCount": grid.azimuths().len(),
+            "elevationCount": grid.elevations().len(),
+            "hrirLength": grid.hrir_length(),
+        });
+        g.hrtf_grid = Some(grid);
+        g.hrtf_path = Some(canonical_path);
+        Ok(result)
     }
 
     /// xrun 总量（事件序列化用）。
@@ -304,6 +390,24 @@ impl EngineHandle {
         };
         let output_device_id_explicit = params_obj.contains_key("outputDeviceId");
         let output_device_id = parse_device("outputDeviceId", false)?;
+        let access_mode_explicit = params_obj.contains_key("shareMode");
+        let access_mode = match params_obj.get("shareMode") {
+            None => AccessMode::Shared,
+            Some(Value::String(s)) if s == "shared" => AccessMode::Shared,
+            Some(Value::String(s)) if s == "exclusive" => AccessMode::Exclusive,
+            Some(Value::String(_)) => {
+                return Err(RpcFault::invalid_params(
+                    "shareMode 仅支持 shared 或 exclusive",
+                ))
+            }
+            Some(_) => return Err(RpcFault::invalid_params("shareMode 必须为字符串")),
+        };
+        if matches!(capture, CaptureConfig::Loopback { .. }) && access_mode == AccessMode::Exclusive
+        {
+            return Err(RpcFault::invalid_params(
+                "loopback 不支持 shareMode=exclusive",
+            ));
+        }
 
         let sample_rate = match params_obj.get("sampleRate").and_then(|v| v.as_u64()) {
             Some(n) if n >= MIN_SAMPLE_RATE as u64 && n <= MAX_SAMPLE_RATE as u64 => n as u32,
@@ -361,8 +465,17 @@ impl EngineHandle {
             output_device_id_explicit,
             sample_rate,
             block_size_frames,
+            access_mode,
+            access_mode_explicit,
         };
         let applied = cfg.to_json();
+        if g.config
+            .as_ref()
+            .is_some_and(|previous| previous.sample_rate != cfg.sample_rate)
+        {
+            g.hrtf_grid = None;
+            g.hrtf_path = None;
+        }
         g.config = Some(cfg);
         Ok(json!({"applied": applied}))
     }
@@ -370,7 +483,7 @@ impl EngineHandle {
     /// start：idle → starting（可见）→ 开流握手 → 装链 → running。
     pub fn start(&self) -> Result<Value, RpcFault> {
         // 第一段：校验并置 starting，取出配置与参数快照及共享件克隆。
-        let (cfg, pilot, wire_source, run_flag, err_flag, stats, ready_gate) = {
+        let (cfg, pilot, wire_source, hrtf_grid, run_flag, err_flag, stats, ready_gate) = {
             let mut g = self.inner.lock().unwrap();
             if g.phase != Phase::Idle {
                 return Err(RpcFault::state_forbidden(format!(
@@ -391,6 +504,7 @@ impl EngineHandle {
                 cfg,
                 g.pilot_params.clone(),
                 g.last_params_value.clone().unwrap_or_else(|| json!({})),
+                g.hrtf_grid.clone(),
                 Arc::clone(&g.run_flag),
                 Arc::clone(&g.err_flag),
                 Arc::clone(&g.stats),
@@ -403,6 +517,7 @@ impl EngineHandle {
             &cfg,
             &pilot,
             &wire_source,
+            hrtf_grid,
             &run_flag,
             &err_flag,
             &stats,
@@ -429,6 +544,7 @@ impl EngineHandle {
                     chain_tx,
                 });
                 g.started_at = Some(Instant::now());
+                g.stats.reset_cycle();
                 ready_gate.store(true, Ordering::SeqCst);
                 self.transition(&mut g, Phase::Running, false);
                 Ok(json!({"started": true}))
@@ -451,6 +567,7 @@ impl EngineHandle {
         cfg: &ServiceConfig,
         pilot: &PilotParams,
         wire_source: &Value,
+        hrtf_grid: Option<HrtfGrid>,
         run_flag: &Arc<AtomicBool>,
         _err_flag: &Arc<AtomicBool>,
         stats: &Arc<StatsAtomic>,
@@ -473,11 +590,13 @@ impl EngineHandle {
             device_id: capture_device_id,
             sample_rate: cfg.sample_rate,
             block_size_frames: cfg.block_size_frames,
+            access_mode: cfg.access_mode,
         };
         let render_opts = OpenOptions {
             device_id: cfg.output_device_id.clone(),
             sample_rate: cfg.sample_rate,
             block_size_frames: cfg.block_size_frames,
+            access_mode: cfg.access_mode,
         };
         let (in_prod, in_cons, out_prod, out_cons) = pipeline::build_rings(block_frames);
         let (mut chain_tx, chain_rx) = pipeline::build_command_ring();
@@ -547,7 +666,12 @@ impl EngineHandle {
                 ));
             }
         };
-        let chain = match ServiceEngineChain::build(&canonical, negotiated, block_frames) {
+        let chain = match ServiceEngineChain::build_with_hrtf_grid(
+            &canonical,
+            negotiated,
+            block_frames,
+            hrtf_grid,
+        ) {
             Ok(c) => c,
             Err(e) => {
                 return Err(fail(
@@ -608,6 +732,7 @@ impl EngineHandle {
         let mut g = self.inner.lock().unwrap();
         if g.phase == Phase::Stopping {
             g.started_at = None;
+            g.stats.clear_current_depths();
             self.transition(&mut g, Phase::Idle, publish);
         }
     }
@@ -656,9 +781,21 @@ impl EngineHandle {
             let canonical = pilot
                 .to_canonical_json(params_value, hot.sample_rate)
                 .map_err(|e| RpcFault::invalid_params(format!("参数无法应用：{}", e)))?;
+            let previous_canonical = g
+                .last_params_value
+                .as_ref()
+                .map(|value| g.pilot_params.to_canonical_json(value, hot.sample_rate))
+                .transpose()
+                .map_err(|e| RpcFault::invalid_params(format!("上一参数无法应用：{}", e)))?;
             Some(
-                ServiceEngineChain::build(&canonical, hot.sample_rate, hot.max_block)
-                    .map_err(|e| RpcFault::invalid_params(format!("参数无法应用：{}", e)))?,
+                ServiceEngineChain::build_with_hrtf_grid_and_previous(
+                    &canonical,
+                    hot.sample_rate,
+                    hot.max_block,
+                    g.hrtf_grid.clone(),
+                    previous_canonical.as_ref(),
+                )
+                .map_err(|e| RpcFault::invalid_params(format!("参数无法应用：{}", e)))?,
             )
         } else {
             None
@@ -697,7 +834,179 @@ fn wait_ready(
 mod tests {
     use super::*;
     use crate::fake_backend::FakeFactory;
+    use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
     use std::sync::mpsc::sync_channel;
+
+    static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    fn configured_engine() -> EngineHandle {
+        let (events, _event_rx) = sync_channel(16);
+        let engine =
+            EngineHandle::new(FakeFactory::working(Duration::ZERO, Duration::ZERO), events);
+        engine
+            .configure(
+                json!({"mode":"loopback","renderDeviceId":null,"sampleRate":48000,"blockSizeFrames":64})
+                    .as_object()
+                    .unwrap(),
+            )
+            .unwrap();
+        engine
+    }
+
+    fn temporary_sofa_path() -> PathBuf {
+        let sequence = TEMP_FILE_SEQUENCE.fetch_add(1, AtomicOrdering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "hse-service-invalid-{}-{sequence}.sofa",
+            std::process::id()
+        ))
+    }
+
+    fn test_grid() -> HrtfGrid {
+        HrtfGrid::new(
+            48_000,
+            vec![-30.0, 30.0],
+            vec![0.0],
+            3,
+            vec![1.0, 0.5, 0.0, 0.25, 0.0, 0.0],
+            vec![0.25, 0.0, 0.0, 1.0, 0.5, 0.0],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn 预载grid贯通start与运行态块边界热换() {
+        let engine = configured_engine();
+        {
+            let mut inner = engine.inner.lock().unwrap();
+            inner.hrtf_grid = Some(test_grid());
+            inner.hrtf_path = Some(PathBuf::from("test-grid.sofa"));
+        }
+        engine
+            .set_params(&json!({"spatial":{"mode":"instant"}}))
+            .unwrap();
+        engine.start().expect("start 应使用预载 grid 构建 stage 22");
+        engine
+            .set_params(
+                &json!({"spatial":{"mode":"world","convolution":"time","world":{
+                    "listener":{"position":{"x":0,"y":1.6,"z":0},"yaw":0,"pitch":0,"roll":0},
+                    "sources":[{"id":"lead","position":{"x":0,"y":1.6,"z":4},"gain":1,"size":0.4}],
+                    "playhead":1,"trajectories":[],"occlusion":0.2
+                }}}),
+            )
+            .expect("running setParams 应预建 world 链并投递到块边界");
+        engine
+            .set_params(
+                &json!({"spatial":{"mode":"world","convolution":"time","world":{
+                    "listener":{"position":{"x":1,"y":1.6,"z":0},"yaw":15,"pitch":5,"roll":-2},
+                    "sources":[{"id":"lead","position":{"x":0,"y":1.6,"z":4},"gain":1,"size":0.4}],
+                    "playhead":2,"trajectories":[],"occlusion":0.2
+                }}}),
+            )
+            .expect("后续 world 快照应使用上一快照推导确定速度");
+        engine
+            .set_params(
+                &json!({"spatial":{"mode":"stage","convolution":"time","stage":{
+                    "preset":"cinema","seat":"back","roomSize":1.5,"reverbAmount":0.6,
+                    "customSources":[]
+                }}}),
+            )
+            .expect("running setParams 应预建 stage 链并投递到块边界");
+        assert_eq!(engine.get_state()["lastParams"]["spatial"]["mode"], "stage");
+        engine.stop().unwrap();
+    }
+
+    #[test]
+    fn configure_采样率变化清除旧grid_同采样率保留() {
+        let engine = configured_engine();
+        {
+            let mut inner = engine.inner.lock().unwrap();
+            inner.hrtf_grid = Some(test_grid());
+            inner.hrtf_path = Some(PathBuf::from("test-grid.sofa"));
+        }
+        engine
+            .configure(
+                json!({"mode":"loopback","renderDeviceId":null,"sampleRate":48000,"blockSizeFrames":128})
+                    .as_object()
+                    .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(engine.get_state()["hrtf"]["loaded"], true);
+
+        engine
+            .configure(
+                json!({"mode":"loopback","renderDeviceId":null,"sampleRate":44100,"blockSizeFrames":128})
+                    .as_object()
+                    .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(engine.get_state()["hrtf"], json!({"loaded":false}));
+    }
+
+    #[test]
+    fn load_hrtf_拒绝相对路径与临时非法文件且不提交状态() {
+        let engine = configured_engine();
+        let relative = json!({"path":"fixture.sofa"});
+        let error = engine.load_hrtf(relative.as_object().unwrap()).unwrap_err();
+        assert_eq!(error.code, -32602);
+        assert!(error.message.contains("绝对路径"));
+        assert_eq!(engine.get_state()["hrtf"], json!({"loaded":false}));
+
+        let path = temporary_sofa_path();
+        fs::write(&path, b"not a sofa file").unwrap();
+        let request = json!({"path":path.to_string_lossy()});
+        let error = engine.load_hrtf(request.as_object().unwrap()).unwrap_err();
+        fs::remove_file(&path).unwrap();
+        assert_eq!(error.code, -32602);
+        assert!(error.message.contains("SOFA 加载失败"));
+        assert_eq!(engine.get_state()["hrtf"], json!({"loaded":false}));
+    }
+
+    #[test]
+    fn load_hrtf_未配置与运行态按状态拒绝() {
+        let (events, _event_rx) = sync_channel(16);
+        let engine =
+            EngineHandle::new(FakeFactory::working(Duration::ZERO, Duration::ZERO), events);
+        let path = std::env::temp_dir().join("unused.sofa");
+        let request = json!({"path":path.to_string_lossy()});
+        assert_eq!(
+            engine
+                .load_hrtf(request.as_object().unwrap())
+                .unwrap_err()
+                .code,
+            -32001
+        );
+
+        engine
+            .configure(
+                json!({"mode":"loopback","renderDeviceId":null,"sampleRate":48000,"blockSizeFrames":64})
+                    .as_object()
+                    .unwrap(),
+            )
+            .unwrap();
+        engine.inner.lock().unwrap().phase = Phase::Running;
+        assert_eq!(
+            engine
+                .load_hrtf(request.as_object().unwrap())
+                .unwrap_err()
+                .code,
+            -32001
+        );
+        engine.inner.lock().unwrap().phase = Phase::Idle;
+    }
+
+    #[test]
+    #[ignore = "需要 HSE_TEST_SOFA 指向本地真实 SimpleFreeFieldHRIR 文件"]
+    fn load_hrtf_真实sofa环境变量验收() {
+        let path = std::env::var("HSE_TEST_SOFA").expect("请设置 HSE_TEST_SOFA");
+        let engine = configured_engine();
+        let result = engine
+            .load_hrtf(json!({"path":path}).as_object().unwrap())
+            .expect("真实 SOFA 应在控制路径加载成功");
+        assert_eq!(result["loaded"], true);
+        assert_eq!(result["sampleRate"], 48_000);
+        assert_eq!(engine.get_state()["hrtf"]["loaded"], true);
+    }
 
     #[test]
     fn starting状态公开stop必须拒绝() {

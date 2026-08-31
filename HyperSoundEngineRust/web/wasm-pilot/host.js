@@ -79,10 +79,7 @@ export async function createWasmPilotNode(context, options = {}) {
     workletUrl = new URL('./worklet.js', import.meta.url),
     wasmUrl = new URL('./pkg/hse_wasm_bg.wasm', import.meta.url),
     maxFrames = 128,
-    type = 'peaking',
-    f0 = 1000,
-    q = 1,
-    gainDb = 0,
+    params = {},
   } = options
 
   const response = await fetch(wasmUrl)
@@ -96,13 +93,13 @@ export async function createWasmPilotNode(context, options = {}) {
 
   await context.audioWorklet.addModule(workletUrl)
   const node = new AudioWorkletNode(context, WASM_PILOT_PROCESSOR_NAME, {
-    numberOfInputs: 1,
+    numberOfInputs: 2,
     numberOfOutputs: 1,
     outputChannelCount: [2],
     processorOptions: {
       wasmModule,
       maxFrames,
-      params: { type, f0, q, gainDb },
+      params,
     },
   })
   stateFor(node)

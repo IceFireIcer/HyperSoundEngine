@@ -61,8 +61,8 @@ export class DelayEffect {
     this.mix = clamp(p.mix, 0, 1)
   }
 
-  processStereo(l: Float32Array, r: Float32Array): void {
-    const n = l.length
+  processStereo(l: Float32Array, r: Float32Array, frameCount?: number): void {
+    const n = Math.max(0, Math.min(Math.floor(frameCount ?? l.length), l.length, r.length))
     const bufL = this.bufL
     const bufR = this.bufR
     const size = bufL.length
@@ -124,8 +124,8 @@ class ModulatedDelay {
     this.phase = (this.phase + (this.rateHz * n) / this.fs) % 1
   }
 
-  protected processCore(l: Float32Array, r: Float32Array, feedback: number, mix: number): void {
-    const n = l.length
+  protected processCore(l: Float32Array, r: Float32Array, feedback: number, mix: number, frameCount?: number): void {
+    const n = Math.max(0, Math.min(Math.floor(frameCount ?? l.length), l.length, r.length))
     const bufL = this.bufL
     const bufR = this.bufR
     const size = bufL.length
@@ -167,8 +167,8 @@ export class ChorusEffect extends ModulatedDelay {
 
   private mix = 0.4
 
-  processStereo(l: Float32Array, r: Float32Array): void {
-    this.processCore(l, r, 0, this.mix)
+  processStereo(l: Float32Array, r: Float32Array, frameCount?: number): void {
+    this.processCore(l, r, 0, this.mix, frameCount)
   }
 }
 
@@ -186,8 +186,8 @@ export class FlangerEffect extends ModulatedDelay {
     this.mix = clamp(p.mix, 0, 1)
   }
 
-  processStereo(l: Float32Array, r: Float32Array): void {
-    this.processCore(l, r, this.feedback, this.mix)
+  processStereo(l: Float32Array, r: Float32Array, frameCount?: number): void {
+    this.processCore(l, r, this.feedback, this.mix, frameCount)
   }
 }
 
@@ -218,8 +218,8 @@ export class PhaserEffect {
     this.stages = Math.max(2, Math.min(8, Math.round(p.stages)))
   }
 
-  processStereo(l: Float32Array, r: Float32Array): void {
-    const n = l.length
+  processStereo(l: Float32Array, r: Float32Array, frameCount?: number): void {
+    const n = Math.max(0, Math.min(Math.floor(frameCount ?? l.length), l.length, r.length))
     const stages = this.stages
     const fs = this.fs
     const depth = this.depth
@@ -292,8 +292,8 @@ export class TremoloEffect {
     this.mix = clamp(p.mix, 0, 1)
   }
 
-  processStereo(l: Float32Array, r: Float32Array): void {
-    const n = l.length
+  processStereo(l: Float32Array, r: Float32Array, frameCount?: number): void {
+    const n = Math.max(0, Math.min(Math.floor(frameCount ?? l.length), l.length, r.length))
     const fs = this.fs
     const depth = this.depth
     const mix = this.mix

@@ -9,6 +9,7 @@ use hse_service::backend::BackendFactory;
 use hse_service::engine::EngineHandle;
 use hse_service::fake_backend::FakeFactory;
 use hse_service::state::ServiceEvent;
+use hse_wasapi::AccessMode;
 use serde_json::json;
 
 fn setup(
@@ -43,6 +44,173 @@ fn configure_default(engine: &EngineHandle) {
                 .unwrap(),
         )
         .unwrap();
+}
+
+fn assert_legacy_stats_contract(stats: &serde_json::Value) {
+    for key in ["xrunsIn", "xrunsOut", "framesProcessed", "uptimeMs"] {
+        assert!(stats[key].is_u64(), "旧统计键 {key} 必须继续以 u64 暴露");
+    }
+}
+
+fn assert_latency_ordered(stats: &serde_json::Value) {
+    let latency = &stats["latencyFrames"];
+    let current = latency["current"].as_u64().unwrap();
+    let p50 = latency["p50"].as_u64().unwrap();
+    let p95 = latency["p95"].as_u64().unwrap();
+    let max = latency["max"].as_u64().unwrap();
+    assert!(current <= max);
+    assert!(p50 <= p95 && p95 <= max);
+    assert_eq!(latency["samples"], stats["blockSequence"]);
+}
+
+#[test]
+fn 完整管线由readiness许可推进_经过service_chain与双环() {
+    const BLOCK: u64 = 64;
+    const PERMITS: u64 = 4;
+    let (engine, factory) = setup(Duration::ZERO, Duration::ZERO);
+    factory.set_capture_manual();
+    configure_default(&engine);
+    engine
+        .set_params(&json!({
+            "reverbSimple": {"wet": 0.0, "dry": 1.0, "preDelayMs": 0.0},
+            "limiter": {"enabled": false}
+        }))
+        .unwrap();
+    engine.start().unwrap();
+
+    wait_until(
+        || factory.capture_waits() > 0,
+        Duration::from_secs(5),
+        "捕获线程进入 readiness 等待",
+    );
+    assert_eq!(factory.capture_pulls(), 0, "无许可时不得 pull");
+    assert_eq!(engine.frames_processed(), 0, "无许可时完整管线不得推进");
+
+    factory.signal_capture_ready(PERMITS);
+    wait_until(
+        || engine.frames_processed() == BLOCK * PERMITS,
+        Duration::from_secs(10),
+        "精确消费 readiness 许可并完成 DSP 块",
+    );
+    assert_eq!(factory.capture_pulls(), PERMITS);
+    let state = engine.get_state();
+    assert_eq!(state["stats"]["blockSequence"], PERMITS);
+    assert!(state["stats"]["inputRingHighWaterFrames"].as_u64().unwrap() > 0);
+    assert!(
+        state["stats"]["outputRingHighWaterFrames"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+
+    let head_l = -1.0_f32;
+    let head_r = ((500_000u64 % 997) as f32 / 997.0) * 2.0 - 1.0;
+    wait_until(
+        || {
+            factory
+                .render_received
+                .lock()
+                .unwrap()
+                .windows(2)
+                .any(|frame| frame[0] == head_l && frame[1] == head_r)
+        },
+        Duration::from_secs(5),
+        "首块经 ServiceEngineChain 与双环到达内存渲染端",
+    );
+
+    engine.stop().unwrap();
+    assert_eq!(factory.capture_pulls(), PERMITS, "不得凭墙钟额外推进捕获");
+}
+
+#[test]
+fn get_state_旧统计兼容且加性暴露环与帧延迟() {
+    let (engine, _factory) = setup(Duration::ZERO, Duration::ZERO);
+    let state = engine.get_state();
+    let stats = &state["stats"];
+
+    assert_legacy_stats_contract(stats);
+    assert_eq!(stats["inputRingDepthFrames"], 0);
+    assert_eq!(stats["inputRingHighWaterFrames"], 0);
+    assert_eq!(stats["outputRingDepthFrames"], 0);
+    assert_eq!(stats["outputRingHighWaterFrames"], 0);
+    assert_eq!(stats["blockSequence"], 0);
+    assert_eq!(
+        stats["latencyFrames"],
+        json!({"current": 0, "p50": 0, "p95": 0, "max": 0, "samples": 0})
+    );
+}
+
+#[test]
+fn fake管线_环高水位与帧延迟单调_启停按周期复位() {
+    let (engine, factory) = setup(Duration::ZERO, Duration::ZERO);
+    configure_default(&engine);
+    engine.start().unwrap();
+    wait_until(
+        || {
+            engine.get_state()["stats"]["blockSequence"]
+                .as_u64()
+                .unwrap_or(0)
+                >= 8
+        },
+        Duration::from_secs(10),
+        "累计足够的确定性帧延迟样本",
+    );
+
+    let first = engine.get_state();
+    let first_stats = &first["stats"];
+    assert_legacy_stats_contract(first_stats);
+    assert!(first_stats["inputRingHighWaterFrames"].as_u64().unwrap() > 0);
+    assert!(first_stats["outputRingHighWaterFrames"].as_u64().unwrap() > 0);
+    assert_latency_ordered(first_stats);
+
+    wait_until(
+        || {
+            engine.get_state()["stats"]["blockSequence"]
+                .as_u64()
+                .unwrap_or(0)
+                > first_stats["blockSequence"].as_u64().unwrap()
+        },
+        Duration::from_secs(10),
+        "块序号继续推进",
+    );
+    let second = engine.get_state();
+    let second_stats = &second["stats"];
+    assert!(
+        second_stats["blockSequence"].as_u64().unwrap()
+            > first_stats["blockSequence"].as_u64().unwrap()
+    );
+    assert!(
+        second_stats["inputRingHighWaterFrames"].as_u64().unwrap()
+            >= first_stats["inputRingHighWaterFrames"].as_u64().unwrap()
+    );
+    assert!(
+        second_stats["outputRingHighWaterFrames"].as_u64().unwrap()
+            >= first_stats["outputRingHighWaterFrames"].as_u64().unwrap()
+    );
+    assert!(
+        second_stats["latencyFrames"]["max"].as_u64().unwrap()
+            >= first_stats["latencyFrames"]["max"].as_u64().unwrap()
+    );
+    assert_latency_ordered(second_stats);
+
+    engine.stop().unwrap();
+    let stopped = engine.get_state();
+    assert_eq!(stopped["stats"]["inputRingDepthFrames"], 0);
+    assert_eq!(stopped["stats"]["outputRingDepthFrames"], 0);
+    assert!(
+        stopped["stats"]["blockSequence"].as_u64().unwrap()
+            >= second_stats["blockSequence"].as_u64().unwrap(),
+        "stop 后保留刚结束周期摘要"
+    );
+
+    factory.set_capture_enabled(false);
+    engine.start().unwrap();
+    let restarted = engine.get_state();
+    assert_eq!(restarted["stats"]["blockSequence"], 0);
+    assert_eq!(restarted["stats"]["inputRingHighWaterFrames"], 0);
+    assert_eq!(restarted["stats"]["outputRingHighWaterFrames"], 0);
+    assert_eq!(restarted["stats"]["latencyFrames"]["samples"], 0);
+    engine.stop().unwrap();
 }
 
 #[test]
@@ -204,13 +372,16 @@ fn configure_独立捕获与渲染选路_旧loopback请求保持兼容() {
     engine.start().unwrap();
     assert_eq!(
         *factory.opened_loopback.lock().unwrap(),
-        vec![Some("render-headphone".into())]
+        vec![(Some("render-headphone".into()), AccessMode::Shared)]
     );
     assert_eq!(
         *factory.opened_capture.lock().unwrap(),
-        Vec::<Option<String>>::new()
+        Vec::<(Option<String>, AccessMode)>::new()
     );
-    assert_eq!(*factory.opened_render.lock().unwrap(), vec![None]);
+    assert_eq!(
+        *factory.opened_render.lock().unwrap(),
+        vec![(None, AccessMode::Shared)]
+    );
     engine.stop().unwrap();
 
     let direct = engine
@@ -225,13 +396,77 @@ fn configure_独立捕获与渲染选路_旧loopback请求保持兼容() {
     engine.start().unwrap();
     assert_eq!(
         *factory.opened_capture.lock().unwrap(),
-        vec![Some("cable-output".into())]
+        vec![(Some("cable-output".into()), AccessMode::Shared)]
     );
     assert_eq!(
         *factory.opened_render.lock().unwrap(),
-        vec![None, Some("render-headphone".into())]
+        vec![
+            (None, AccessMode::Shared),
+            (Some("render-headphone".into()), AccessMode::Shared)
+        ]
     );
     engine.stop().unwrap();
+}
+
+#[test]
+fn configure_exclusive直捕与渲染贯通且模式被fake记录() {
+    let (engine, factory) = setup(Duration::from_millis(1), Duration::from_millis(1));
+    let configured = engine
+        .configure(
+            json!({"mode":"capture","captureDeviceId":"cable-output","outputDeviceId":"render-headphone","shareMode":"exclusive","sampleRate":48000,"blockSizeFrames":64})
+                .as_object()
+                .unwrap(),
+        )
+        .unwrap();
+    assert_eq!(configured["applied"]["shareMode"], "exclusive");
+    assert_eq!(engine.get_state()["config"]["shareMode"], "exclusive");
+
+    engine.start().unwrap();
+    assert_eq!(
+        *factory.opened_capture.lock().unwrap(),
+        vec![(Some("cable-output".into()), AccessMode::Exclusive)]
+    );
+    assert_eq!(
+        *factory.opened_render.lock().unwrap(),
+        vec![(Some("render-headphone".into()), AccessMode::Exclusive)]
+    );
+    engine.stop().unwrap();
+}
+
+#[test]
+fn configure_share_mode默认兼容并拒绝独占loopback() {
+    let (engine, _factory) = setup(Duration::ZERO, Duration::ZERO);
+    let legacy = engine
+        .configure(
+            json!({"mode":"loopback","renderDeviceId":null,"sampleRate":48000,"blockSizeFrames":64})
+                .as_object()
+                .unwrap(),
+        )
+        .unwrap();
+    assert!(legacy["applied"].get("shareMode").is_none());
+    let initial = engine.get_state()["config"].clone();
+
+    let explicit_shared = engine
+        .configure(
+            json!({"mode":"capture","captureDeviceId":null,"shareMode":"shared","sampleRate":48000,"blockSizeFrames":64})
+                .as_object()
+                .unwrap(),
+        )
+        .unwrap();
+    assert_eq!(explicit_shared["applied"]["shareMode"], "shared");
+
+    for bad in [
+        json!({"mode":"loopback","renderDeviceId":null,"shareMode":"exclusive","sampleRate":48000,"blockSizeFrames":64}),
+        json!({"mode":"capture","captureDeviceId":null,"shareMode":"other","sampleRate":48000,"blockSizeFrames":64}),
+        json!({"mode":"capture","captureDeviceId":null,"shareMode":1,"sampleRate":48000,"blockSizeFrames":64}),
+    ] {
+        assert_eq!(
+            engine.configure(bad.as_object().unwrap()).unwrap_err().code,
+            -32602
+        );
+        assert_eq!(engine.get_state()["config"]["shareMode"], "shared");
+    }
+    assert!(initial.get("shareMode").is_none());
 }
 
 #[test]

@@ -1,4 +1,4 @@
-use hrtf_core::{relative_direction, Vec3, WorldListener};
+use hrtf_core::{relative_direction_pose, Vec3, WorldListenerPose};
 
 use crate::spatial_vector::{SpatialCase, SpatialFixture};
 
@@ -61,14 +61,16 @@ pub fn run_fixture(fixture: &SpatialFixture) -> SpatialOutcome {
 }
 
 fn relative(case: &SpatialCase) -> hrtf_core::RelativeDirection {
-    relative_direction(
-        WorldListener {
+    relative_direction_pose(
+        WorldListenerPose {
             position: Vec3 {
                 x: case.listener.position.x,
                 y: case.listener.position.y,
                 z: case.listener.position.z,
             },
             yaw_deg: case.listener.yaw,
+            pitch_deg: case.listener.pitch,
+            roll_deg: case.listener.roll,
         },
         Vec3 {
             x: case.source.x,
@@ -115,6 +117,8 @@ mod tests {
                         z: 0.0,
                     },
                     yaw: 0.0,
+                    pitch: 0.0,
+                    roll: 0.0,
                 },
                 source: FixtureVec3 {
                     x: 0.0,

@@ -1,7 +1,7 @@
 //! hse-cli —— 最小调参客户端（连接 ws://host:port 的 JSON-RPC 控制面）。
 //!
 //! 用法：hse-cli [--url ws://127.0.0.1:4780] <子命令> [参数]
-//! 子命令：list-devices / get-state / configure / start / stop / set-params <json 文件>
+//! 子命令：list-devices / get-state / configure / load-hrtf / start / stop / set-params <json 文件>
 
 use serde_json::{json, Value};
 use tungstenite::{Message, WebSocket};
@@ -17,7 +17,7 @@ const BOLD: &str = "\x1b[1m";
 /// CLI 侧连接类型：connect 返回可能带 TLS 包装的流（ws 场景即 Plain）。
 type CliWs = WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>;
 
-const USAGE: &str = "hse-cli —— HyperSoundEngine 引擎服务调参客户端\n\n用法：\n  hse-cli [--url ws://127.0.0.1:4780] <子命令> [参数]\n\n子命令：\n  list-devices                枚举渲染/捕获设备（--full 显示完整设备 id）\n  get-state                   查询相位/配置/统计/参数快照\n  configure [--mode loopback|capture] [--input-device <id>] [--output-device <id>] [--rate N] [--block N]\n                              配置捕获源与独立输出（缺省=默认 loopback 源和默认输出）\n                              兼容别名 --device <id> 等同 loopback 的 --input-device\n  start                       启动引擎管线\n  stop                        停止引擎管线\n  set-params <file.json>      发送参数快照（JSON 对象）并显示警告";
+const USAGE: &str = "hse-cli —— HyperSoundEngine 引擎服务调参客户端\n\n用法：\n  hse-cli [--url ws://127.0.0.1:4780] <子命令> [参数]\n\n子命令：\n  list-devices                枚举渲染/捕获设备（--full 显示完整设备 id）\n  get-state                   查询相位/配置/统计/参数快照\n  configure [--mode loopback|capture] [--share-mode shared|exclusive] [--input-device <id>] [--output-device <id>] [--rate N] [--block N]\n                              配置捕获源、WASAPI 访问模式与独立输出（缺省=shared loopback）\n                              兼容别名 --device <id> 等同 loopback 的 --input-device\n  load-hrtf <file.sofa>       从本地绝对 SOFA 路径预载 stage 22 HRTF grid\n  start                       启动引擎管线\n  stop                        停止引擎管线\n  set-params <file.json>      发送参数快照（JSON 对象）并显示警告";
 
 /// CLI 主入口，返回进程退出码。
 pub fn run(args: impl Iterator<Item = String>) -> i32 {
@@ -70,6 +70,20 @@ pub fn run(args: impl Iterator<Item = String>) -> i32 {
             }),
             Err(m) => fail(&m),
         },
+        "load-hrtf" => {
+            let Some(path) = rest.first() else {
+                return fail("load-hrtf 需要本地绝对 SOFA 文件路径");
+            };
+            if rest.len() != 1 {
+                return fail("load-hrtf 只接受一个 SOFA 文件路径");
+            }
+            let path = path.clone();
+            with_connection(&url, move |ws| {
+                let resp = request(ws, "loadHrtf", json!({"path": path}))?;
+                println!("{}HRTF 已加载：{}{}", GREEN, resp["result"], RESET);
+                Ok(0)
+            })
+        }
         "start" => with_connection(&url, |ws| {
             let resp = request(ws, "start", json!({}))?;
             println!("{}已启动：{}{}", GREEN, resp["result"], RESET);
@@ -113,6 +127,8 @@ fn fail(message: &str) -> i32 {
 
 fn build_configure(rest: &[String]) -> Result<Value, String> {
     let mut mode = "loopback".to_string();
+    let mut share_mode = "shared".to_string();
+    let mut share_mode_explicit = false;
     let mut input_device: Option<String> = None;
     let mut legacy_device = false;
     let mut output_device: Option<String> = None;
@@ -128,6 +144,14 @@ fn build_configure(rest: &[String]) -> Result<Value, String> {
                 if mode != "loopback" && mode != "capture" {
                     return Err("--mode 仅支持 loopback 或 capture".into());
                 }
+            }
+            "--share-mode" => {
+                idx += 1;
+                share_mode = rest.get(idx).ok_or("--share-mode 缺少取值")?.clone();
+                if share_mode != "shared" && share_mode != "exclusive" {
+                    return Err("--share-mode 仅支持 shared 或 exclusive".into());
+                }
+                share_mode_explicit = true;
             }
             "--device" => {
                 idx += 1;
@@ -166,6 +190,9 @@ fn build_configure(rest: &[String]) -> Result<Value, String> {
     if legacy_device && mode != "loopback" {
         return Err("--device 仅是 loopback 模式的兼容别名".into());
     }
+    if mode == "loopback" && share_mode == "exclusive" {
+        return Err("loopback 不支持 --share-mode exclusive".into());
+    }
     let mut params = json!({
         "mode": mode,
         "sampleRate": rate,
@@ -179,6 +206,9 @@ fn build_configure(rest: &[String]) -> Result<Value, String> {
     params[source_key] = json!(input_device);
     if output_explicit {
         params["outputDeviceId"] = json!(output_device);
+    }
+    if share_mode_explicit {
+        params["shareMode"] = json!(share_mode);
     }
     Ok(params)
 }
@@ -285,6 +315,7 @@ fn print_state(state: &Value) {
     };
     println!("相位：{}{}{}（{}）", color, BOLD, phase, RESET);
     println!("配置：{}", state["config"]);
+    println!("HRTF：{}", state["hrtf"]);
     println!("统计：{}", state["stats"]);
     println!("最近参数：{}", state["lastParams"]);
 }
@@ -334,6 +365,17 @@ mod tests {
             ]))
             .unwrap(),
             json!({"mode":"capture","captureDeviceId":"cable-output","outputDeviceId":"render-headphone","sampleRate":48000,"blockSizeFrames":256})
+        );
+    }
+
+    #[test]
+    fn configure_share_mode仅在显式指定时发出() {
+        assert_eq!(
+            build_configure(&args(&["--mode", "capture", "--share-mode", "exclusive"])).unwrap(),
+            json!({"mode":"capture","captureDeviceId":null,"shareMode":"exclusive","sampleRate":48000,"blockSizeFrames":256})
+        );
+        assert!(
+            build_configure(&args(&["--mode", "loopback", "--share-mode", "exclusive"])).is_err()
         );
     }
 }

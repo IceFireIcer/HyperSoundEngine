@@ -8,8 +8,9 @@
 
 - 右手世界坐标：`+X` 向右、`+Y` 向上、`+Z` 向前。
 - 位置和距离单位为米，角度单位为度。
-- listener `yaw=0` 朝 `+Z`；正 yaw 向 `+X` 右转。
-- 输入只包含 listener 的 `position + yaw` 与 source position。公开 `ListenerState` 中的 pitch/roll 保留兼容，但不属于本规格输入。
+- `yaw=0` 朝 `+Z`；正 yaw 向 `+X` 右转。正 pitch 抬头，正 roll 向右倾。
+- 世界方向依次撤销 yaw、pitch、roll，再由头坐标计算方位和仰角。
+- 输入包含 listener 的 `position + yaw + pitch + roll` 与 source position；`pitch`/`roll` 可省略，缺省为 `0`，保证既有 yaw-only case 兼容。
 
 ## 二、计算规则
 
@@ -23,11 +24,13 @@ distance = sqrt(dx² + dy² + dz²)
 ```
 
 - `distance == 0` 时固定输出 `{ azimuthDeg: 0, elevationDeg: 0, distance: 0 }`。
-- `worldAzimuth = atan2(dx, dz) × 180 / π`。
-- `azimuthDeg = wrap(worldAzimuth - listener.yaw)`。
+- yaw-only 时：`yawX = cos(-yaw)·dx + sin(-yaw)·dz`，`yawZ = -sin(-yaw)·dx + cos(-yaw)·dz`。
+- 完整姿态时，继续以 `pitch` 撤销俯仰，再以 `-roll` 撤销侧倾，得到头坐标 `(headX, headY, headZ)`。
+- `azimuthDeg = wrap(atan2(headX, headZ) × 180 / π)`。
 - `wrap(a) = ((a + 180) mod 360 + 360) mod 360 - 180`，结果区间为 `[-180, 180)`；正后方规范为 `-180`。
-- `elevationDeg = asin(clamp(dy / distance, -1, 1)) × 180 / π`。
+- `elevationDeg = asin(clamp(headY / distance, -1, 1)) × 180 / π`。
 - 两支线均使用 IEEE-754 binary64 计算，不主动量化为 f32。
+- yaw-only 兼容公式等价于先撤销 yaw；完整姿态按 `controller.ts` 的逆旋转矩阵撤销 yaw、pitch、roll。
 - 输入必须是有限数；非有限输入在调用边界拒绝，不进入冻结夹具。
 
 ## 三、GWT 条款
@@ -52,6 +55,11 @@ distance = sqrt(dx² + dy² + dz²)
 - **当**：计算相对方向。
 - **则**：三个输出均为有限数且固定为 0。
 
+### GWT-WORLD-05：pitch/roll 完整姿态
+- **给定**：listener 具有非零 pitch 或 roll，source 位于非奇异轴向。
+- **当**：按 yaw、pitch、roll 的逆旋转转换到头坐标。
+- **则**：方位、仰角和距离与追加夹具一致；省略 pitch/roll 与显式填 0 等价。
+
 ## 四、冻结夹具
 
 - Schema：`specs/schema/world-listener.schema.json`。
@@ -64,8 +72,8 @@ distance = sqrt(dx² + dy² + dz²)
 
 - TS：`npx vitest run test/spatial-spec-vectors.test.ts src/spatial/test/controller.test.ts`。
 - Rust：`cargo test --manifest-path HyperSoundEngineRust/Cargo.toml -p hrtf-core --locked -j 1`。
-- 综合：`cargo run --manifest-path HyperSoundEngineRust/Cargo.toml -q -p hse-parity` 必须分别报告 DSP audio 72/72 与 Spatial world-listener 12/12。
+- 综合：`cargo run --manifest-path HyperSoundEngineRust/Cargo.toml -q -p hse-parity` 必须分别报告 DSP audio 72/72、Spatial world-listener 14/14 与 renderer-ABI 14/14。
 
 ## 六、范围外
 
-pitch/roll、多普勒速度、距离增益、声道路由、HRIR、HRTF 插值、卷积、房间、ambience、多声道、WASM 与服务 stage 22 均不在本切片。Rust `EngineChainStage` 继续只接受 `spatial.mode='off'`。
+HRIR、HRTF 插值、卷积、房间、ambience、多声道、WASM 与服务数据面不在本几何切片；第 22 级 world/stage 参数投影见 [`stage22.md`](stage22.md)。

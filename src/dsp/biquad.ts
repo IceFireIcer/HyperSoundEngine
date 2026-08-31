@@ -153,12 +153,13 @@ export class Biquad {
     return y
   }
 
-  processBlock(input: Float32Array, output: Float32Array): void {
+  processBlock(input: Float32Array, output: Float32Array, frameCount?: number): void {
     if (input.length !== output.length) throw new Error('biquad: input/output length mismatch')
+    const n = Math.max(0, Math.min(Math.floor(frameCount ?? input.length), input.length, output.length))
     const { b0, b1, b2, a1, a2 } = this
     let s1 = this.s1
     let s2 = this.s2
-    for (let i = 0; i < input.length; i++) {
+    for (let i = 0; i < n; i++) {
       const x = input[i]
       const y = b0 * x + s1
       s1 = b1 * x - a1 * y + s2

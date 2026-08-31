@@ -92,16 +92,22 @@ export class Deesser {
   }
 
   /** 就地处理立体声（l/r 原地改写） */
-  processStereo(l: Float32Array, r: Float32Array, sideL?: Float32Array, sideR?: Float32Array): void {
+  processStereo(l: Float32Array, r: Float32Array, sideL?: Float32Array, sideR?: Float32Array, frameCount?: number): void {
     if (!this.enabled) return // 恒等直通
-    const n = l.length
+    const useSide = sideL !== undefined && sideR !== undefined
+    const n = Math.max(0, Math.min(
+      Math.floor(frameCount ?? l.length),
+      l.length,
+      r.length,
+      useSide ? sideL.length : Infinity,
+      useSide ? sideR.length : Infinity,
+    ))
     const attack = this.attackCoef
     const release = this.releaseCoef
     const thresholdDb = this.thresholdDb
     const invRatio = 1 - 1 / this.ratio
     const mix = this.mix
     const split = this.splitBand
-    const useSide = sideL !== undefined && sideR !== undefined
     for (let i = 0; i < n; i++) {
       const xl = l[i]
       const xr = r[i]

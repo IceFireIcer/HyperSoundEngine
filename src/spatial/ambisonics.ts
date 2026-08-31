@@ -20,6 +20,9 @@
 /** FOA（First-Order Ambisonics）信号：[W, X, Y, Z]（ACN 0-3） */
 export type FoaSignal = [number, number, number, number]
 
+/** 调用方持有的 FOA/解码输出缓冲。 */
+export type AmbisonicBuffer = number[] | Float32Array | Float64Array
+
 /**
  * SH 编码：声源方向 (azimuthDeg, elevationDeg) × 增益 gain → FOA 信号。
  *
@@ -67,11 +70,17 @@ export const AMBIENCE_SPEAKERS: { azimuthDeg: number; elevationDeg: number }[] =
  *   幅值同量级，不会放大/湮灭）。允许负增益（Ambisonics 相位抵消的物理语义），
  *   本波环境上混不使用解码输出（fusion 侧以固定增益馈 4 扬声器），留完整渲染 wave 用。
  */
-export function decodeFoaToSpeakers(foa: FoaSignal, azimuths: number[]): number[] {
-  return azimuths.map((azDeg) => {
-    const az = (azDeg * Math.PI) / 180
-    return foa[0] / Math.SQRT2 + Math.cos(az) * foa[1] + Math.sin(az) * foa[2]
-  })
+export function decodeFoaToSpeakers(
+  foa: ArrayLike<number>,
+  azimuths: readonly number[],
+  out: AmbisonicBuffer,
+): AmbisonicBuffer {
+  if (out.length < azimuths.length) throw new Error('decodeFoaToSpeakers: output buffer is too small')
+  for (let i = 0; i < azimuths.length; i++) {
+    const az = (azimuths[i] * Math.PI) / 180
+    out[i] = foa[0] / Math.SQRT2 + Math.cos(az) * foa[1] + Math.sin(az) * foa[2]
+  }
+  return out
 }
 
 /**
@@ -84,15 +93,24 @@ export function decodeFoaToSpeakers(foa: FoaSignal, azimuths: number[]): number[
  *   Y = rms(side)·√2（左右差分 ≈ 水平 Y；立体声左右声道即水平 90° 轴采样）
  *   X = 0、Z = 0（无前后/上下信息——M/S 矩阵只能给出左右轴）
  *
- * 块 RMS：调用方按 block 样本分块传入，函数对该块整体 RMS 后返回能量级
- * FoaSignal（不逐样本，供增益调制）；block 为名义块长契约（非法值回静音）。
- * 整块整体 RMS 而非逐窗平均——块长/划分任意变化输出一致（能量级稳定，
- * 不会因调用方切片方式不同而跳变）。例：纯同相（L=R）→ W 大、Y≈0；
- * 纯反相（L=-R）→ W=0、Y 大（环境感主要来自差分分量）。
+ * 有效帧数由 frameCount 指定，允许输入缓冲容量大于本次块长；结果写入调用方缓冲。
  */
-export function stereoToFoa(l: Float32Array, r: Float32Array, block: number): FoaSignal {
-  const n = Math.min(l.length, r.length)
-  if (n <= 0 || !Number.isFinite(block) || block <= 0) return [0, 0, 0, 0]
+export function stereoToFoa(
+  l: Float32Array,
+  r: Float32Array,
+  frameCount: number,
+  out: AmbisonicBuffer,
+): AmbisonicBuffer {
+  if (out.length < 4) throw new Error('stereoToFoa: output buffer is too small')
+  const requested = Number.isFinite(frameCount) ? Math.floor(frameCount) : 0
+  const n = Math.max(0, Math.min(requested, l.length, r.length))
+  if (n <= 0) {
+    out[0] = 0
+    out[1] = 0
+    out[2] = 0
+    out[3] = 0
+    return out
+  }
   let sMid = 0
   let sSide = 0
   for (let i = 0; i < n; i++) {
@@ -101,6 +119,9 @@ export function stereoToFoa(l: Float32Array, r: Float32Array, block: number): Fo
     sMid += mid * mid
     sSide += side * side
   }
-  // rms·√2 = √(2·Σx²/n)（与 encode 的 W=gain/√2 匹配：同相单位正弦 → W≈1）
-  return [Math.sqrt((2 * sMid) / n), 0, Math.sqrt((2 * sSide) / n), 0]
+  out[0] = Math.sqrt((2 * sMid) / n)
+  out[1] = 0
+  out[2] = Math.sqrt((2 * sSide) / n)
+  out[3] = 0
+  return out
 }

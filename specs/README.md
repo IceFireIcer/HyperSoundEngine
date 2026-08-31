@@ -2,12 +2,13 @@
 
 > **归属**：本目录由 **TS 支线（`src/`）与 Rust 支线（`HyperSoundEngineRust/`）共同所有**，
 > 位于仓库根，不属于任何单一支线。术语基线见仓库根 `CONTEXT.md`；
-> 行为事实标准当前为 TS 支线源码；本总纲与其下规格文档使用同一套领域语言。
+> DSP/engine-chain 行为事实标准当前为 TS 支线源码，Rust-only renderer/ABI 的共享边界由
+> `specs/spatial/renderer-abi.md` 与冻结夹具定义；本总纲与其下规格文档使用同一套领域语言。
 >
-> 当前基线：**22 份双支线共享规格（17 DSP + 3 engine + 1 I/O + 1 spatial）**，其中 18 份纳入音频对拍；
-> 音频冻结向量 **72 组 / 144 文件**，另有参数/场景结构化契约夹具 **3 个 JSON**、
-> standard WAV 共享夹具 **1 个 JSON**与 world-listener **12 个结构化 case**；Rust `hse-parity`
-> 综合门禁为音频 **72/72 PASS** + 空间 **12/12 PASS**。
+> 当前基线：**25 份双支线共享规格（17 DSP + 4 engine + 1 I/O + 3 spatial）**，其中 18 份纳入音频对拍；
+> 音频冻结向量 **72 组 / 144 文件**，另有参数/场景/分享串/default frameCount 结构化契约夹具 **4 个 JSON**、
+> Phase 4 全链参数扫描 **40 case（1 个结构化 JSON）**、standard WAV 共享夹具 **1 个 JSON**、world-listener **14 个结构化 case**与 renderer/ABI
+> **14 个结构化 case**；Rust `hse-parity` 综合门禁为音频 **72/72 PASS** + 空间 **28/28 PASS** + 参数扫描 **40/40 PASS**。
 
 ---
 
@@ -16,8 +17,8 @@
 HyperSoundEngine 按《原生化双支线与 Windows 音频接入规划书》Phase 0 执行**「规格先行双实现」**：
 
 1. **规格先行**：每个 DSP 模块先在 `specs/` 落定行为规格（GWT 条款 + 测试向量），再谈实现；
-2. **TS 支线（`src/`）是行为事实标准**：Bootstrap 阶段的测试向量由导出工具驱动 TS 实现生成，
-   冻结后升级为规格资产；
+2. **TS 支线（`src/`）是 DSP/engine-chain 行为事实标准**：Bootstrap 阶段的音频测试向量由导出工具驱动 TS 实现生成；
+   Rust-only renderer/ABI 则由独立 TS 参考公式生成结构化夹具，再由 Rust 生产实现消费对拍，TS 不伪装为同算法生产实现；
 3. **Rust 支线（`HyperSoundEngineRust/`）与 TS 支线功能对等**：以同一批冻结向量做对拍（Parity Run），
    相对容差 1e-6，跨实现不要求逐位一致；
 4. **功能完成的定义 = 规格落定且两支线双双通过**（门禁规则见 §五）；
@@ -31,7 +32,10 @@ specs/
 ├── README.md                        ← 本文件：规格书写总纲（两支线必读）
 ├── schema/
 │   ├── vector-case.schema.json      ← DSP 音频向量的 draft-07 Schema
-│   └── world-listener.schema.json   ← world-listener 结构化夹具 Schema
+│   ├── frame-count.schema.json      ← 默认有效帧结构化夹具 Schema
+│   ├── phase4-param-scan.schema.json ← Phase 4 全链参数扫描夹具 Schema
+│   ├── world-listener.schema.json   ← world-listener 结构化夹具 Schema
+│   └── spatial-renderer-abi.schema.json ← renderer/ABI 结构化夹具 Schema
 └── dsp/
     ├── biquad.md                    ← 模块规格：biquad
     ├── limiter.md                   ← 模块规格：limiter
@@ -55,15 +59,20 @@ specs/
         └── engine-chain.<case>.json / engine-chain.<case>.f32
 └── engine/
     ├── chain.md                     ← 引擎层规格：1–21 级主链；spatial.mode='off'
+    ├── param-scan.md                ← Phase 4 固定种子全链参数扫描
     ├── params.md                    ← 完整参数快照与默认值兼容契约
     ├── scenes.md                    ← 12 个内置场景与分享串契约
-    └── vectors/                     ← 3 个结构化 JSON 夹具（默认参数/场景/分享串）
+    └── vectors/                     ← 4 个结构化 JSON + 参数扫描 JSON 夹具
 └── io/
     ├── wav.md                       ← legacy / standard WAV 双模式兼容契约
     └── vectors/wav-standard.json    ← 两支线共享的标准 RIFF 结构化夹具
 └── spatial/
-    ├── world-listener.md            ← 世界坐标到头坐标方向契约
-    └── vectors/world-listener.v1.json ← 12 个结构化几何 case
+    ├── world-listener.md            ← 世界坐标到完整 listener 姿态方向契约
+    ├── renderer-abi.md              ← nearest/time renderer 与 C ABI 成功路径契约
+    ├── stage22.md                   ← Rust stage22 world/stage 参数投影与实时语义
+    └── vectors/
+        ├── world-listener.v1.json   ← 14 个结构化几何 case
+        └── renderer-abi.v1.json     ← 14 个 grid/model/renderer 结构化 case
 ```
 
 ---
@@ -201,8 +210,8 @@ specs/
 
 | 支线 | 门禁命令 | 判定内容 |
 |---|---|---|
-| TS 支线 | `npx vitest run test/spec-vectors.test.ts` | 遍历 `specs/dsp/vectors/` 全部夹具，按 §3.4 分块驱动 `src/` 实现，按 §3.5 判定 |
-| Rust 支线 | `cd HyperSoundEngineRust && cargo run -q -p hse-parity` | 驱动 `hse-core` 音频模块/主链与 `hrtf-core` world-listener 几何核；音频 72/72、空间 12/12 均通过才算绿 |
+| TS 支线 | `npm run verify:specs` | 遍历 72 组 DSP 音频向量、40 组 Phase 4 全链参数扫描与三份 spatial 共享契约，按各自契约判定 |
+| Rust 支线 | `cd HyperSoundEngineRust && cargo run -q -p hse-parity` | 驱动 `hse-core` 音频模块/主链及参数扫描，以及 `hrtf-core` world-listener 与 renderer；音频 72/72、空间 28/28、参数扫描 40/40 均通过才算绿 |
 
 补充规则：
 
@@ -259,6 +268,8 @@ specs/
 - DSP 实现契约（TS 侧）：`src/dsp/API_SPEC.md`
 - 向量 Schema：[specs/schema/vector-case.schema.json](schema/vector-case.schema.json)
 - 模块规格：[biquad](dsp/biquad.md) ｜ [limiter](dsp/limiter.md) ｜ [reverb-simple](dsp/reverb-simple.md) ｜ [compressor](dsp/compressor.md) ｜ [bass-enhancer](dsp/bass-enhancer.md) ｜ [mid-side](dsp/mid-side.md) ｜ [eq-chain](dsp/eq-chain.md) ｜ [fdn-reverb](dsp/fdn-reverb.md) ｜ [deesser](dsp/deesser.md) ｜ [loudness-comp](dsp/loudness-comp.md) ｜ [dynamic-eq](dsp/dynamic-eq.md) ｜ [mod-effects](dsp/mod-effects.md) ｜ [fft](dsp/fft.md) ｜ [convolver](dsp/convolver.md) ｜ [modulation-matrix](dsp/modulation-matrix.md) ｜ [hse-stretch](dsp/hse-stretch.md) ｜ [lufs-meter](dsp/lufs-meter.md)
-- 引擎规格：[engine-chain](engine/chain.md)（第 1–21 级；`spatial.mode='off'`）｜[params](engine/params.md)（完整参数快照）｜[scenes](engine/scenes.md)（12 个内置场景与分享串）
+- 引擎规格：[engine-chain](engine/chain.md)（第 1–21 级；`spatial.mode='off'`）｜[param-scan](engine/param-scan.md)（Phase 4 固定种子 40 case）｜[params](engine/params.md)（完整参数快照）｜[scenes](engine/scenes.md)（12 个内置场景与分享串）
+- 空间规格：[world-listener](spatial/world-listener.md)（14 个完整姿态几何 case）｜[renderer-abi](spatial/renderer-abi.md)（14 个 nearest/model/time renderer case；spherical 与非零 room 不做伪对拍）｜[stage22](spatial/stage22.md)（Rust world/stage 参数投影与实时语义）
+- 空间 Schema：[world-listener](schema/world-listener.schema.json)｜[renderer-abi](schema/spatial-renderer-abi.schema.json)
 - 服务层·控制面契约：[service/control-plane.md](service/control-plane.md)
 - 服务层·推流协议设计：[service/push-stream.md](service/push-stream.md)

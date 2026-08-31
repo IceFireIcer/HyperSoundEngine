@@ -298,11 +298,25 @@ fn 会话帧按帧头路由_互不串扰_关闭即断流() {
     push_constant(&s.engine, a, 0.25, 3, &mut seq);
     assert_eq!(s.engine.sessions().queued_frames(a), Some(192));
     assert_eq!(s.engine.sessions().queued_frames(b), Some(0));
+    assert_eq!(
+        s.engine.get_state()["sessions"],
+        json!([
+            {"sessionId": a, "queuedFrames": 192, "ingestedFrames": 192, "consumedFrames": 0},
+            {"sessionId": b, "queuedFrames": 0, "ingestedFrames": 0, "consumedFrames": 0}
+        ])
+    );
     // 混合前级只产出 A 的内容
     let mut mix = vec![0.0_f32; 128];
     let total = s.engine.sessions().drain_and_mix(&mut mix, 0, 64);
     assert_eq!(total, 64);
     assert!(mix.iter().all(|&x| x == 0.25));
+    assert_eq!(
+        s.engine.get_state()["sessions"],
+        json!([
+            {"sessionId": a, "queuedFrames": 128, "ingestedFrames": 192, "consumedFrames": 64},
+            {"sessionId": b, "queuedFrames": 0, "ingestedFrames": 0, "consumedFrames": 0}
+        ])
+    );
 
     // GWT-PS-03：closeSession 即时生效——未消费块丢弃，后续帧按未知会话静默丢弃
     assert_eq!(
@@ -550,6 +564,67 @@ fn ws端到端_文本控制_二进制推流_断线自动清理_分流正交() {
         json!({"sampleRate": 48_000u64, "channels": 2u16, "format": "f32le"}),
     );
     assert!(resp["result"]["sessionId"].as_u64().unwrap() > sid_b);
+}
+
+#[test]
+fn ws端到端_两条连接各自拥有并独立清理会话() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (tx, rx) = sync_channel::<ServiceEvent>(4096);
+    let factory = FakeFactory::silent_loopback(Duration::ZERO, Duration::ZERO);
+    let engine = Arc::new(EngineHandle::new(
+        Arc::clone(&factory) as Arc<dyn BackendFactory>,
+        tx,
+    ));
+    let clients: server::ClientTable = Arc::new(Mutex::new(Vec::new()));
+
+    {
+        let engine = Arc::clone(&engine);
+        let clients = Arc::clone(&clients);
+        std::thread::spawn(move || server::run_hub(engine, rx, clients));
+    }
+    {
+        let engine = Arc::clone(&engine);
+        let clients = Arc::clone(&clients);
+        std::thread::spawn(move || server::serve(listener, engine, clients));
+    }
+
+    let (mut first, _) = tungstenite::connect(format!("ws://127.0.0.1:{port}/")).unwrap();
+    let (mut second, _) = tungstenite::connect(format!("ws://127.0.0.1:{port}/")).unwrap();
+    rpc_request(
+        &mut first,
+        1,
+        "configure",
+        json!({"mode":"loopback","renderDeviceId":null,"sampleRate":48000,"blockSizeFrames":64}),
+    );
+    let sid_first = rpc_request(
+        &mut first,
+        2,
+        "openSession",
+        json!({"sampleRate":48000,"channels":2,"format":"f32le"}),
+    )["result"]["sessionId"]
+        .as_u64()
+        .unwrap() as u32;
+    let sid_second = rpc_request(
+        &mut second,
+        1,
+        "openSession",
+        json!({"sampleRate":48000,"channels":2,"format":"f32le"}),
+    )["result"]["sessionId"]
+        .as_u64()
+        .unwrap() as u32;
+    assert_ne!(sid_first, sid_second);
+    assert_eq!(engine.sessions().active_ids(), vec![sid_first, sid_second]);
+
+    drop(first);
+    wait_until(
+        || engine.sessions().active_ids() == vec![sid_second],
+        Duration::from_secs(5),
+        "第一条连接断开后只清理自己的会话",
+    );
+    let state = rpc_request(&mut second, 2, "getState", json!({}));
+    assert_eq!(state["result"]["sessions"][0]["sessionId"], sid_second);
+    assert_eq!(state["result"]["sessions"].as_array().unwrap().len(), 1);
 }
 
 #[test]

@@ -130,8 +130,8 @@ export class LoudnessComp {
   }
 
   /** 就地处理立体声；6 段 biquad 级联 + 逐块增益平滑 */
-  processStereo(l: Float32Array, r: Float32Array): void {
-    const B = Math.min(l.length, r.length)
+  processStereo(l: Float32Array, r: Float32Array, frameCount?: number): void {
+    const B = Math.max(0, Math.min(Math.floor(frameCount ?? l.length), l.length, r.length))
     // 逐块平滑增益（一阶低通，时间常数 smoothingSeconds）
     const alpha = 1 - Math.exp(-B / (this.smoothingSeconds * this.fs))
     for (let i = 0; i < MAX_BANDS; i++) {

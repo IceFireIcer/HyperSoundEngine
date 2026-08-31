@@ -22,6 +22,7 @@ hse-core = { path = "../crates/hse-core" }
 # Phase 4 全链基准：驱动引擎服务实际装配的 ServiceEngineChain（纯 DSP 结构体，
 # 不触碰 WASAPI 后端 / 音频设备）。
 hse-service = { path = "../crates/hse-service" }
+rtrb = "0.3"
 serde_json.workspace = true
 
 [dev-dependencies]
@@ -103,4 +104,20 @@ harness = false
 
 [[bench]]
 name = "bench_chain_full"
+harness = false
+
+[[bench]]
+name = "bench_hse_stretch"
+harness = false
+
+[[bench]]
+name = "bench_lufs_meter"
+harness = false
+
+[[bench]]
+name = "bench_engine_param_domain"
+harness = false
+
+[[bench]]
+name = "bench_service_path"
 harness = false

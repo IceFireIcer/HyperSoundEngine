@@ -33,11 +33,12 @@ export class MidSide {
   }
 
   /** 就地 M/S 编解码：输入立体声，输出处理后的立体声（M/S 域增益 → 反变换） */
-  processStereo(l: Float32Array, r: Float32Array): void {
+  processStereo(l: Float32Array, r: Float32Array, frameCount?: number): void {
     if (l.length !== r.length) throw new Error('midside: L/R length mismatch')
+    const n = Math.max(0, Math.min(Math.floor(frameCount ?? l.length), l.length, r.length))
     const mg = this.midGain
     const sg = this.sideGain
-    for (let i = 0; i < l.length; i++) {
+    for (let i = 0; i < n; i++) {
       const li = l[i]
       const ri = r[i]
       const m = (li + ri) * 0.5 // 中信号（双精度：相加除 2 无舍入）

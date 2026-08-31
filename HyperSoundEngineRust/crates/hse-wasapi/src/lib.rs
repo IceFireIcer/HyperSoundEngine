@@ -1,6 +1,6 @@
 //! hse-wasapi —— HyperSoundEngine 的 Windows 音频后端封装。
 //!
-//! 职责（规划书 §2.2）：共享模式渲染 + 输出设备 loopback 捕获 + 输入设备直捕。
+//! 职责（规划书 §2.2）：共享/独占模式渲染 + 输出设备 loopback 捕获 + 输入设备直捕。
 //! 实时路径纪律：数据面只经预分配环形缓冲与本 crate 的流对象，不加锁、不分配
 //! （调用方预先给足缓冲）。
 //!
@@ -32,7 +32,15 @@ pub struct DeviceInfo {
     pub is_default: bool,
 }
 
-/// 协商后的流格式（Phase 2 固定立体声 f32 共享模式）。
+/// WASAPI 端点访问模式。
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum AccessMode {
+    #[default]
+    Shared,
+    Exclusive,
+}
+
+/// 协商后的流格式（固定立体声 f32）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StreamFormat {
     pub sample_rate: u32,
@@ -46,6 +54,8 @@ pub struct OpenOptions {
     pub sample_rate: u32,
     /// 期望的每块帧数（事件驱动轮询周期）。
     pub block_size_frames: u32,
+    /// 共享模式保持历史协商与自动转换行为；独占模式要求目标格式原生支持。
+    pub access_mode: AccessMode,
 }
 
 /// 后端错误。
@@ -144,6 +154,7 @@ mod tests {
             device_id: None,
             sample_rate: 48_000,
             block_size_frames: 480,
+            access_mode: AccessMode::Shared,
         }
     }
 

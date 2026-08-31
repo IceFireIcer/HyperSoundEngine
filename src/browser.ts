@@ -13,6 +13,7 @@ export { HyperSoundEngineHost, createHyperSoundEngineHost } from './integration/
 export type {
   HyperSoundEngineHostHandle,
   HyperSoundEngineHostMode,
+  HyperSoundEngineBackend,
   HyperSoundEngineHostOptions,
   HyperSoundEngineAudioContextLike,
   HyperSoundEngineAudioNodeLike,

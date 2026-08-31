@@ -32,7 +32,11 @@ fn resolve_port(args: impl Iterator<Item = String>) -> Option<u16> {
 
 fn main() {
     let port = resolve_port(std::env::args().skip(1))
-        .or_else(|| std::env::var("HSE_SERVICE_PORT").ok().and_then(|v| v.parse::<u16>().ok()))
+        .or_else(|| {
+            std::env::var("HSE_SERVICE_PORT")
+                .ok()
+                .and_then(|v| v.parse::<u16>().ok())
+        })
         .unwrap_or(DEFAULT_PORT);
 
     let listener = match TcpListener::bind(("127.0.0.1", port)) {
@@ -73,9 +77,18 @@ mod tests {
 
     #[test]
     fn 端口解析_参数与环境缺省() {
-        assert_eq!(resolve_port(["--port".to_string(), "5000".to_string()].into_iter()), Some(5000));
-        assert_eq!(resolve_port(["--port=5001".to_string()].into_iter()), Some(5001));
+        assert_eq!(
+            resolve_port(["--port".to_string(), "5000".to_string()].into_iter()),
+            Some(5000)
+        );
+        assert_eq!(
+            resolve_port(["--port=5001".to_string()].into_iter()),
+            Some(5001)
+        );
         assert_eq!(resolve_port(Vec::<String>::new().into_iter()), None);
-        assert_eq!(resolve_port(["--port".to_string(), "abc".to_string()].into_iter()), None);
+        assert_eq!(
+            resolve_port(["--port".to_string(), "abc".to_string()].into_iter()),
+            None
+        );
     }
 }

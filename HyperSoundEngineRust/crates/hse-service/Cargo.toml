@@ -7,6 +7,7 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 publish = false
+default-run = "hse-service"
 
 [lib]
 name = "hse_service"
@@ -20,7 +21,12 @@ path = "src/main.rs"
 name = "hse-cli"
 path = "src/bin/hse_cli.rs"
 
+[[bin]]
+name = "hse-real-audio-check"
+path = "src/bin/hse_real_audio_check.rs"
+
 [dependencies]
+hrtf-core = { path = "../hrtf-core" }
 hse-core = { path = "../hse-core" }
 hse-wasapi = { path = "../hse-wasapi" }
 serde_json = { workspace = true }
@@ -28,3 +34,6 @@ serde_json = { workspace = true }
 rtrb = "0.3"
 # 同步 WebSocket（控制面 localhost JSON-RPC；默认特性仅握手，不引 TLS 栈）
 tungstenite = "0.24"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading"] }

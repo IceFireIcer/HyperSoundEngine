@@ -142,3 +142,34 @@ export function headLockedSpeakers(p: HeadLockedSettings): VirtualSpeakerCfg[] {
   if (p.speakers.length === 0) return createLayoutSpeakers('51')
   return p.speakers
 }
+
+/**
+ * Web Audio 离散声道顺序的 3–8 路输入布局：L, R, C, LFE, SL, SR, BL, BR。
+ * LFE 保留路由槽但增益为 0，不参与 HRTF；返回数组只在参数控制路径创建。
+ */
+export function multichannelSpeakers(channelCount: number): Array<VirtualSpeakerCfg & { channel: number }> {
+  const count = Math.min(8, Math.max(3, Math.floor(channelCount)))
+  const directions = [
+    { azimuthDeg: -30, gain: 1 },
+    { azimuthDeg: 30, gain: 1 },
+    { azimuthDeg: 0, gain: 1 },
+    { azimuthDeg: 0, gain: 0 },
+    { azimuthDeg: -110, gain: 1 },
+    { azimuthDeg: 110, gain: 1 },
+    { azimuthDeg: -150, gain: 1 },
+    { azimuthDeg: 150, gain: 1 },
+  ]
+  const speakers: Array<VirtualSpeakerCfg & { channel: number }> = []
+  for (let channel = 0; channel < count; channel++) {
+    const direction = directions[channel]
+    speakers.push({
+      channel,
+      azimuthDeg: direction.azimuthDeg,
+      elevationDeg: 0,
+      distance: 1.5,
+      gain: direction.gain,
+      size: 0,
+    })
+  }
+  return speakers
+}

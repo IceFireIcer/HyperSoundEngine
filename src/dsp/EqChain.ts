@@ -158,23 +158,25 @@ export class EqChain {
     return y
   }
 
-  processBlock(input: Float32Array, output: Float32Array): void {
+  processBlock(input: Float32Array, output: Float32Array, frameCount?: number): void {
     if (input.length !== output.length) throw new Error('eqchain: input/output length mismatch')
+    const n = Math.max(0, Math.min(Math.floor(frameCount ?? input.length), input.length, output.length))
     if (input === output) {
       // 就地链式处理：每个 biquad 直接读写同一缓冲
-      for (let i = 0; i < this.bandCount; i++) this.biquads[i].processBlock(input, input)
+      for (let i = 0; i < this.bandCount; i++) this.biquads[i].processBlock(input, input, n)
       return
     }
     // 分离缓冲：第一段 input→output，后续段 output→output
-    this.biquads[0].processBlock(input, output)
-    for (let i = 1; i < this.bandCount; i++) this.biquads[i].processBlock(output, output)
+    this.biquads[0].processBlock(input, output, n)
+    for (let i = 1; i < this.bandCount; i++) this.biquads[i].processBlock(output, output, n)
   }
 
   /** 就地处理立体声（左右声道共享同一滤波器状态） */
-  processStereo(l: Float32Array, r: Float32Array): void {
+  processStereo(l: Float32Array, r: Float32Array, frameCount?: number): void {
     if (l.length !== r.length) throw new Error('eqchain: L/R length mismatch')
-    this.processBlock(l, l)
-    this.processBlock(r, r)
+    const n = Math.max(0, Math.min(Math.floor(frameCount ?? l.length), l.length, r.length))
+    this.processBlock(l, l, n)
+    this.processBlock(r, r, n)
   }
 
   reset(): void {

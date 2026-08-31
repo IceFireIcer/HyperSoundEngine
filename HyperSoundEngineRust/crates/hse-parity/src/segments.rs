@@ -160,7 +160,10 @@ mod tests {
     fn 特殊位型往返一致() {
         // 用位型而非数值构造，覆盖负零与最小次正规数。
         let bit_patterns: [u32; 3] = [0x8000_0000, 0x0000_0001, 0x7F7F_FFFF];
-        let values: Vec<f32> = bit_patterns.iter().map(|bits| f32::from_bits(*bits)).collect();
+        let values: Vec<f32> = bit_patterns
+            .iter()
+            .map(|bits| f32::from_bits(*bits))
+            .collect();
         let decoded = decode_f32_le(&encode_f32_le(&values)).unwrap();
         assert_eq!(decoded.len(), 3);
         for (got, want) in decoded.iter().zip(values.iter()) {

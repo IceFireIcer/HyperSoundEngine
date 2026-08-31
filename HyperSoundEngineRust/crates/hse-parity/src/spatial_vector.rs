@@ -15,6 +15,8 @@ pub struct Vec3 {
 pub struct Listener {
     pub position: Vec3,
     pub yaw: f64,
+    pub pitch: f64,
+    pub roll: f64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -67,9 +69,9 @@ pub fn load_fixture(path: &Path) -> Result<SpatialFixture, String> {
     let angle_abs = finite_positive(&root["tolerance"]["angleAbs"], "tolerance.angleAbs")?;
     let distance_abs = finite_positive(&root["tolerance"]["distanceAbs"], "tolerance.distanceAbs")?;
     let case_values = root["cases"].as_array().ok_or("cases 必须是数组")?;
-    if case_values.len() != 12 {
+    if case_values.len() != 14 {
         return Err(format!(
-            "world-listener 夹具必须包含 12 个 case，实际为 {}",
+            "world-listener 夹具必须包含 14 个 case，实际为 {}",
             case_values.len()
         ));
     }
@@ -89,7 +91,12 @@ pub fn load_fixture(path: &Path) -> Result<SpatialFixture, String> {
             return Err(format!("case id 重复：{id}"));
         }
         let listener_value = object(&value["listener"], "listener")?;
-        exact_keys(listener_value, &["position", "yaw"], "listener")?;
+        exact_optional_keys(
+            listener_value,
+            &["position", "yaw"],
+            &["pitch", "roll"],
+            "listener",
+        )?;
         let expected_value = object(&value["expected"], "expected")?;
         exact_keys(
             expected_value,
@@ -112,6 +119,8 @@ pub fn load_fixture(path: &Path) -> Result<SpatialFixture, String> {
             listener: Listener {
                 position: vec3(&value["listener"]["position"], "listener.position")?,
                 yaw: finite(&value["listener"]["yaw"], "listener.yaw")?,
+                pitch: optional_finite(listener_value, "pitch", "listener.pitch")?,
+                roll: optional_finite(listener_value, "roll", "listener.roll")?,
             },
             source: vec3(&value["source"], "source")?,
             expected,
@@ -170,6 +179,37 @@ fn object<'a>(value: &'a Value, label: &str) -> Result<&'a serde_json::Map<Strin
     value
         .as_object()
         .ok_or_else(|| format!("{label} 必须是对象"))
+}
+
+fn exact_optional_keys(
+    object: &serde_json::Map<String, Value>,
+    required: &[&str],
+    optional: &[&str],
+    label: &str,
+) -> Result<(), String> {
+    let allowed: HashSet<&str> = required.iter().chain(optional).copied().collect();
+    for key in object.keys() {
+        if !allowed.contains(key.as_str()) {
+            return Err(format!("{label} 包含未知字段：{key}"));
+        }
+    }
+    for key in required {
+        if !object.contains_key(*key) {
+            return Err(format!("{label} 缺少字段：{key}"));
+        }
+    }
+    Ok(())
+}
+
+fn optional_finite(
+    object: &serde_json::Map<String, Value>,
+    key: &str,
+    label: &str,
+) -> Result<f64, String> {
+    match object.get(key) {
+        Some(value) => finite(value, label),
+        None => Ok(0.0),
+    }
 }
 
 fn exact_keys(
@@ -232,7 +272,7 @@ mod tests {
             "source": { "x": 0, "y": 0, "z": 1 },
             "expected": { "azimuthDeg": 0, "elevationDeg": 0, "distance": 1 }
         });
-        let cases: Vec<Value> = (0..12)
+        let cases: Vec<Value> = (0..14)
             .map(|index| {
                 let mut case = template.clone();
                 case["id"] = Value::from(format!("case-{index}"));
@@ -267,7 +307,7 @@ mod tests {
     #[test]
     fn 合法夹具完整解析() {
         let fixture = load_value(&valid_fixture()).unwrap();
-        assert_eq!(fixture.cases.len(), 12);
+        assert_eq!(fixture.cases.len(), 14);
         assert_eq!(fixture.cases[0].id, "case-0");
     }
 
@@ -288,7 +328,7 @@ mod tests {
         empty["cases"] = serde_json::json!([]);
         assert!(load_value(&empty)
             .unwrap_err()
-            .contains("必须包含 12 个 case"));
+            .contains("必须包含 14 个 case"));
     }
 
     #[test]

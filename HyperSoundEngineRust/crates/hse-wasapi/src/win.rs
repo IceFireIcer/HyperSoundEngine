@@ -20,7 +20,7 @@
 //! 不受 DSP 线程零系统调用铁律约束）；但热路径仍遵守零分配零 panic——工作缓冲
 //! 在 `open` 时按设备缓冲帧数一次性预分配，读写循环只使用既有切片。
 
-use crate::{BackendError, DeviceInfo, DeviceKind, OpenOptions, StreamFormat};
+use crate::{AccessMode, BackendError, DeviceInfo, DeviceKind, OpenOptions, StreamFormat};
 use wasapi::{
     calculate_period_100ns, initialize_mta, AudioCaptureClient, AudioClient, AudioRenderClient,
     DeviceEnumerator, Direction, Handle, SampleType, ShareMode, StreamMode, WasapiError,
@@ -151,41 +151,73 @@ fn open_endpoint(opts: &OpenOptions, mode: EndpointMode) -> Result<OpenedEndpoin
                 BackendError::DeviceNotFound(format!("默认 {device_direction} 端点不可用：{e}"))
             })?,
     };
-    let mut audio_client = to_backend(device.get_iaudioclient(), "获取 AudioClient 失败")?;
-
-    let (mut wave, fallback_wave, mut autoconvert) =
-        negotiate_format(&audio_client, opts.sample_rate);
-
-    // 缓冲时长：请求块长换算为 100ns 周期作为下限，且不低于设备默认周期的两倍，
-    // 给 push 的阻塞等待留出节流余量。
-    let (default_period, _) = to_backend(audio_client.get_device_period(), "获取设备周期失败")?;
-    let wanted_hns = calculate_period_100ns(
-        opts.block_size_frames.max(1) as i64,
-        i64::from(wave.get_samplespersec()),
-    );
-    let buffer_duration_hns = wanted_hns.max(default_period * 2);
-
-    // 渲染设备按 Capture 初始化时，wasapi crate 自动附加 LOOPBACK 标志；捕获设备
-    // 按 Capture 初始化则是普通直捕。
     let stream_direction = mode.stream_direction();
-    let init_once =
-        |ac: &mut AudioClient, fmt: &WaveFormat, convert: bool| -> Result<(), BackendError> {
-            let mode = StreamMode::EventsShared {
-                autoconvert: convert,
-                buffer_duration_hns,
-            };
-            to_backend(
-                ac.initialize_client(fmt, &stream_direction, &mode),
-                "初始化音频流失败",
-            )
-        };
-    if init_once(&mut audio_client, &wave, autoconvert).is_err() && !autoconvert {
-        // 显式协商结果被引擎拒绝：以目标格式 + 自动转换兜底重试一次。
-        autoconvert = true;
-        wave = fallback_wave;
-        init_once(&mut audio_client, &wave, autoconvert)
-            .map_err(|_| BackendError::Format("立体声 f32 共享模式无法在该端点打开".into()))?;
+    if mode == EndpointMode::Loopback && opts.access_mode == AccessMode::Exclusive {
+        return Err(BackendError::Format(
+            "loopback 不支持 WASAPI 独占模式".into(),
+        ));
     }
+    let mut audio_client = to_backend(device.get_iaudioclient(), "获取 AudioClient 失败")?;
+    let wave = match opts.access_mode {
+        AccessMode::Shared => {
+            let (mut wave, fallback_wave, mut autoconvert) =
+                negotiate_format(&audio_client, opts.sample_rate);
+
+            // 共享模式沿用历史策略：块长是缓冲时长下限，设备引擎决定实际周期。
+            let (default_period, _) =
+                to_backend(audio_client.get_device_period(), "获取设备周期失败")?;
+            let wanted_hns = calculate_period_100ns(
+                opts.block_size_frames.max(1) as i64,
+                i64::from(wave.get_samplespersec()),
+            );
+            let buffer_duration_hns = wanted_hns.max(default_period * 2);
+            let init_once = |ac: &mut AudioClient,
+                             fmt: &WaveFormat,
+                             convert: bool|
+             -> Result<(), BackendError> {
+                let stream_mode = StreamMode::EventsShared {
+                    autoconvert: convert,
+                    buffer_duration_hns,
+                };
+                to_backend(
+                    ac.initialize_client(fmt, &stream_direction, &stream_mode),
+                    "初始化音频流失败",
+                )
+            };
+            if init_once(&mut audio_client, &wave, autoconvert).is_err() && !autoconvert {
+                // 显式协商结果被拒绝时，保持既有的目标格式自动转换兜底。
+                autoconvert = true;
+                wave = fallback_wave;
+                init_once(&mut audio_client, &wave, autoconvert).map_err(|_| {
+                    BackendError::Format("立体声 f32 共享模式无法在该端点打开".into())
+                })?;
+            }
+            wave
+        }
+        AccessMode::Exclusive => {
+            let target = target_format(opts.sample_rate);
+            let wave = audio_client
+                .is_supported_exclusive_with_quirks(&target)
+                .map_err(|e| {
+                    BackendError::Format(format!(
+                        "设备不原生支持 {}Hz 立体声 f32 独占格式：{e}",
+                        opts.sample_rate
+                    ))
+                })?;
+            let wanted_hns = calculate_period_100ns(
+                opts.block_size_frames.max(1) as i64,
+                i64::from(wave.get_samplespersec()),
+            );
+            let period_hns = audio_client
+                .calculate_aligned_period_near(wanted_hns, Some(128), &wave)
+                .map_err(|e| BackendError::Format(format!("无法对齐独占模式设备周期：{e}")))?;
+            let stream_mode = StreamMode::EventsExclusive { period_hns };
+            audio_client
+                .initialize_client(&wave, &stream_direction, &stream_mode)
+                .map_err(|e| BackendError::Format(format!("独占模式初始化失败：{e}")))?;
+            wave
+        }
+    };
 
     if wave.get_nchannels() as usize != CHANNELS {
         return Err(BackendError::Format(format!(
@@ -370,6 +402,8 @@ impl Drop for RenderStream {
 struct CaptureStreamImpl {
     audio_client: AudioClient,
     capture_client: AudioCaptureClient,
+    /// 事件驱动流注册的句柄同时用于捕获就绪等待。
+    event_handle: Handle,
     format: StreamFormat,
     /// 设备缓冲总帧数。
     buffer_frames: u32,
@@ -392,6 +426,7 @@ impl CaptureStreamImpl {
             byte_scratch: vec![0u8; opened.buffer_frames as usize * opened.blockalign],
             audio_client: opened.audio_client,
             capture_client,
+            event_handle: opened.event_handle,
             format: opened.format,
             buffer_frames: opened.buffer_frames,
             blockalign: opened.blockalign,
@@ -408,6 +443,20 @@ impl CaptureStreamImpl {
         to_backend(self.audio_client.start_stream(), "启动捕获流失败")?;
         self.started = true;
         Ok(self.format)
+    }
+
+    /// 在 WASAPI 捕获事件上等待数据就绪。超时是正常的“暂无事件”，用于让服务
+    /// 周期性检查停机旗与推流会话；其他等待错误才上升为后端错误。
+    fn wait_ready(&mut self, timeout: std::time::Duration) -> Result<bool, BackendError> {
+        if !self.started {
+            return Err(BackendError::Stream("捕获流未启动".into()));
+        }
+        let timeout_ms = timeout.as_millis().min(u128::from(u32::MAX)) as u32;
+        match self.event_handle.wait_for_event(timeout_ms) {
+            Ok(()) => Ok(true),
+            Err(WasapiError::EventTimeout) => Ok(false),
+            Err(e) => Err(BackendError::Stream(format!("等待捕获事件失败：{e}"))),
+        }
     }
 
     /// 尽力拉取交错立体声 f32 数据：把当前所有就绪包读出填入 `interleaved_out`，
@@ -510,6 +559,13 @@ macro_rules! capture_stream {
 
             pub fn start(&mut self) -> Result<StreamFormat, BackendError> {
                 self.0.start()
+            }
+
+            pub fn wait_ready(
+                &mut self,
+                timeout: std::time::Duration,
+            ) -> Result<bool, BackendError> {
+                self.0.wait_ready(timeout)
             }
 
             pub fn pull(&mut self, interleaved_out: &mut [f32]) -> Result<usize, BackendError> {
@@ -670,6 +726,7 @@ mod tests {
             device_id: None,
             sample_rate,
             block_size_frames: block,
+            access_mode: AccessMode::Shared,
         })
         .expect("打开渲染流失败");
         assert_eq!(render.xruns(), 0, "渲染流 xrun 初始必须为 0");
@@ -681,6 +738,7 @@ mod tests {
             device_id: None,
             sample_rate: render_format.sample_rate,
             block_size_frames: block,
+            access_mode: AccessMode::Shared,
         })
         .expect("打开回环流失败");
         assert_eq!(loopback.xruns(), 0, "回环流 xrun 初始必须为 0");

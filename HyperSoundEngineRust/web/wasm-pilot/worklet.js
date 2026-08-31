@@ -1,4 +1,4 @@
-import initSync, { HseBiquad } from './pkg/hse_wasm.js'
+import initSync, { HseEngine } from './pkg/hse_wasm.js'
 
 const PROCESSOR_NAME = 'hypersoundengine-wasm-pilot'
 
@@ -10,6 +10,8 @@ class HyperSoundEngineWasmPilotProcessor extends AudioWorkletProcessor {
     this.capacity = 0
     this.left = null
     this.right = null
+    this.sidechainLeft = null
+    this.sidechainRight = null
 
     this.port.onmessage = ({ data }) => {
       if (data?.type === 'configure') {
@@ -30,14 +32,7 @@ class HyperSoundEngineWasmPilotProcessor extends AudioWorkletProcessor {
         throw new TypeError('wasm pilot did not export memory')
       }
 
-      this.engine = new HseBiquad(
-        sampleRate,
-        params.type ?? 'peaking',
-        params.f0 ?? 1000,
-        params.q ?? 1,
-        params.gainDb ?? 0,
-        maxFrames,
-      )
+      this.engine = new HseEngine(sampleRate, maxFrames, JSON.stringify(params))
       this.capacity = this.engine.capacity()
       this.refreshViews()
     } catch (error) {
@@ -46,8 +41,16 @@ class HyperSoundEngineWasmPilotProcessor extends AudioWorkletProcessor {
     }
   }
 
-  postError(phase, code, error, requestId) {
-    const message = error instanceof Error ? error.message : String(error)
+  postError(phase, fallbackCode, error, requestId) {
+    let code = fallbackCode
+    let message = error instanceof Error ? error.message : String(error)
+    try {
+      const structured = JSON.parse(message)
+      if (typeof structured?.code === 'string') code = structured.code
+      if (typeof structured?.message === 'string') message = structured.message
+    } catch {
+      // Non-Rust errors retain the worklet-level fallback code and message.
+    }
     try {
       this.port.postMessage({ type: 'error', phase, code, message, ...(requestId ? { requestId } : {}) })
     } catch {
@@ -65,7 +68,7 @@ class HyperSoundEngineWasmPilotProcessor extends AudioWorkletProcessor {
       return
     }
     try {
-      this.engine.configure(params.type, params.f0, params.q, params.gainDb)
+      this.engine.configure(JSON.stringify(params))
       this.port.postMessage({ type: 'configured', requestId })
     } catch (error) {
       this.postError('configure', 'configure-failed', error, requestId)
@@ -84,6 +87,16 @@ class HyperSoundEngineWasmPilotProcessor extends AudioWorkletProcessor {
   refreshViews() {
     this.left = new Float32Array(this.memory.buffer, this.engine.left_ptr(), this.capacity)
     this.right = new Float32Array(this.memory.buffer, this.engine.right_ptr(), this.capacity)
+    this.sidechainLeft = new Float32Array(
+      this.memory.buffer,
+      this.engine.sidechain_left_ptr(),
+      this.capacity,
+    )
+    this.sidechainRight = new Float32Array(
+      this.memory.buffer,
+      this.engine.sidechain_right_ptr(),
+      this.capacity,
+    )
   }
 
   process(inputs, outputs) {
@@ -104,9 +117,14 @@ class HyperSoundEngineWasmPilotProcessor extends AudioWorkletProcessor {
       const input = inputs[0]
       const inputLeft = input?.[0]
       const inputRight = input?.[1] ?? inputLeft
+      const sidechain = inputs[1]
+      const sidechainLeft = sidechain?.[0]
+      const sidechainRight = sidechain?.[1] ?? sidechainLeft
       for (let i = 0; i < frames; i++) {
         this.left[i] = inputLeft ? inputLeft[i] : 0
         this.right[i] = inputRight ? inputRight[i] : 0
+        this.sidechainLeft[i] = sidechainLeft ? sidechainLeft[i] : this.left[i]
+        this.sidechainRight[i] = sidechainRight ? sidechainRight[i] : this.right[i]
       }
 
       this.engine.process(frames)

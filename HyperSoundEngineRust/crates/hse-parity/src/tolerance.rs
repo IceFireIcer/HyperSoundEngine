@@ -153,7 +153,10 @@ mod tests {
     #[test]
     fn 哨兵_正负无穷_按同号等值判定() {
         assert!(ReadingWant::PositiveInfinity.matches(f64::INFINITY, 0.0));
-        assert!(!ReadingWant::PositiveInfinity.matches(f64::NEG_INFINITY, 0.0), "错号无穷大必须失配");
+        assert!(
+            !ReadingWant::PositiveInfinity.matches(f64::NEG_INFINITY, 0.0),
+            "错号无穷大必须失配"
+        );
         assert!(!ReadingWant::PositiveInfinity.matches(f64::NAN, 0.0));
         assert!(!ReadingWant::PositiveInfinity.matches(1.0, 0.0));
         assert!(ReadingWant::NegativeInfinity.matches(f64::NEG_INFINITY, 0.0));

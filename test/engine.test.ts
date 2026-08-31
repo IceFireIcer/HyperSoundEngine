@@ -13,6 +13,7 @@ import { HyperSoundEngine } from '../src/engine/HyperSoundEngine'
 import { SCENE_PRESETS } from '../src/engine/ScenePresets'
 import { createDefaultParams, PRO_EQ_DEFAULT_BANDS } from '../src/types'
 import type { HyperSoundEngineParams } from '../src/types'
+import { Compressor } from '../src/dsp/Compressor'
 
 /** 确定性伪随机序列（LCG，避免 Math.random） */
 function lcg(seed: number, n: number): Float32Array {
@@ -26,6 +27,155 @@ function lcg(seed: number, n: number): Float32Array {
 }
 
 describe('HyperSoundEngine 链确定性', () => {
+  it('prepare 容量不改变连续小块处理结果', () => {
+    const prepared = new HyperSoundEngine(48000)
+    const natural = new HyperSoundEngine(48000)
+    const params = createDefaultParams(48000)
+    params.eq.enabled = true
+    params.eq.simpleBands[2] = 3
+    params.deesser.enabled = true
+    params.deesser.sidechainEnabled = true
+    params.compressor.enabled = true
+    params.compressor.sidechainEnabled = true
+    params.nightMode.enabled = true
+    params.nightMode.amount = 4
+    params.modEffects.delay.enabled = true
+    params.modEffects.chorus.enabled = true
+    params.modEffects.flanger.enabled = true
+    params.modEffects.phaser.enabled = true
+    params.modEffects.tremolo.enabled = true
+    params.reverb.enabled = true
+    params.reverb.mode = 'algorithmic'
+    params.bassEnhancer.enabled = true
+    params.loudnessCompensation.enabled = true
+    params.ieq.enabled = true
+    params.dynamicEq.enabled = true
+    params.modulation.enabled = true
+    prepared.setParams(params)
+    natural.setParams(params)
+    prepared.prepare(4096)
+
+    for (let block = 0; block < 8; block++) {
+      const l = lcg(100 + block, 128)
+      const r = lcg(200 + block, 128)
+      const sideL = lcg(300 + block, 128)
+      const sideR = lcg(400 + block, 128)
+      const preparedL = new Float32Array(128)
+      const preparedR = new Float32Array(128)
+      const naturalL = new Float32Array(128)
+      const naturalR = new Float32Array(128)
+      prepared.process([l, r], [preparedL, preparedR], [sideL, sideR])
+      natural.process([l, r], [naturalL, naturalR], [sideL, sideR])
+      expect(preparedL).toEqual(naturalL)
+      expect(preparedR).toEqual(naturalR)
+    }
+  })
+
+  it('prepare 后重建短 IR 卷积器仍支持最大块且输出有限', () => {
+    const engine = new HyperSoundEngine(48000)
+    engine.prepare(4096)
+    const params = createDefaultParams(48000)
+    params.eq.enabled = false
+    params.limiter.enabled = false
+    params.reverb.enabled = true
+    params.reverb.mode = 'convolution'
+    params.reverb.convolution.ir = new Float32Array([1, 0.5, 0.25])
+    params.reverb.convolution.dePeriodize = false
+    engine.setParams(params)
+
+    const input = lcg(777, 4096)
+    const outL = new Float32Array(4096)
+    const outR = new Float32Array(4096)
+    expect(() => engine.process([input, input], [outL, outR])).not.toThrow()
+    expect(outL.every(Number.isFinite)).toBe(true)
+    expect(outR.every(Number.isFinite)).toBe(true)
+  })
+
+  it('legacy padded-tail 兼容仅影响短尾块', () => {
+    const current = new HyperSoundEngine(48000)
+    const legacy = new HyperSoundEngine(48000, 2, { legacyPaddedTail: true })
+    const params = createDefaultParams(48000)
+    params.eq.enabled = false
+    params.modEffects.tremolo.enabled = true
+    params.modEffects.tremolo.rateHz = 7
+    params.modEffects.tremolo.depth = 0.8
+    params.modEffects.tremolo.mix = 1
+    params.limiter.enabled = false
+    current.setParams(params)
+    legacy.setParams(params)
+    current.prepare(128)
+    legacy.prepare(128)
+
+    const fullL = lcg(501, 128)
+    const fullR = lcg(502, 128)
+    const fullCurrentL = new Float32Array(128)
+    const fullCurrentR = new Float32Array(128)
+    const fullLegacyL = new Float32Array(128)
+    const fullLegacyR = new Float32Array(128)
+    current.process([fullL, fullR], [fullCurrentL, fullCurrentR])
+    legacy.process([fullL, fullR], [fullLegacyL, fullLegacyR])
+    expect(fullLegacyL).toEqual(fullCurrentL)
+    expect(fullLegacyR).toEqual(fullCurrentR)
+
+    const tailL = lcg(503, 7)
+    const tailR = lcg(504, 7)
+    const tailCurrentL = new Float32Array(7)
+    const tailCurrentR = new Float32Array(7)
+    const tailLegacyL = new Float32Array(7)
+    const tailLegacyR = new Float32Array(7)
+    current.process([tailL, tailR], [tailCurrentL, tailCurrentR])
+    legacy.process([tailL, tailR], [tailLegacyL, tailLegacyR])
+    expect(tailLegacyL).toEqual(tailCurrentL)
+    expect(tailLegacyR).toEqual(tailCurrentR)
+
+    const afterL = lcg(505, 128)
+    const afterR = lcg(506, 128)
+    const afterCurrentL = new Float32Array(128)
+    const afterCurrentR = new Float32Array(128)
+    const afterLegacyL = new Float32Array(128)
+    const afterLegacyR = new Float32Array(128)
+    current.process([afterL, afterR], [afterCurrentL, afterCurrentR])
+    legacy.process([afterL, afterR], [afterLegacyL, afterLegacyR])
+    expect([...afterLegacyL, ...afterLegacyR]).not.toEqual([...afterCurrentL, ...afterCurrentR])
+  })
+
+  it('DSP frameCount 仅处理前 n 帧且不推进尾部状态', () => {
+    const params = {
+      enabled: true,
+      thresholdDb: -30,
+      ratio: 8,
+      kneeDb: 6,
+      attackMs: 1,
+      releaseMs: 100,
+      makeupDb: 0,
+      outputGain: 1,
+    }
+    const limited = new Compressor(48000)
+    const reference = new Compressor(48000)
+    limited.setParams(params)
+    reference.setParams(params)
+
+    const l = new Float32Array(16).fill(0.9)
+    const r = new Float32Array(16).fill(-0.8)
+    l.fill(123, 4)
+    r.fill(-123, 4)
+    limited.processStereo(l, r, undefined, undefined, 4)
+    expect(Array.from(l.slice(4))).toEqual(new Array(12).fill(123))
+    expect(Array.from(r.slice(4))).toEqual(new Array(12).fill(-123))
+
+    const refL = new Float32Array(4).fill(0.9)
+    const refR = new Float32Array(4).fill(-0.8)
+    reference.processStereo(refL, refR)
+    const nextL = new Float32Array(8).fill(0.5)
+    const nextR = new Float32Array(8).fill(-0.4)
+    const nextRefL = new Float32Array(nextL)
+    const nextRefR = new Float32Array(nextR)
+    limited.processStereo(nextL, nextR)
+    reference.processStereo(nextRefL, nextRefR)
+    expect(nextL).toEqual(nextRefL)
+    expect(nextR).toEqual(nextRefR)
+  })
+
   it('零输入产生零输出', () => {
     const engine = new HyperSoundEngine(48000)
     const z1 = new Float32Array(128)
@@ -78,6 +228,122 @@ describe('HyperSoundEngine 链确定性', () => {
     for (let i = 0; i < n; i++) {
       expect(Math.abs(o1[i])).toBeLessThan(1e-6)
     }
+  })
+})
+
+describe('HyperSoundEngine 多声道实时输入', () => {
+  function spatialParams(): HyperSoundEngineParams {
+    const params = createDefaultParams(48000)
+    params.eq.enabled = false
+    params.deesser.enabled = false
+    params.compressor.enabled = false
+    params.nightMode.enabled = false
+    params.reverb.enabled = false
+    params.bassEnhancer.enabled = false
+    params.loudnessCompensation.enabled = false
+    params.dynamicEq.enabled = false
+    params.limiter.enabled = false
+    params.modulation.enabled = false
+    params.stereoWidth = 1
+    const spatial = params.spatial!
+    spatial.mode = 'instant'
+    spatial.instant.multichannelAuto = true
+    spatial.instant.amount = 1
+    spatial.instant.room = 'off'
+    spatial.instant.roomAmount = 0
+    spatial.masterGain = 1
+    return params
+  }
+
+  function renderIsolated(channelCount: 6 | 8, activeChannel: number): [Float32Array, Float32Array] {
+    const frames = 2048
+    const engine = new HyperSoundEngine(48000, channelCount)
+    engine.setParams(spatialParams())
+    engine.prepare(frames)
+    const inputs = Array.from({ length: channelCount }, () => new Float32Array(frames))
+    inputs[activeChannel][0] = 0.5
+    const outputs = [new Float32Array(frames), new Float32Array(frames)]
+    engine.processMulti(inputs, outputs)
+    return [outputs[0], outputs[1]]
+  }
+
+  it('6 路输入逐声道隔离：侧环绕声道进入双耳，其他静音声道不串入', () => {
+    const [left, right] = renderIsolated(6, 4)
+    let energy = 0
+    for (let i = 0; i < left.length; i++) energy += Math.abs(left[i]) + Math.abs(right[i])
+    expect(energy).toBeGreaterThan(1e-5)
+
+    const [silentLeft, silentRight] = renderIsolated(6, 3) // LFE 保留但不做 HRTF 渲染
+    expect(silentLeft.every((sample) => sample === 0)).toBe(true)
+    expect(silentRight.every((sample) => sample === 0)).toBe(true)
+  })
+
+  it('8 路输入逐声道隔离：后右声道进入双耳输出', () => {
+    const [left, right] = renderIsolated(8, 7)
+    let energy = 0
+    for (let i = 0; i < left.length; i++) energy += Math.abs(left[i]) + Math.abs(right[i])
+    expect(energy).toBeGreaterThan(1e-5)
+  })
+
+  it('仅 ch2 输入也经过共享 EQ 与 Limiter，空间求和后输出受最终保护', () => {
+    const frames = 4096
+    const render = (eqEnabled: boolean, limiterEnabled: boolean) => {
+      const engine = new HyperSoundEngine(48000, 6)
+      const params = spatialParams()
+      params.eq.enabled = eqEnabled
+      params.eq.mode = 'simple'
+      params.eq.simpleBands[0] = 12
+      params.limiter.enabled = limiterEnabled
+      params.limiter.thresholdDb = -18
+      params.limiter.lookaheadMs = 1
+      engine.setParams(params)
+      engine.prepare(frames)
+
+      const inputs = Array.from({ length: 6 }, () => new Float32Array(frames))
+      for (let i = 0; i < frames; i++) inputs[2][i] = 0.95 * Math.sin((2 * Math.PI * 31.5 * i) / 48000)
+      const outputs = [new Float32Array(frames), new Float32Array(frames)]
+      engine.processMulti(inputs, outputs)
+      return { outputs, stats: engine.getStats() }
+    }
+
+    const flat = render(false, false)
+    const equalized = render(true, false)
+    expect(equalized.outputs[0]).not.toEqual(flat.outputs[0])
+    expect(equalized.outputs[1]).not.toEqual(flat.outputs[1])
+
+    const limited = render(true, true)
+    expect(limited.stats.limiterReductionDb).toBeLessThan(-0.1)
+    let equalizedPeak = 0
+    let limitedPeak = 0
+    for (const channel of equalized.outputs) {
+      for (const sample of channel) equalizedPeak = Math.max(equalizedPeak, Math.abs(sample))
+    }
+    for (const channel of limited.outputs) {
+      for (const sample of channel) {
+        limitedPeak = Math.max(limitedPeak, Math.abs(sample))
+        expect(Math.abs(sample)).toBeLessThanOrEqual(1)
+      }
+    }
+    expect(limitedPeak).toBeLessThan(equalizedPeak)
+  })
+
+  it('spatial off 与立体声 process 兼容：ch0/ch1 原样参与主链，额外声道忽略', () => {
+    const frames = 256
+    const multi = new HyperSoundEngine(48000, 6)
+    const stereo = new HyperSoundEngine(48000, 2)
+    const params = createDefaultParams(48000)
+    params.spatial!.mode = 'off'
+    multi.setParams(params)
+    stereo.setParams(params)
+    multi.prepare(frames)
+    stereo.prepare(frames)
+    const inputs = Array.from({ length: 6 }, (_, channel) => lcg(900 + channel, frames))
+    const multiOut = [new Float32Array(frames), new Float32Array(frames)]
+    const stereoOut = [new Float32Array(frames), new Float32Array(frames)]
+    multi.processMulti(inputs, multiOut)
+    stereo.process([inputs[0], inputs[1]], stereoOut)
+    expect(multiOut[0]).toEqual(stereoOut[0])
+    expect(multiOut[1]).toEqual(stereoOut[1])
   })
 })
 

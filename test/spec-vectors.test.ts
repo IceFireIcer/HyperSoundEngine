@@ -32,12 +32,14 @@ import { HseStretch } from '../src/dsp/HseStretch'
 import { LufsMeter } from '../src/dsp/LufsMeter'
 import { fft } from '../src/dsp/fft'
 import { HyperSoundEngine } from '../src/engine/HyperSoundEngine'
+import { createEngine } from '../src/engine/factory'
 import { createDefaultParams, type HyperSoundEngineParams, type LimiterSettings, type CompressorSettings, type BassEnhancerSettings, type DeesserSettings, type ModEffectsSettings, type ModulationRoute, type LfoShape } from '../src/types'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const VECTOR_DIR = resolve(fileURLToPath(import.meta.url), '..', '..', 'specs', 'dsp', 'vectors')
+const FRAME_COUNT_VECTOR = resolve(fileURLToPath(import.meta.url), '..', '..', 'specs', 'engine', 'vectors', 'frame-count.v1.json')
 const SUPPORTED_MODULES = ['biquad', 'limiter', 'reverb-simple', 'compressor', 'bass-enhancer', 'mid-side', 'eq-chain', 'fdn-reverb', 'deesser', 'loudness-comp', 'dynamic-eq', 'mod-effects', 'fft', 'convolver', 'modulation-matrix', 'hse-stretch', 'lufs-meter', 'engine-chain'] as const
 
 /** 计量读数条目（specs/dsp/lufs-meter.md §三/§五）：want 为数值或非有限哨兵字符串 */
@@ -73,6 +75,22 @@ interface DiscoveredCase {
   meta: VectorMeta
   /** 原始 f32 字节（小端四段布局） */
   f32Bytes: Uint8Array
+}
+
+interface FrameCountCase {
+  id: string
+  sampleRate: number
+  preparedCapacity: number
+  blockFrames: number[]
+  seeds: number[]
+  params: {
+    tremolo: { rateHz: number; depth: number; mix: number }
+  }
+}
+
+interface FrameCountFixture {
+  schemaVersion: number
+  cases: FrameCountCase[]
 }
 
 /** 扫描向量目录；目录不存在返回空表（由防呆用例显式失败） */
@@ -510,7 +528,7 @@ function instantiate(
     case 'engine-chain': {
       // 真实引擎 1–21 级驱动（specs/engine/chain.md）：默认参数事实源 + overrides 深合并，
       // 一次 setParams 后按向量 blockSize 重放 process；spatial 必须 off，HseStretch 链外。
-      const engine = new HyperSoundEngine(sampleRate, 2)
+      const engine = new HyperSoundEngine(sampleRate, 2, { legacyPaddedTail: true })
       const p = mergeEngineParams(createDefaultParams(sampleRate), (params.overrides ?? {}) as Record<string, unknown>)
       if (!p.spatial || p.spatial.mode !== 'off') throw new Error('engine-chain 必须设置 spatial.mode="off"')
       engine.setParams(p)
@@ -641,6 +659,83 @@ function assertReadingsWithinTolerance(label: string, readings: Record<string, R
 }
 
 const discovered = discoverCases()
+
+function frameCountSignal(seed: number, frames: number): Float32Array {
+  const out = new Float32Array(frames)
+  let state = seed >>> 0
+  for (let i = 0; i < frames; i++) {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0
+    out[i] = (state / 4294967296) * 2 - 1
+  }
+  return out
+}
+
+function loadFrameCountFixture(): FrameCountFixture {
+  if (!existsSync(FRAME_COUNT_VECTOR)) {
+    throw new Error('默认 frameCount 共享夹具缺失：' + FRAME_COUNT_VECTOR)
+  }
+  const fixture = JSON.parse(readFileSync(FRAME_COUNT_VECTOR, 'utf8')) as FrameCountFixture
+  if (fixture.schemaVersion !== 1 || !Array.isArray(fixture.cases) || fixture.cases.length === 0) {
+    throw new Error('默认 frameCount 共享夹具必须是 schemaVersion=1 且包含非空 cases')
+  }
+  for (const testCase of fixture.cases) {
+    if (typeof testCase.id !== 'string' || testCase.id.length === 0) throw new Error('frameCount case.id 必须为非空字符串')
+    if (!Number.isFinite(testCase.sampleRate) || testCase.sampleRate <= 0) throw new Error(testCase.id + ': sampleRate 非法')
+    if (!Number.isInteger(testCase.preparedCapacity) || testCase.preparedCapacity <= 0) throw new Error(testCase.id + ': preparedCapacity 非法')
+    if (!Array.isArray(testCase.blockFrames) || !Array.isArray(testCase.seeds) || testCase.blockFrames.length !== testCase.seeds.length) {
+      throw new Error(testCase.id + ': blockFrames/seeds 必须为等长数组')
+    }
+    if (testCase.blockFrames.length < 2 || !testCase.blockFrames.some((frames) => frames < testCase.preparedCapacity)) {
+      throw new Error(testCase.id + ': 必须包含短于预分配容量的块及后继观察块')
+    }
+    if (testCase.blockFrames.some((frames) => !Number.isInteger(frames) || frames <= 0 || frames > testCase.preparedCapacity)) {
+      throw new Error(testCase.id + ': blockFrames 必须是容量范围内的正整数')
+    }
+    if (testCase.seeds.some((seed) => !Number.isInteger(seed))) throw new Error(testCase.id + ': seeds 必须为整数')
+    const tremolo = testCase.params?.tremolo
+    if (!tremolo || !Number.isFinite(tremolo.rateHz) || !Number.isFinite(tremolo.depth) || !Number.isFinite(tremolo.mix)) {
+      throw new Error(testCase.id + ': tremolo 参数必须为有限数')
+    }
+  }
+  return fixture
+}
+
+describe('默认 createEngine frameCount 共享门禁', () => {
+  it('预分配容量不允许短尾块推进容量尾部状态', () => {
+    const fixture = loadFrameCountFixture()
+    expect(fixture.schemaVersion).toBe(1)
+    expect(fixture.cases.length).toBeGreaterThan(0)
+
+    for (const testCase of fixture.cases) {
+      expect(testCase.blockFrames.length).toBe(testCase.seeds.length)
+      expect(testCase.blockFrames.some((frames) => frames < testCase.preparedCapacity)).toBe(true)
+      const prepared = createEngine(testCase.sampleRate)
+      const natural = createEngine(testCase.sampleRate)
+      const params = createDefaultParams(testCase.sampleRate)
+      params.eq.enabled = false
+      params.limiter.enabled = false
+      params.modEffects.tremolo.enabled = true
+      Object.assign(params.modEffects.tremolo, testCase.params.tremolo)
+      prepared.setParams(params)
+      natural.setParams(params)
+      prepared.prepare(testCase.preparedCapacity)
+
+      for (let block = 0; block < testCase.blockFrames.length; block++) {
+        const frames = testCase.blockFrames[block]
+        expect(frames).toBeGreaterThan(0)
+        expect(frames).toBeLessThanOrEqual(testCase.preparedCapacity)
+        const inL = frameCountSignal(testCase.seeds[block], frames)
+        const inR = frameCountSignal(testCase.seeds[block] ^ 0x9e3779b9, frames)
+        const preparedOut = [new Float32Array(frames), new Float32Array(frames)]
+        const naturalOut = [new Float32Array(frames), new Float32Array(frames)]
+        prepared.process([inL, inR], preparedOut)
+        natural.process([inL, inR], naturalOut)
+        expect(preparedOut[0], testCase.id + ' left block ' + block).toEqual(naturalOut[0])
+        expect(preparedOut[1], testCase.id + ' right block ' + block).toEqual(naturalOut[1])
+      }
+    }
+  })
+})
 
 describe('spec-vectors 对拍门禁（TS 侧）', () => {
   it('向量目录必须存在且至少包含一个 case（防呆：门禁禁止静默空过）', () => {

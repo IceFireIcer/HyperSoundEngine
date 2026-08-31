@@ -16,8 +16,10 @@
  *   - 与 WasmHrtfBackend.getHrir 对拍（同一 KEMAR 网格/模式：nearest 逐位、
  *     spherical ≤ 1e-5——Rust 侧 spatial_get_hrir 与 build_speaker 装载分支同源）。
  */
-import { describe, it, expect } from 'vitest'
-import { TsConvolverBackend, nearestGridIndex, dopplerRate } from '../TsConvolverBackend'
+import { describe, it, expect, vi } from 'vitest'
+import { Convolver } from '../../dsp/Convolver'
+import { TsConvolverBackend, nearestGridIndex, dopplerRate, distanceGain } from '../TsConvolverBackend'
+import { RoomSim } from '../roomSim'
 import type { HrtfGrid, RoomPreset, SpatialRenderConfig, VirtualSpeaker } from '../types'
 
 const FS = 48000
@@ -94,6 +96,90 @@ describe('TsConvolverBackend：直通与延迟', () => {
     expect(b.getLatencySamples()).toBe(PART)
     b.setConfig(makeConfig([]))
     expect(b.getLatencySamples()).toBe(0)
+  })
+})
+
+describe('TsConvolverBackend：prepare 与有效帧数', () => {
+  const speaker: VirtualSpeaker = {
+    channel: 0,
+    azimuthDeg: 0,
+    elevationDeg: 0,
+    distance: 1,
+    gain: 1,
+    size: 0,
+  }
+
+  function configured(): TsConvolverBackend {
+    const backend = new TsConvolverBackend()
+    backend.loadHrtf(deltaGrid())
+    backend.setConfig(makeConfig([speaker]))
+    return backend
+  }
+
+  it('大容量缓冲只推进有效帧且不改写输出尾部', () => {
+    const prepared = configured()
+    prepared.prepare(1024)
+    const exact = configured()
+    const signal = lowFreqSine(128)
+
+    for (let block = 0; block < 6; block++) {
+      const inL = new Float32Array(1024)
+      const inR = new Float32Array(1024)
+      inL.set(signal)
+      inR.set(signal)
+      const outL = new Float32Array(1024)
+      const outR = new Float32Array(1024)
+      outL.fill(7, 128)
+      outR.fill(-7, 128)
+      const wantL = new Float32Array(128)
+      const wantR = new Float32Array(128)
+
+      prepared.processStereo(inL, inR, outL, outR, 128)
+      exact.processStereo(signal, signal, wantL, wantR)
+
+      expect(outL.slice(0, 128)).toEqual(wantL)
+      expect(outR.slice(0, 128)).toEqual(wantR)
+      expect(outL[128]).toBe(7)
+      expect(outR[128]).toBe(-7)
+    }
+  })
+
+  it('方向更新在配置路径预建 IR，渲染路径不再调用 loadIR', () => {
+    const loadIr = vi.spyOn(Convolver.prototype, 'loadIR')
+    try {
+      const backend = configured()
+      backend.prepare(128)
+      const afterInitialConfig = loadIr.mock.calls.length
+      backend.setConfig(makeConfig([{ ...speaker, azimuthDeg: 90 }]))
+      const afterDirectionConfig = loadIr.mock.calls.length
+      expect(afterDirectionConfig).toBeGreaterThan(afterInitialConfig)
+
+      const input = lowFreqSine(128)
+      for (let block = 0; block < 10; block++) {
+        backend.processStereo(
+          input,
+          input,
+          new Float32Array(128),
+          new Float32Array(128),
+          128,
+        )
+      }
+      expect(loadIr.mock.calls.length).toBe(afterDirectionConfig)
+    } finally {
+      loadIr.mockRestore()
+    }
+  })
+
+  it('显式 prepare 后拒绝超过容量的块', () => {
+    const backend = configured()
+    backend.prepare(128)
+    expect(() => backend.processStereo(
+      new Float32Array(256),
+      new Float32Array(256),
+      new Float32Array(256),
+      new Float32Array(256),
+      256,
+    )).toThrow('exceeds prepared capacity')
   })
 })
 
@@ -192,6 +278,16 @@ describe('TsConvolverBackend：0° 单扬声器（delta 网格，inverse d=1.5m�
       expect(Math.abs(outA[i])).toBeLessThan(1e-9)
     }
     expect(outA[PART + 100]).toBeGreaterThan(0)
+  })
+})
+
+describe('TsConvolverBackend：距离衰减', () => {
+  it('linear 模型在 refDistance 内增益钳位为 1', () => {
+    expect(distanceGain('linear', 0, 1, 50)).toBe(1)
+    expect(distanceGain('linear', 0.5, 1, 50)).toBe(1)
+    expect(distanceGain('linear', 1, 1, 50)).toBe(1)
+    expect(distanceGain('linear', 25.5, 1, 50)).toBeCloseTo(0.5, 12)
+    expect(distanceGain('linear', 60, 1, 50)).toBe(0)
   })
 })
 
@@ -402,6 +498,43 @@ describe('TsConvolverBackend：房间模拟（§4.5）', () => {
     return e
   }
 
+  it('每个早期反射 tap 的冲激首非零样本等于声明 delay（含最大 tap）', () => {
+    const room = new RoomSim(FS, [speaker], {
+      width: 5,
+      height: 3,
+      depth: 4,
+      reflectivity: 0.25,
+      earlyOrders: 2,
+      rt60: 0.45,
+    }, 1)
+    const internals = room as unknown as {
+      states: Array<{
+        histL: Float32Array
+        taps: Array<{ delay: number; gain: number }>
+      }>
+      earlyL: Float32Array
+    }
+    const state = internals.states[0]
+    const maximumDelay = Math.max(...state.taps.map((tap) => tap.delay))
+    expect(state.histL.length).toBe(maximumDelay + 1)
+    room.prepare(maximumDelay + 1)
+
+    for (let target = 0; target < state.taps.length; target++) {
+      room.reset()
+      for (let index = 0; index < state.taps.length; index++) {
+        state.taps[index].gain = index === target ? 1 : 0
+      }
+      const input = new Float32Array(maximumDelay + 1)
+      input[0] = 1
+      room.beginBlock(input.length)
+      room.early(0, input, input, input.length)
+      const firstNonZero = internals.earlyL.findIndex((sample) => sample !== 0)
+      expect(firstNonZero, `tap ${target}, delay ${state.taps[target].delay}`).toBe(state.taps[target].delay)
+    }
+
+    expect(state.taps.some((tap) => tap.delay === maximumDelay)).toBe(true)
+  })
+
   it('room=off（或 roomAmount=0）与无房间输出逐位一致（回归：后端旁路，不引入任何算术）', () => {
     const base = render('off', 0)
     // room='off' 但 roomAmount>0：仍全旁路
@@ -450,6 +583,25 @@ describe('TsConvolverBackend：房间模拟（§4.5）', () => {
     const e0 = energy(orders0.outL, 1024, N) + energy(orders0.outR, 1024, N)
     expect(e0).toBeGreaterThan(0)
     expect(e2).toBeGreaterThan(e0)
+  })
+
+  it('roomSizeScale 改变早期反射几何', () => {
+    const renderScale = (roomSizeScale: number): Float32Array => {
+      const b = new TsConvolverBackend()
+      b.loadHrtf(deltaGrid())
+      b.setConfig(makeConfig([speaker], {
+        room: 'studio',
+        roomAmount: 0.5,
+        amount: 1,
+        roomSizeScale,
+      }))
+      const input = new Float32Array(N)
+      input[100] = 1
+      const out = new Float32Array(N)
+      b.processStereo(input, new Float32Array(N), out, new Float32Array(N))
+      return out
+    }
+    expect(maxAbsDiff(renderScale(0.5), renderScale(2))).toBeGreaterThan(1e-4)
   })
 
   it('房间 128 分块与整块输出一致（跨块确定性：历史环/FDN 状态跨块连续）', () => {

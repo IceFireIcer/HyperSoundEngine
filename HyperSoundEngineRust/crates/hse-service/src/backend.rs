@@ -10,6 +10,8 @@
 //! （opener），捕获/渲染线程各自调用 opener.open() 完成开流与启动，句柄
 //! 从不跨线程转移。
 
+use std::time::Duration;
+
 use hse_wasapi::{BackendError, DeviceInfo, OpenOptions, StreamFormat};
 
 /// 回环捕获源（对应 hse_wasapi LoopbackStream 的服务侧视图）。
@@ -20,6 +22,9 @@ use hse_wasapi::{BackendError, DeviceInfo, OpenOptions, StreamFormat};
 pub trait CaptureSource {
     /// 在所属线程上启动流；返回最终协商格式。
     fn start(&mut self) -> Result<StreamFormat, BackendError>;
+    /// 等待捕获端点就绪。返回 false 表示等待窗口内无事件，调用方可借机
+    /// 检查停机旗与推流会话；实现不得把超时当作后端错误。
+    fn wait_ready(&mut self, timeout: Duration) -> Result<bool, BackendError>;
     fn pull(&mut self, interleaved_out: &mut [f32]) -> Result<usize, BackendError>;
     fn stop(&mut self) -> Result<(), BackendError>;
     fn xruns(&self) -> u64;
@@ -58,6 +63,8 @@ pub struct WasapiFactory;
 /// Windows 适配器：开流器在工作线程内构造具体流类型。
 #[cfg(windows)]
 mod adapters {
+    use std::time::Duration;
+
     use super::{CaptureOpener, CaptureSource, RenderOpener, RenderSink};
     use hse_wasapi::win::{CaptureStream, LoopbackStream, RenderStream};
     use hse_wasapi::{BackendError, OpenOptions, StreamFormat};
@@ -65,6 +72,9 @@ mod adapters {
     impl CaptureSource for LoopbackStream {
         fn start(&mut self) -> Result<StreamFormat, BackendError> {
             self.start()
+        }
+        fn wait_ready(&mut self, timeout: Duration) -> Result<bool, BackendError> {
+            self.wait_ready(timeout)
         }
         fn pull(&mut self, out: &mut [f32]) -> Result<usize, BackendError> {
             self.pull(out)
@@ -80,6 +90,9 @@ mod adapters {
     impl CaptureSource for CaptureStream {
         fn start(&mut self) -> Result<StreamFormat, BackendError> {
             self.start()
+        }
+        fn wait_ready(&mut self, timeout: Duration) -> Result<bool, BackendError> {
+            self.wait_ready(timeout)
         }
         fn pull(&mut self, out: &mut [f32]) -> Result<usize, BackendError> {
             self.pull(out)

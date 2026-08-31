@@ -156,8 +156,8 @@ export class ReverbSimple {
    * 热路径：comb/allpass/preDelay 全部内联，字段缓存为局部变量；
    * 运算顺序与内联前逐位一致（数学完全等价）。
    */
-  processStereo(l: Float32Array, r: Float32Array): void {
-    const B = Math.min(l.length, r.length)
+  processStereo(l: Float32Array, r: Float32Array, frameCount?: number): void {
+    const B = Math.max(0, Math.min(Math.floor(frameCount ?? l.length), l.length, r.length))
     // 湿路增益补偿（0.25 = 4 comb 平均）：无补偿时 4 路梳状求和的宽带稳态幅度
     // 可达输入 ~2-3 倍，wet 0.3 + dry 0.7 场景下总峰值超 1 → 削波炸音（用户实测）。
     const WET_GAIN = 0.25

@@ -1,6 +1,6 @@
 [package]
 name = "hse-wasm"
-description = "HyperSoundEngine Rust DSP 的最小 wasm-bindgen 边界试点"
+description = "HyperSoundEngine Rust DSP 的 wasm-bindgen 边界"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,5 +12,7 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+hrtf-core = { path = "../hrtf-core" }
 hse-core = { path = "../hse-core" }
+serde_json = { workspace = true }
 wasm-bindgen = "=0.2.127"

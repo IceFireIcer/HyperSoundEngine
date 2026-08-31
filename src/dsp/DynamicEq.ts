@@ -188,10 +188,10 @@ export class DynamicEq {
    * 每块先以当前(上一块算出的)目标增益逐样本平滑处理,块末由本块能量
    * 更新目标增益 —— 控制延迟一个分析块,增益平滑掩盖块粒度。
    */
-  processStereo(l: Float32Array, r: Float32Array): void {
+  processStereo(l: Float32Array, r: Float32Array, frameCount?: number): void {
     if (l.length !== r.length) throw new Error('dynamiceq: L/R length mismatch')
     if (!this.enabled || this.strength <= 0) return // 硬直通:输出逐样本等于输入
-    const n = l.length
+    const n = Math.max(0, Math.min(Math.floor(frameCount ?? l.length), l.length, r.length))
     const block = this.blockSize
     const attack = this.attackCoef
     const release = this.releaseCoef

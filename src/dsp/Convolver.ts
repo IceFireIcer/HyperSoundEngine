@@ -108,6 +108,8 @@ export class Convolver {
   private completedBlocks = 0
   /** 已输出的样本总数（跨调用累计）：湿路放行的"位置"依据（逐样本，支持任意块长） */
   private totalOut = 0
+  private maxFrames = 0
+  private explicitlyPrepared = false
 
   // ---- 工作缓冲（复用，零分配） ----
   /** 短输入 FFT 工作缓冲（Ns） */
@@ -245,7 +247,7 @@ export class Convolver {
     }
 
     // （重新）分配流式缓冲与工作缓冲
-    const accLen = (PTotal + 2) * Ls
+    const accLen = Math.max((PTotal + 2) * Ls, this.pendingCapacity(Ls))
     this.inputBlockL = new Float32Array(Ls)
     this.inputBlockR = new Float32Array(Ls)
     this.longInL = new Float32Array(this.longPartitionSize)
@@ -274,6 +276,30 @@ export class Convolver {
     this.outAccumL.fill(0)
     this.outAccumR.fill(0)
     this.irLoaded = true
+  }
+
+  prepare(maxFrames: number): void {
+    const frames = Number.isFinite(maxFrames) ? Math.max(0, Math.floor(maxFrames)) : 0
+    this.explicitlyPrepared = frames > 0
+    this.ensurePendingCapacity(frames)
+  }
+
+  private ensurePendingCapacity(frames: number): void {
+    if (frames <= this.maxFrames) return
+    this.maxFrames = frames
+    if (!this.irLoaded) return
+    const capacity = Math.max(this.pendingWetL.length, this.pendingCapacity(this.partitionSize))
+    if (this.pendingWetL.length < capacity) {
+      this.pendingWetL = new Float32Array(capacity)
+      this.pendingWetR = new Float32Array(capacity)
+      this.pendingLen = 0
+      this.pendingPos = 0
+    }
+  }
+
+  private pendingCapacity(partitionSize: number): number {
+    const produced = Math.ceil(Math.max(this.maxFrames, partitionSize) / partitionSize)
+    return Math.max(3, produced + 2) * partitionSize
   }
 
   /** 设置干湿混合 0..1（1=纯湿） */
@@ -383,11 +409,12 @@ export class Convolver {
    * out[i] = (1-mix)·dry[i] + mix·wet[i]；wet 相对 dry 延迟 Ls + preDelay 样本。
    * 未载入 IR 时抛错。
    */
-  processStereo(l: Float32Array, r: Float32Array): void {
+  processStereo(l: Float32Array, r: Float32Array, frameCount?: number): void {
     if (!this.irLoaded) {
       throw new Error('no impulse response loaded')
     }
-    const B = Math.min(l.length, r.length)
+    const B = Math.max(0, Math.min(Math.floor(frameCount ?? l.length), l.length, r.length))
+    if (!this.explicitlyPrepared && B > this.maxFrames) this.ensurePendingCapacity(B)
     const Ls = this.partitionSize
     const dryGain = 1 - this.mix
     const wetGain = this.mix
@@ -413,13 +440,10 @@ export class Convolver {
           this.pendingPos = 0
           // 突发（单次调用多块产出）超出容量时动态扩容——修复 B>容量 时的越界写（静默丢块 → NaN）
           if (this.pendingLen + Ls > this.pendingWetL.length) {
-            const newCap = Math.max(cap * 2, this.pendingLen + Ls)
-            const nl = new Float32Array(newCap)
-            nl.set(this.pendingWetL.subarray(0, this.pendingLen))
-            this.pendingWetL = nl
-            const nr = new Float32Array(newCap)
-            nr.set(this.pendingWetR.subarray(0, this.pendingLen))
-            this.pendingWetR = nr
+            if (this.explicitlyPrepared) {
+              throw new Error(`Convolver block ${B} exceeds prepared pending capacity`)
+            }
+            this.ensurePendingCapacity(B)
           }
         }
         const writeAt = this.pendingPos + this.pendingLen

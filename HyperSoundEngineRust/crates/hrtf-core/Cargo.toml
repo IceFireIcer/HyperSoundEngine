@@ -9,3 +9,9 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+rustfft = "6.4.1"
+sofar = { version = "0.3.0", default-features = false }
+
+[[bench]]
+name = "renderer"
+harness = false

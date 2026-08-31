@@ -2,6 +2,7 @@
 //!
 //! 错误码：-32700 解析错误｜-32600 无效请求｜-32601 方法不存在｜-32602 参数无效｜-32000 后端失败｜-32001 状态不允许。
 //! 方法表：Phase 2 六方法（listDevices/getState/configure/start/stop/setParams）
+//! + stage 22 加性方法 loadHrtf
 //! + Phase 3 推流会话两方法（openSession/closeSession，specs/service/push-stream.md）。
 //! 无 id 的请求按通知处理：照常执行副作用，但不回包。
 
@@ -164,6 +165,12 @@ fn dispatch(
                 .as_object()
                 .ok_or_else(|| RpcFault::invalid_params("configure 需要 params 对象"))?;
             engine.configure(obj)
+        }
+        "loadHrtf" => {
+            let obj = params
+                .as_object()
+                .ok_or_else(|| RpcFault::invalid_params("loadHrtf 需要 params 对象"))?;
+            engine.load_hrtf(obj)
         }
         "start" => engine.start(),
         "stop" => engine.stop(),
@@ -359,6 +366,29 @@ mod tests {
         assert_eq!(res["stats"]["framesProcessed"], 0);
         assert_eq!(res["stats"]["uptimeMs"], 0);
         assert!(res["lastParams"].is_null());
+    }
+
+    #[test]
+    fn load_hrtf_通过rpc分派且校验本地路径() {
+        let eng = engine();
+        let before = call(
+            &eng,
+            r#"{"jsonrpc":"2.0","id":40,"method":"loadHrtf","params":{"path":"relative.sofa"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            before["error"]["code"], -32001,
+            "未 configure 优先报状态错误"
+        );
+
+        configure_48k(&eng);
+        let response = call(
+            &eng,
+            r#"{"jsonrpc":"2.0","id":41,"method":"loadHrtf","params":{"path":"relative.sofa"}}"#,
+        )
+        .unwrap();
+        assert_eq!(response["error"]["code"], -32602);
+        assert_eq!(eng.get_state()["hrtf"], json!({"loaded":false}));
     }
 
     #[test]

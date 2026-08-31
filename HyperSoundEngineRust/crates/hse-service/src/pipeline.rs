@@ -32,9 +32,9 @@ use crate::state::{ServiceEvent, StatsAtomic};
 const RING_BLOCKS: usize = 24;
 /// 同方向 xrun 事件的最小发送间隔（限频防风暴；计数器本身不受影响）。
 pub(crate) const XRUN_EVENT_INTERVAL_MS: u64 = 100;
-/// 捕获空轮询退避：后端 pull 为非阻塞尽力语义（返回实际帧数，0=暂无），
-/// 无数据时按此间隔休眠再询，避免忙转（I/O 线程允许系统调用）。
-const CAPTURE_IDLE_POLL_MS: u64 = 10;
+/// 捕获事件等待窗口上限。实际窗口按协商采样率与 blockSize 推导；上限保证
+/// stop 与纯推流会话在设备长期无事件时仍能及时推进。
+const CAPTURE_WAIT_MAX_MS: u64 = 25;
 /// 旧 DSP 链回收环容量。回收线程持续消费；满载时 DSP 线程保留候选链并在
 /// 后续块边界重试，不会就地析构。
 const RECLAIM_RING_CAPACITY: usize = 8;
@@ -261,6 +261,9 @@ fn capture_loop(
     let mut mix = vec![0.0_f32; block_frames * 2];
     let mut backend_xruns = src.xruns();
     let mut last_emit = Instant::now();
+    let block_ms = (u64::try_from(block_frames).unwrap_or(u64::MAX) * 1_000)
+        .div_ceil(u64::from(format.sample_rate.max(1)));
+    let wait_timeout = Duration::from_millis(block_ms.clamp(1, CAPTURE_WAIT_MAX_MS));
     loop {
         if !run.load(Ordering::Relaxed) {
             break;
@@ -269,7 +272,23 @@ fn capture_loop(
             std::hint::spin_loop();
             continue;
         }
-        match src.pull(&mut buf) {
+        let capture_ready = match src.wait_ready(wait_timeout) {
+            Ok(ready) => ready,
+            Err(e) => {
+                eprintln!("[hse-capture] 等待捕获事件失败，请求停机：{}", e);
+                err.store(true, Ordering::Relaxed);
+                break;
+            }
+        };
+        if !run.load(Ordering::Relaxed) {
+            break;
+        }
+        let pull_result = if capture_ready {
+            src.pull(&mut buf)
+        } else {
+            Ok(0)
+        };
+        match pull_result {
             Ok(nf) => {
                 let nf = nf.min(block_frames);
                 // 混后处理：回环块（若有）先入基线，随后按 sessionId 升序累加各会话
@@ -287,6 +306,7 @@ fn capture_loop(
                     } else {
                         &buf[..total * 2]
                     };
+                    let capacity = ring_capacity_samples(block_frames);
                     let mut sent = 0usize;
                     while sent < out.len() {
                         if prod.push(out[sent]).is_ok() {
@@ -295,6 +315,7 @@ fn capture_loop(
                             break; // 环满：丢弃本块剩余样本
                         }
                     }
+                    stats.observe_input_ring_samples(capacity.saturating_sub(prod.slots()));
                     if sent < out.len() {
                         let lost = ((out.len() - sent) / 2) as u64;
                         stats.xruns_in.fetch_add(lost, Ordering::Relaxed);
@@ -310,11 +331,6 @@ fn capture_loop(
                     events,
                     &mut last_emit,
                 );
-                if nf == 0 && total == 0 {
-                    // 非阻塞尽力语义：回环暂无数据且本轮会话也未取出任何块，
-                    // 退避后再询（不忙转）；会话有数据时保持全速消费。
-                    std::thread::sleep(Duration::from_millis(CAPTURE_IDLE_POLL_MS));
-                }
             }
             Err(e) => {
                 eprintln!("[hse-capture] 拉取失败，请求停机：{}", e);
@@ -431,6 +447,7 @@ fn render_loop(
         for i in 0..avail {
             outbuf[i] = cons.pop().unwrap_or(0.0);
         }
+        stats.observe_output_ring_samples(cons.slots());
         if avail < want {
             for slot in outbuf[avail..want].iter_mut() {
                 *slot = 0.0;
@@ -528,9 +545,12 @@ fn dsp_loop(
             }
         }
         if filled < total {
+            stats.observe_input_ring_samples(cons_in.slots());
             std::hint::spin_loop();
             continue;
         }
+        let input_queued_frames = (cons_in.slots() / 2) as u64;
+        stats.observe_input_ring_samples(cons_in.slots());
         dsp_chain::deinterleave(&staging, &mut left, &mut right);
         active.process_planar(&mut left, &mut right);
         dsp_chain::interleave(&left, &right, &mut staging);
@@ -546,6 +566,14 @@ fn dsp_loop(
             }
         }
         if pushed == total {
+            let output_queued_samples =
+                ring_capacity_samples(block_frames).saturating_sub(prod_out.slots());
+            stats.observe_output_ring_samples(output_queued_samples);
+            stats.record_processed_block(
+                input_queued_frames,
+                block_frames as u64,
+                (output_queued_samples / 2) as u64,
+            );
             stats
                 .frames_processed
                 .fetch_add(block_frames as u64, Ordering::Relaxed);

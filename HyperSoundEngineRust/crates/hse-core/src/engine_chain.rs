@@ -1,4 +1,4 @@
-//! HyperSoundEngine 1-21 级主链（spatial-off 契约）。
+//! HyperSoundEngine 1-22 级主链；第 22 级通过 hrtf-core 可选启用。
 use crate::{
     bass_enhancer::{BassEnhancerSettings, BassEnhancerStage},
     biquad::BiquadStage,
@@ -23,6 +23,11 @@ use crate::{
     },
     reverb_simple::{ReverbSimpleParams, ReverbSimpleStage},
     Stage,
+};
+use hrtf_core::{
+    relative_direction_pose, BinauralRenderer, ConvolutionMode, DistanceModel, DistanceParams,
+    HrtfGrid, InterpolationMode, ObjectEffects, ObjectInput, RenderProfile, RoomPreset, Vec3,
+    WorldListenerPose,
 };
 use serde_json::{json, Map, Value};
 const W: usize = 2048;
@@ -68,11 +73,9 @@ impl EngineChainParams {
         let mode = value
             .pointer("/spatial/mode")
             .and_then(Value::as_str)
-            .unwrap_or("off");
-        if mode != "off" {
-            return Err(format!(
-                "engine-chain 仅支持 spatial.mode='off'，收到 {mode:?}"
-            ));
+            .ok_or("/spatial/mode 必须是字符串")?;
+        if !["off", "instant", "headLocked", "world", "stage"].contains(&mode) {
+            return Err(format!("/spatial/mode 未知枚举值 {mode:?}"));
         }
         Ok(Self { value })
     }
@@ -98,7 +101,7 @@ fn merge(dst: &mut Value, src: &Value) -> Result<(), String> {
     Ok(())
 }
 fn defaults(fs: f64) -> Value {
-    json!({"sampleRate":fs,"eq":{"enabled":true,"mode":"pro","simpleBands":[0,0,0,0,0],"proBands":[{"frequency":31.5,"gain":0,"q":1.1},{"frequency":63,"gain":0,"q":1.1},{"frequency":125,"gain":0,"q":1.1},{"frequency":250,"gain":0,"q":1.1},{"frequency":500,"gain":0,"q":1.1},{"frequency":1000,"gain":0,"q":1.1},{"frequency":2000,"gain":0,"q":1.1},{"frequency":4000,"gain":0,"q":1.1},{"frequency":8000,"gain":0,"q":1.1},{"frequency":16000,"gain":0,"q":1.1}],"bandCount":10,"qCompensation":true},"deesser":{"enabled":false,"centerHz":6000,"q":0.7,"thresholdDb":-30,"ratio":8,"attackMs":1,"releaseMs":80,"splitBand":true,"mix":1,"sidechainEnabled":false},"compressor":{"enabled":false,"thresholdDb":-20,"ratio":4,"kneeDb":6,"attackMs":10,"releaseMs":150,"makeupDb":0,"outputGain":1,"sidechainEnabled":false},"nightMode":{"enabled":false,"amount":0},"bassEnhancer":{"enabled":false,"cutoffHz":90,"q":0.7,"harmonicType":"odd","harmonicGain":0.6,"mix":0.5,"levelDb":0,"lowBoostDb":0},"reverb":{"enabled":false,"mode":"algorithmic","algorithmic":{"type":"hall","roomSize":0.5,"damping":0.5,"wet":0.3,"dry":0.7,"preDelayMs":0,"width":1},"convolution":{"ir":null,"irName":null,"mix":0.3,"preDelayMs":0,"dePeriodize":true}},"surround3d":{"enabled":false,"distance":0.5,"speed":1,"angle":0,"direction":1},"loudnessCompensation":{"enabled":false,"mode":"auto","preset":"flat","bands":[],"volumePercent":80,"maxBoostDb":12,"smoothingSeconds":0.2},"loudnessNormalization":{"enabled":false,"targetLufs":-14,"maxGainDb":9,"minGainDb":-9,"useRealtimeMeter":true,"externalGainDb":0},"limiter":{"enabled":true,"thresholdDb":-1,"lookaheadMs":5,"attackMs":0.5,"releaseMs":150,"truePeak":true},"ieq":{"enabled":false,"strength":0.5,"targetCurve":"flat","timeConstantSec":3},"dynamicEq":{"enabled":false,"strength":0.5,"thresholdDb":-20,"ratio":2,"attackMs":20,"releaseMs":200,"bands":[{"enabled":true,"targetGainDb":0},{"enabled":true,"targetGainDb":0},{"enabled":true,"targetGainDb":0},{"enabled":true,"targetGainDb":0},{"enabled":true,"targetGainDb":0}]},"pitch":{"enabled":false,"voiceBalance":0},"modulation":{"enabled":false,"lfo":{"shape":"sine","rateHz":1,"depth":0.5},"envelope":{"attackMs":10,"releaseMs":200,"amount":0.5},"routes":[]},"modEffects":{"delay":{"enabled":false,"delayMs":250,"feedback":0.3,"mix":0.3},"chorus":{"enabled":false,"rateHz":1,"depthMs":3,"mix":0.4},"flanger":{"enabled":false,"rateHz":0.5,"depthMs":2,"feedback":0.4,"mix":0.5},"phaser":{"enabled":false,"rateHz":0.5,"depth":0.5,"feedback":0.4,"mix":0.5,"stages":4},"tremolo":{"enabled":false,"rateHz":5,"depth":0.5,"mix":1}},"spatial":{"mode":"off"},"stereoWidth":1})
+    json!({"sampleRate":fs,"eq":{"enabled":true,"mode":"pro","simpleBands":[0,0,0,0,0],"proBands":[{"frequency":31.5,"gain":0,"q":1.1},{"frequency":63,"gain":0,"q":1.1},{"frequency":125,"gain":0,"q":1.1},{"frequency":250,"gain":0,"q":1.1},{"frequency":500,"gain":0,"q":1.1},{"frequency":1000,"gain":0,"q":1.1},{"frequency":2000,"gain":0,"q":1.1},{"frequency":4000,"gain":0,"q":1.1},{"frequency":8000,"gain":0,"q":1.1},{"frequency":16000,"gain":0,"q":1.1}],"bandCount":10,"qCompensation":true},"deesser":{"enabled":false,"centerHz":6000,"q":0.7,"thresholdDb":-30,"ratio":8,"attackMs":1,"releaseMs":80,"splitBand":true,"mix":1,"sidechainEnabled":false},"compressor":{"enabled":false,"thresholdDb":-20,"ratio":4,"kneeDb":6,"attackMs":10,"releaseMs":150,"makeupDb":0,"outputGain":1,"sidechainEnabled":false},"nightMode":{"enabled":false,"amount":0},"bassEnhancer":{"enabled":false,"cutoffHz":90,"q":0.7,"harmonicType":"odd","harmonicGain":0.6,"mix":0.5,"levelDb":0,"lowBoostDb":0},"reverb":{"enabled":false,"mode":"algorithmic","algorithmic":{"type":"hall","roomSize":0.5,"damping":0.5,"wet":0.3,"dry":0.7,"preDelayMs":0,"width":1},"convolution":{"ir":null,"irName":null,"mix":0.3,"preDelayMs":0,"dePeriodize":true}},"surround3d":{"enabled":false,"distance":0.5,"speed":1,"angle":0,"direction":1},"loudnessCompensation":{"enabled":false,"mode":"auto","preset":"flat","bands":[],"volumePercent":80,"maxBoostDb":12,"smoothingSeconds":0.2},"loudnessNormalization":{"enabled":false,"targetLufs":-14,"maxGainDb":9,"minGainDb":-9,"useRealtimeMeter":true,"externalGainDb":0},"limiter":{"enabled":true,"thresholdDb":-1,"lookaheadMs":5,"attackMs":0.5,"releaseMs":150,"truePeak":true},"ieq":{"enabled":false,"strength":0.5,"targetCurve":"flat","timeConstantSec":3},"dynamicEq":{"enabled":false,"strength":0.5,"thresholdDb":-20,"ratio":2,"attackMs":20,"releaseMs":200,"bands":[{"enabled":true,"targetGainDb":0},{"enabled":true,"targetGainDb":0},{"enabled":true,"targetGainDb":0},{"enabled":true,"targetGainDb":0},{"enabled":true,"targetGainDb":0}]},"pitch":{"enabled":false,"voiceBalance":0},"modulation":{"enabled":false,"lfo":{"shape":"sine","rateHz":1,"depth":0.5},"envelope":{"attackMs":10,"releaseMs":200,"amount":0.5},"routes":[]},"modEffects":{"delay":{"enabled":false,"delayMs":250,"feedback":0.3,"mix":0.3},"chorus":{"enabled":false,"rateHz":1,"depthMs":3,"mix":0.4},"flanger":{"enabled":false,"rateHz":0.5,"depthMs":2,"feedback":0.4,"mix":0.5},"phaser":{"enabled":false,"rateHz":0.5,"depth":0.5,"feedback":0.4,"mix":0.5,"stages":4},"tremolo":{"enabled":false,"rateHz":5,"depth":0.5,"mix":1}},"spatial":{"mode":"off","masterGain":0.9,"instant":{"spreadDeg":60,"amount":0.7,"room":"studio","roomAmount":0.15,"multichannelAuto":false},"headLocked":{"layout":"51","speakers":[{"azimuthDeg":0,"elevationDeg":0,"distance":1.5,"gain":1,"size":0},{"azimuthDeg":-30,"elevationDeg":0,"distance":1.5,"gain":1,"size":0},{"azimuthDeg":30,"elevationDeg":0,"distance":1.5,"gain":1,"size":0},{"azimuthDeg":-110,"elevationDeg":0,"distance":1.5,"gain":1,"size":0},{"azimuthDeg":110,"elevationDeg":0,"distance":1.5,"gain":1,"size":0}],"heightLayer":true,"bottomLayer":true,"routes":[]},"world":{"moveSpeed":2,"listener":{"position":{"x":0,"y":1.6,"z":0},"yaw":0,"pitch":0,"roll":0},"sources":[{"id":"vocal","position":{"x":-2,"y":1.6,"z":4},"gain":1,"size":0},{"id":"guitar","position":{"x":-5,"y":1.6,"z":6},"gain":1,"size":0},{"id":"drums","position":{"x":3,"y":1.6,"z":7},"gain":1,"size":0},{"id":"ambience","position":{"x":0,"y":2.5,"z":10},"gain":0.6,"size":0.5}],"playhead":0,"trajectories":[],"occlusion":0},"stage":{"preset":"stage","seat":"middle","roomSize":1,"reverbAmount":0.35,"customSources":[]},"ambience":{"enabled":false,"amount":0.3},"convolution":"partitioned","hrtfInterp":"nearest","distanceModel":"inverse","refDistance":1,"maxDistance":50},"stereoWidth":1})
 }
 fn o<'a>(v: &'a Value, p: &str) -> Result<&'a Map<String, Value>, String> {
     v.pointer(p)
@@ -172,6 +175,1020 @@ fn convolution_ir(v: &Value) -> Result<Option<Vec<f32>>, String> {
     }
     Ok(Some(ir))
 }
+
+const MAX_SPATIAL_OBJECTS: usize = 32;
+const SPATIAL_PRIMARY_SLOTS: usize = 64;
+const SPATIAL_SLOT_CAPACITY: usize = SPATIAL_PRIMARY_SLOTS * 2;
+const SPATIAL_SOFT_CLIP_THRESHOLD: f32 = 0.85;
+const AMBIENCE_CHANNELS: usize = 4;
+const AMBIENCE_AZIMUTHS: [f64; AMBIENCE_CHANNELS] = [45.0, 135.0, 225.0, 315.0];
+const AMBIENCE_DELAY_MS: [f64; AMBIENCE_CHANNELS] = [20.0, 28.0, 36.0, 44.0];
+
+#[derive(Debug, Clone, Copy)]
+struct SpatialSpeaker {
+    slot: usize,
+    channel: usize,
+    azimuth_deg: f32,
+    elevation_deg: f32,
+    distance: f32,
+    gain: f32,
+    size: f32,
+}
+
+struct AmbienceState {
+    amount: f64,
+    smooth: f64,
+    current: [f64; AMBIENCE_CHANNELS],
+    lines: [Vec<f32>; AMBIENCE_CHANNELS],
+    positions: [usize; AMBIENCE_CHANNELS],
+    pan_left: [f64; AMBIENCE_CHANNELS],
+    pan_right: [f64; AMBIENCE_CHANNELS],
+}
+
+impl AmbienceState {
+    fn new(sample_rate: f64, amount: f64) -> Self {
+        let delays =
+            AMBIENCE_DELAY_MS.map(|ms| ((ms * sample_rate / 1000.0).round() as usize).max(1));
+        Self {
+            amount: amount.clamp(0.0, 1.0),
+            smooth: (-1.0 / (sample_rate.max(1.0) * 0.02)).exp(),
+            current: [0.0; AMBIENCE_CHANNELS],
+            lines: std::array::from_fn(|index| vec![0.0; delays[index]]),
+            positions: [0; AMBIENCE_CHANNELS],
+            pan_left: AMBIENCE_AZIMUTHS.map(|azimuth| {
+                let pan = (azimuth.to_radians().sin() + 1.0) * 0.5;
+                (1.0 - pan).sqrt()
+            }),
+            pan_right: AMBIENCE_AZIMUTHS.map(|azimuth| {
+                let pan = (azimuth.to_radians().sin() + 1.0) * 0.5;
+                pan.sqrt()
+            }),
+        }
+    }
+
+    fn process_add(
+        &mut self,
+        input_left: &[f32],
+        input_right: &[f32],
+        output_left: &mut [f32],
+        output_right: &mut [f32],
+    ) {
+        let frames = input_left.len();
+        if frames == 0 || self.amount == 0.0 {
+            return;
+        }
+        let mut mid_energy = 0.0;
+        let mut side_energy = 0.0;
+        for frame in 0..frames {
+            let mid = (f64::from(input_left[frame]) + f64::from(input_right[frame])) * 0.5;
+            let side = (f64::from(input_left[frame]) - f64::from(input_right[frame])) * 0.5;
+            mid_energy += mid * mid;
+            side_energy += side * side;
+        }
+        let w = (2.0 * mid_energy / frames as f64).sqrt();
+        let y = (2.0 * side_energy / frames as f64).sqrt();
+        let mix = self.amount * 0.5;
+        let targets = AMBIENCE_AZIMUTHS
+            .map(|azimuth| (w / 2.0 + azimuth.to_radians().sin() * y).clamp(-1.0, 1.0));
+        for frame in 0..frames {
+            let mut add_left = 0.0;
+            let mut add_right = 0.0;
+            for channel in 0..AMBIENCE_CHANNELS {
+                let position = self.positions[channel];
+                let delayed = self.lines[channel][position];
+                self.lines[channel][position] = if channel < 2 {
+                    input_right[frame]
+                } else {
+                    input_left[frame]
+                };
+                self.positions[channel] = (position + 1) % self.lines[channel].len();
+                let gain =
+                    targets[channel] + self.smooth * (self.current[channel] - targets[channel]);
+                self.current[channel] = gain;
+                add_left += f64::from(delayed) * gain * self.pan_left[channel];
+                add_right += f64::from(delayed) * gain * self.pan_right[channel];
+            }
+            output_left[frame] += (add_left * mix) as f32;
+            output_right[frame] += (add_right * mix) as f32;
+        }
+    }
+
+    fn reset(&mut self) {
+        self.current.fill(0.0);
+        self.positions.fill(0);
+        for line in &mut self.lines {
+            line.fill(0.0);
+        }
+    }
+}
+
+struct SpatialStage {
+    renderer: BinauralRenderer,
+    speakers: Vec<SpatialSpeaker>,
+    amount: f32,
+    master_gain: f32,
+    input_left: Vec<f32>,
+    input_right: Vec<f32>,
+    ambience: Option<AmbienceState>,
+    dry_delay_left: Vec<f32>,
+    dry_delay_right: Vec<f32>,
+    dry_delay_position: usize,
+    dry_left: Vec<f32>,
+    dry_right: Vec<f32>,
+}
+
+impl SpatialStage {
+    fn new(
+        grid: HrtfGrid,
+        speakers: Vec<SpatialSpeaker>,
+        amount: f32,
+        master_gain: f32,
+        distance_model: DistanceModel,
+        distance_params: DistanceParams,
+        ambience_amount: f64,
+        sample_rate: f64,
+    ) -> Result<Self, String> {
+        if speakers.is_empty() || speakers.len() > MAX_SPATIAL_OBJECTS {
+            return Err(format!(
+                "stage22 对象数必须为 1..={MAX_SPATIAL_OBJECTS}，实际 {}",
+                speakers.len()
+            ));
+        }
+        let renderer = BinauralRenderer::new(
+            grid,
+            RenderProfile::LowLatency,
+            distance_model,
+            distance_params,
+        )
+        .map_err(|error| format!("无法构造 HRTF renderer：{error}"))?;
+        Ok(Self {
+            renderer,
+            speakers,
+            amount,
+            master_gain,
+            input_left: Vec::new(),
+            input_right: Vec::new(),
+            ambience: (ambience_amount > 0.0)
+                .then(|| AmbienceState::new(sample_rate, ambience_amount)),
+            dry_delay_left: Vec::new(),
+            dry_delay_right: Vec::new(),
+            dry_delay_position: 0,
+            dry_left: Vec::new(),
+            dry_right: Vec::new(),
+        })
+    }
+
+    fn prepare(&mut self, max_frames: usize) {
+        self.input_left.resize(max_frames, 0.0);
+        self.input_right.resize(max_frames, 0.0);
+        self.dry_left.resize(max_frames, 0.0);
+        self.dry_right.resize(max_frames, 0.0);
+        let latency = self.renderer.latency_samples();
+        self.dry_delay_left.resize(latency.max(1), 0.0);
+        self.dry_delay_right.resize(latency.max(1), 0.0);
+        self.dry_delay_position = 0;
+        self.renderer
+            .prepare(SPATIAL_SLOT_CAPACITY, max_frames)
+            .expect("有效的 stage22 prepare 容量");
+    }
+
+    fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
+        assert_eq!(left.len(), right.len(), "左右声道块长必须一致");
+        assert!(
+            left.len() <= self.input_left.len(),
+            "stage22 块长超过 prepare 容量"
+        );
+        let frames = left.len();
+        self.input_left[..frames].copy_from_slice(left);
+        self.input_right[..frames].copy_from_slice(right);
+        let silence = &self.input_left[..0];
+        let mut objects = [ObjectInput {
+            slot: 0,
+            mono: silence,
+            azimuth_deg: 0.0,
+            elevation_deg: 0.0,
+            distance: 1.0,
+            gain: 0.0,
+        }; SPATIAL_SLOT_CAPACITY];
+        let mut effects = [ObjectEffects::default(); SPATIAL_SLOT_CAPACITY];
+        let mut object_count = 0;
+        for speaker in &self.speakers {
+            let mono = if speaker.channel == 0 {
+                &self.input_left[..frames]
+            } else {
+                &self.input_right[..frames]
+            };
+            objects[object_count] = ObjectInput {
+                slot: speaker.slot,
+                mono,
+                azimuth_deg: speaker.azimuth_deg,
+                elevation_deg: speaker.elevation_deg,
+                distance: speaker.distance,
+                gain: speaker.gain,
+            };
+            effects[object_count] = ObjectEffects {
+                size: speaker.size,
+                spread_slot: (speaker.size > 0.0).then_some(speaker.slot + SPATIAL_PRIMARY_SLOTS),
+            };
+            object_count += 1;
+        }
+        self.renderer
+            .process_with_effects(
+                &objects[..object_count],
+                &effects[..object_count],
+                left,
+                right,
+                frames,
+            )
+            .expect("stage22 已在 prepare/参数解析阶段验证");
+        if self.amount < 1.0 {
+            let dry = 1.0 - self.amount;
+            if self.renderer.latency_samples() > 0 {
+                for frame in 0..frames {
+                    let position = self.dry_delay_position;
+                    self.dry_left[frame] = self.dry_delay_left[position];
+                    self.dry_right[frame] = self.dry_delay_right[position];
+                    self.dry_delay_left[position] = self.input_left[frame];
+                    self.dry_delay_right[position] = self.input_right[frame];
+                    self.dry_delay_position = (position + 1) % self.dry_delay_left.len();
+                }
+            } else {
+                self.dry_left[..frames].copy_from_slice(&self.input_left[..frames]);
+                self.dry_right[..frames].copy_from_slice(&self.input_right[..frames]);
+            }
+            for frame in 0..frames {
+                left[frame] =
+                    (self.dry_left[frame] * dry + left[frame] * self.amount) * self.master_gain;
+                right[frame] =
+                    (self.dry_right[frame] * dry + right[frame] * self.amount) * self.master_gain;
+            }
+        } else if self.master_gain != 1.0 {
+            for frame in 0..frames {
+                left[frame] *= self.master_gain;
+                right[frame] *= self.master_gain;
+            }
+        }
+        if let Some(ambience) = &mut self.ambience {
+            ambience.process_add(
+                &self.input_left[..frames],
+                &self.input_right[..frames],
+                &mut left[..frames],
+                &mut right[..frames],
+            );
+        }
+        for frame in 0..frames {
+            left[frame] = spatial_soft_clip(left[frame]);
+            right[frame] = spatial_soft_clip(right[frame]);
+        }
+    }
+
+    fn reset(&mut self) {
+        self.renderer.reset();
+        if let Some(ambience) = &mut self.ambience {
+            ambience.reset();
+        }
+        self.input_left.fill(0.0);
+        self.input_right.fill(0.0);
+        self.dry_delay_left.fill(0.0);
+        self.dry_delay_right.fill(0.0);
+        self.dry_delay_position = 0;
+        self.dry_left.fill(0.0);
+        self.dry_right.fill(0.0);
+    }
+
+    fn latency_samples(&self) -> usize {
+        self.renderer.latency_samples()
+    }
+
+    fn listener_velocity(&self) -> Option<Vec3> {
+        self.renderer.listener_velocity()
+    }
+}
+
+fn spatial_soft_clip(value: f32) -> f32 {
+    let magnitude = value.abs();
+    if magnitude <= SPATIAL_SOFT_CLIP_THRESHOLD {
+        return value;
+    }
+    let threshold = SPATIAL_SOFT_CLIP_THRESHOLD;
+    let clipped =
+        threshold + (1.0 - threshold) * ((magnitude - threshold) / (1.0 - threshold)).tanh();
+    value.signum() * clipped
+}
+
+fn spatial_stage(
+    v: &Value,
+    fs: f64,
+    grid: Option<HrtfGrid>,
+    previous: Option<&Value>,
+) -> Result<Option<SpatialStage>, String> {
+    let spatial = o(v, "/spatial")?;
+    let mode = enum_value(
+        spatial,
+        "mode",
+        "/spatial/mode",
+        &["off", "instant", "headLocked", "world", "stage"],
+    )?;
+    if mode == "off" {
+        return Ok(None);
+    }
+    let grid =
+        grid.ok_or_else(|| format!("spatial.mode={mode:?} 需要先通过控制 API 注入 HRTF grid"))?;
+    if grid.sample_rate() != fs.round() as u32 {
+        return Err(format!(
+            "HRTF grid 采样率 {}Hz 与引擎采样率 {}Hz 不一致",
+            grid.sample_rate(),
+            fs
+        ));
+    }
+    let master_gain =
+        optional_finite(spatial, "masterGain", 0.9, "/spatial/masterGain")?.clamp(0.5, 1.0) as f32;
+    let instant = spatial.get("instant").and_then(Value::as_object);
+    let amount = if mode == "instant" {
+        instant
+            .map(|value| optional_finite(value, "amount", 0.7, "/spatial/instant/amount"))
+            .transpose()?
+            .unwrap_or(0.7)
+            .clamp(0.0, 1.0) as f32
+    } else {
+        1.0
+    };
+    let distance_model = match spatial
+        .get("distanceModel")
+        .and_then(Value::as_str)
+        .unwrap_or("inverse")
+    {
+        "inverse" => DistanceModel::Inverse,
+        "linear" => DistanceModel::Linear,
+        "exponential" => DistanceModel::Exponential,
+        value => return Err(format!("/spatial/distanceModel 未知枚举值 {value:?}")),
+    };
+    let reference_distance =
+        optional_finite(spatial, "refDistance", 1.0, "/spatial/refDistance")?.max(0.1) as f32;
+    let maximum_distance = optional_finite(spatial, "maxDistance", 50.0, "/spatial/maxDistance")?
+        .max(reference_distance as f64 + 0.1) as f32;
+    let ambience_amount = spatial
+        .get("ambience")
+        .and_then(Value::as_object)
+        .filter(|ambience| {
+            ambience
+                .get("enabled")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        })
+        .map(|ambience| optional_finite(ambience, "amount", 0.3, "/spatial/ambience/amount"))
+        .transpose()?
+        .unwrap_or(0.0)
+        .clamp(0.0, 1.0);
+    let mut stage = SpatialStage::new(
+        grid,
+        spatial_speakers(spatial, mode, previous)?,
+        amount,
+        master_gain,
+        distance_model,
+        DistanceParams {
+            reference_distance,
+            maximum_distance,
+            rolloff_factor: 1.0,
+        },
+        ambience_amount,
+        fs,
+    )?;
+    let convolution = spatial
+        .get("convolution")
+        .and_then(Value::as_str)
+        .unwrap_or("time");
+    stage
+        .renderer
+        .set_convolution_mode(match convolution {
+            "partitioned" => ConvolutionMode::Partitioned,
+            "time" => ConvolutionMode::Time,
+            value => return Err(format!("/spatial/convolution 未知枚举值 {value:?}")),
+        })
+        .map_err(|error| format!("无法设置空间卷积模式：{error}"))?;
+    let interpolation = spatial
+        .get("hrtfInterp")
+        .and_then(Value::as_str)
+        .unwrap_or("nearest");
+    stage
+        .renderer
+        .set_interpolation_mode(match interpolation {
+            "nearest" => InterpolationMode::Nearest,
+            "spherical" => InterpolationMode::Spherical,
+            value => return Err(format!("/spatial/hrtfInterp 未知枚举值 {value:?}")),
+        })
+        .map_err(|error| format!("无法设置 HRTF 插值模式：{error}"))?;
+    configure_spatial_room(&mut stage.renderer, spatial, mode)?;
+    if mode == "world" {
+        let world = required_object(spatial, "world", "/spatial/world")?;
+        let occlusion = optional_finite(world, "occlusion", 0.0, "/spatial/world/occlusion")?
+            .clamp(0.0, 1.0) as f32;
+        stage
+            .renderer
+            .set_occlusion(occlusion)
+            .map_err(|error| format!("无法设置遮挡：{error}"))?;
+        stage
+            .renderer
+            .set_listener_velocity(world_velocity(world, previous)?)
+            .map_err(|error| format!("无法设置听者速度：{error}"))?;
+    }
+    Ok(Some(stage))
+}
+
+fn optional_finite(
+    object: &Map<String, Value>,
+    key: &str,
+    default: f64,
+    path: &str,
+) -> Result<f64, String> {
+    match object.get(key) {
+        None => Ok(default),
+        Some(value) => value
+            .as_f64()
+            .filter(|value| value.is_finite())
+            .ok_or_else(|| format!("{path} 必须是有限数字")),
+    }
+}
+
+fn required_object<'a>(
+    object: &'a Map<String, Value>,
+    key: &str,
+    path: &str,
+) -> Result<&'a Map<String, Value>, String> {
+    object
+        .get(key)
+        .and_then(Value::as_object)
+        .ok_or_else(|| format!("{path} 必须是对象"))
+}
+
+fn parse_vec3(value: &Value, path: &str) -> Result<Vec3, String> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| format!("{path} 必须是对象"))?;
+    Ok(Vec3 {
+        x: finite_number(object, "x", &format!("{path}/x"))?,
+        y: finite_number(object, "y", &format!("{path}/y"))?,
+        z: finite_number(object, "z", &format!("{path}/z"))?,
+    })
+}
+
+fn channel_for_azimuth(azimuth_deg: f32) -> usize {
+    usize::from(azimuth_deg > 0.0)
+}
+
+fn push_speaker(
+    speakers: &mut Vec<SpatialSpeaker>,
+    channel: usize,
+    azimuth_deg: f64,
+    elevation_deg: f64,
+    distance: f64,
+    gain: f64,
+    size: f64,
+) -> Result<(), String> {
+    let slot = speakers.len();
+    push_speaker_with_slot(
+        speakers,
+        slot,
+        channel,
+        azimuth_deg,
+        elevation_deg,
+        distance,
+        gain,
+        size,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_speaker_with_slot(
+    speakers: &mut Vec<SpatialSpeaker>,
+    slot: usize,
+    channel: usize,
+    azimuth_deg: f64,
+    elevation_deg: f64,
+    distance: f64,
+    gain: f64,
+    size: f64,
+) -> Result<(), String> {
+    if speakers.len() == MAX_SPATIAL_OBJECTS || slot >= SPATIAL_PRIMARY_SLOTS {
+        return Err(format!("stage22 最多支持 {MAX_SPATIAL_OBJECTS} 个对象"));
+    }
+    speakers.push(SpatialSpeaker {
+        slot,
+        channel,
+        azimuth_deg: azimuth_deg as f32,
+        elevation_deg: elevation_deg as f32,
+        distance: distance.max(0.0) as f32,
+        gain: gain.clamp(0.0, 2.0) as f32,
+        size: size.clamp(0.0, 1.0) as f32,
+    });
+    Ok(())
+}
+
+fn parse_speaker(value: &Value, path: &str) -> Result<(f64, f64, f64, f64, f64), String> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| format!("{path} 必须是对象"))?;
+    Ok((
+        finite_number(object, "azimuthDeg", &format!("{path}/azimuthDeg"))?,
+        finite_number(object, "elevationDeg", &format!("{path}/elevationDeg"))?,
+        finite_number(object, "distance", &format!("{path}/distance"))?,
+        optional_finite(object, "gain", 1.0, &format!("{path}/gain"))?,
+        optional_finite(object, "size", 0.0, &format!("{path}/size"))?,
+    ))
+}
+
+fn spatial_speakers(
+    spatial: &Map<String, Value>,
+    mode: &str,
+    previous: Option<&Value>,
+) -> Result<Vec<SpatialSpeaker>, String> {
+    let mut speakers = Vec::new();
+    match mode {
+        "instant" => {
+            let instant = spatial.get("instant").and_then(Value::as_object);
+            let spread = instant
+                .map(|value| {
+                    optional_finite(value, "spreadDeg", 60.0, "/spatial/instant/spreadDeg")
+                })
+                .transpose()?
+                .unwrap_or(60.0)
+                .clamp(20.0, 120.0);
+            push_speaker(&mut speakers, 0, -spread * 0.5, 0.0, 1.5, 1.0, 0.0)?;
+            push_speaker(&mut speakers, 1, spread * 0.5, 0.0, 1.5, 1.0, 0.0)?;
+        }
+        "headLocked" => {
+            let head = required_object(spatial, "headLocked", "/spatial/headLocked")?;
+            let values = head
+                .get("speakers")
+                .and_then(Value::as_array)
+                .ok_or("/spatial/headLocked/speakers 必须是数组")?;
+            let routes = head.get("routes").and_then(Value::as_array);
+            for (index, value) in values.iter().enumerate() {
+                let (azimuth, elevation, distance, mut gain, size) =
+                    parse_speaker(value, &format!("/spatial/headLocked/speakers/{index}"))?;
+                if value.get("muted").and_then(Value::as_bool).unwrap_or(false) {
+                    gain = 0.0;
+                }
+                let default_channel = channel_for_azimuth(azimuth as f32);
+                match routes
+                    .and_then(|routes| routes.get(index))
+                    .and_then(Value::as_str)
+                {
+                    Some("both") => {
+                        push_speaker(
+                            &mut speakers,
+                            0,
+                            azimuth,
+                            elevation,
+                            distance,
+                            gain * 0.5,
+                            size,
+                        )?;
+                        push_speaker(
+                            &mut speakers,
+                            1,
+                            azimuth,
+                            elevation,
+                            distance,
+                            gain * 0.5,
+                            size,
+                        )?;
+                    }
+                    Some("l") => {
+                        push_speaker(&mut speakers, 0, azimuth, elevation, distance, gain, size)?
+                    }
+                    Some("r") => {
+                        push_speaker(&mut speakers, 1, azimuth, elevation, distance, gain, size)?
+                    }
+                    None => push_speaker(
+                        &mut speakers,
+                        default_channel,
+                        azimuth,
+                        elevation,
+                        distance,
+                        gain,
+                        size,
+                    )?,
+                    Some(value) => {
+                        return Err(format!(
+                            "/spatial/headLocked/routes/{index} 未知枚举值 {value:?}"
+                        ))
+                    }
+                }
+            }
+        }
+        "world" => world_speakers(spatial, previous, &mut speakers)?,
+        "stage" => stage_speakers(spatial, &mut speakers)?,
+        _ => unreachable!("mode validated before speaker projection"),
+    }
+    Ok(speakers)
+}
+
+fn stable_slot_seed(id: &str) -> usize {
+    let mut hash = 0x811c_9dc5_u32;
+    for unit in id.encode_utf16() {
+        hash ^= unit as u32;
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    hash as usize % SPATIAL_PRIMARY_SLOTS
+}
+
+fn assign_stable_slots(ids: &[&str]) -> Result<std::collections::HashMap<String, usize>, String> {
+    if ids.len() > SPATIAL_PRIMARY_SLOTS {
+        return Err("stage22 稳定 slot 历史集合超过容量".to_string());
+    }
+    let mut sorted = ids.to_vec();
+    sorted.sort_unstable();
+    let mut occupied = [false; SPATIAL_PRIMARY_SLOTS];
+    let mut assigned = std::collections::HashMap::with_capacity(sorted.len());
+    for id in sorted {
+        let seed = stable_slot_seed(id);
+        let slot = (0..SPATIAL_PRIMARY_SLOTS)
+            .map(|offset| (seed + offset) % SPATIAL_PRIMARY_SLOTS)
+            .find(|slot| !occupied[*slot])
+            .ok_or("stage22 稳定 slot 已耗尽")?;
+        occupied[slot] = true;
+        assigned.insert(id.to_owned(), slot);
+    }
+    Ok(assigned)
+}
+
+fn world_speakers(
+    spatial: &Map<String, Value>,
+    previous: Option<&Value>,
+    speakers: &mut Vec<SpatialSpeaker>,
+) -> Result<(), String> {
+    let world = required_object(spatial, "world", "/spatial/world")?;
+    let listener = required_object(world, "listener", "/spatial/world/listener")?;
+    let pose = WorldListenerPose {
+        position: parse_vec3(
+            listener
+                .get("position")
+                .ok_or("缺少 /spatial/world/listener/position")?,
+            "/spatial/world/listener/position",
+        )?,
+        yaw_deg: optional_finite(listener, "yaw", 0.0, "/spatial/world/listener/yaw")?,
+        pitch_deg: optional_finite(listener, "pitch", 0.0, "/spatial/world/listener/pitch")?,
+        roll_deg: optional_finite(listener, "roll", 0.0, "/spatial/world/listener/roll")?,
+    };
+    let playhead = optional_finite(world, "playhead", 0.0, "/spatial/world/playhead")?;
+    let trajectories = world.get("trajectories").and_then(Value::as_array);
+    let sources = world
+        .get("sources")
+        .and_then(Value::as_array)
+        .ok_or("/spatial/world/sources 必须是数组")?;
+    let mut ids = std::collections::HashSet::new();
+    let mut source_ids = Vec::with_capacity(sources.len());
+    for (index, value) in sources.iter().enumerate() {
+        let id = value
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("/spatial/world/sources/{index}/id 必须是字符串"))?;
+        if id.is_empty() || !ids.insert(id) {
+            return Err(format!("/spatial/world/sources/{index}/id 必须非空且唯一"));
+        }
+        source_ids.push(id);
+    }
+    let mut slot_ids = source_ids.clone();
+    if let Some(previous_sources) = previous
+        .and_then(|value| value.pointer("/spatial/world/sources"))
+        .and_then(Value::as_array)
+    {
+        for id in previous_sources
+            .iter()
+            .filter_map(|source| source.get("id").and_then(Value::as_str))
+        {
+            if !slot_ids.contains(&id) {
+                slot_ids.push(id);
+            }
+        }
+    }
+    let slots = assign_stable_slots(&slot_ids)?;
+    for (index, value) in sources.iter().enumerate() {
+        let path = format!("/spatial/world/sources/{index}");
+        let source = value
+            .as_object()
+            .ok_or_else(|| format!("{path} 必须是对象"))?;
+        let id = source_ids[index];
+        let slot = slots[id];
+        let static_position = parse_vec3(
+            source
+                .get("position")
+                .ok_or_else(|| format!("缺少 {path}/position"))?,
+            &format!("{path}/position"),
+        )?;
+        let position = trajectory_position(trajectories, id, playhead)?.unwrap_or(static_position);
+        let direction = relative_direction_pose(pose, position);
+        let gain = optional_finite(source, "gain", 1.0, &format!("{path}/gain"))?;
+        let size = optional_finite(source, "size", 0.0, &format!("{path}/size"))?;
+        push_speaker_with_slot(
+            speakers,
+            slot,
+            channel_for_azimuth(direction.azimuth_deg as f32),
+            direction.azimuth_deg,
+            direction.elevation_deg,
+            direction.distance,
+            gain,
+            size,
+        )?;
+    }
+    Ok(())
+}
+
+fn trajectory_position(
+    trajectories: Option<&Vec<Value>>,
+    source_id: &str,
+    playhead: f64,
+) -> Result<Option<Vec3>, String> {
+    let Some(trajectory) = trajectories.and_then(|items| {
+        items
+            .iter()
+            .find(|item| item.get("sourceId").and_then(Value::as_str) == Some(source_id))
+    }) else {
+        return Ok(None);
+    };
+    let keyframes = trajectory
+        .get("keyframes")
+        .and_then(Value::as_array)
+        .ok_or("/spatial/world/trajectories/keyframes 必须是数组")?;
+    if keyframes.is_empty() {
+        return Ok(Some(Vec3 {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+        }));
+    }
+    let mut before: Option<(f64, Vec3)> = None;
+    let mut after: Option<(f64, Vec3)> = None;
+    for (index, keyframe) in keyframes.iter().enumerate() {
+        let object = keyframe
+            .as_object()
+            .ok_or_else(|| format!("/spatial/world/trajectories/keyframes/{index} 必须是对象"))?;
+        let time = finite_number(
+            object,
+            "t",
+            &format!("/spatial/world/trajectories/keyframes/{index}/t"),
+        )?;
+        let position = parse_vec3(
+            object.get("position").ok_or_else(|| {
+                format!("缺少 /spatial/world/trajectories/keyframes/{index}/position")
+            })?,
+            &format!("/spatial/world/trajectories/keyframes/{index}/position"),
+        )?;
+        if time <= playhead && before.is_none_or(|current| time > current.0) {
+            before = Some((time, position));
+        }
+        if time >= playhead && after.is_none_or(|current| time < current.0) {
+            after = Some((time, position));
+        }
+    }
+    let first = before.or(after).expect("non-empty keyframes");
+    let last = after.or(before).expect("non-empty keyframes");
+    if first.0 == last.0 {
+        return Ok(Some(first.1));
+    }
+    let factor = (playhead - first.0) / (last.0 - first.0);
+    Ok(Some(Vec3 {
+        x: first.1.x + (last.1.x - first.1.x) * factor,
+        y: first.1.y + (last.1.y - first.1.y) * factor,
+        z: first.1.z + (last.1.z - first.1.z) * factor,
+    }))
+}
+
+const STAGE: &[(f64, f64, f64)] = &[
+    (0.0, 0.0, 2.5),
+    (-30.0, 0.0, 4.0),
+    (30.0, 0.0, 4.0),
+    (10.0, 0.0, 6.0),
+    (-20.0, 0.0, 5.0),
+    (-110.0, 0.0, 8.0),
+    (110.0, 0.0, 8.0),
+];
+const CINEMA: &[(f64, f64, f64)] = &[
+    (0.0, 0.0, 4.0),
+    (-30.0, 0.0, 4.0),
+    (30.0, 0.0, 4.0),
+    (-100.0, 0.0, 7.0),
+    (100.0, 0.0, 7.0),
+    (-135.0, 0.0, 7.0),
+    (135.0, 0.0, 7.0),
+    (-45.0, 45.0, 5.0),
+    (45.0, 45.0, 5.0),
+    (-135.0, 45.0, 5.0),
+    (135.0, 45.0, 5.0),
+];
+const PIANO: &[(f64, f64, f64)] = &[
+    (0.0, 0.0, 2.0),
+    (-90.0, 0.0, 9.0),
+    (90.0, 0.0, 9.0),
+    (180.0, 0.0, 10.0),
+];
+const NATURE: &[(f64, f64, f64)] = &[
+    (0.0, 50.0, 7.0),
+    (180.0, 0.0, 15.0),
+    (-140.0, 20.0, 8.0),
+    (110.0, 0.0, 6.0),
+];
+
+fn stage_speakers(
+    spatial: &Map<String, Value>,
+    speakers: &mut Vec<SpatialSpeaker>,
+) -> Result<(), String> {
+    let stage = required_object(spatial, "stage", "/spatial/stage")?;
+    let preset = stage
+        .get("preset")
+        .and_then(Value::as_str)
+        .unwrap_or("stage");
+    let layout = match preset {
+        "stage" => STAGE,
+        "cinema" => CINEMA,
+        "piano" => PIANO,
+        "nature" => NATURE,
+        value => return Err(format!("/spatial/stage/preset 未知枚举值 {value:?}")),
+    };
+    let seat_scale = match stage
+        .get("seat")
+        .and_then(Value::as_str)
+        .unwrap_or("middle")
+    {
+        "front" => 0.8,
+        "middle" => 1.0,
+        "back" => 1.35,
+        value => return Err(format!("/spatial/stage/seat 未知枚举值 {value:?}")),
+    };
+    let room_scale =
+        optional_finite(stage, "roomSize", 1.0, "/spatial/stage/roomSize")?.clamp(0.5, 2.0);
+    for &(azimuth, elevation, distance) in layout {
+        push_speaker(
+            speakers,
+            channel_for_azimuth(azimuth as f32),
+            azimuth,
+            elevation,
+            (distance * seat_scale * room_scale).clamp(0.5, 10.0),
+            1.0,
+            0.0,
+        )?;
+    }
+    if let Some(custom) = stage.get("customSources").and_then(Value::as_array) {
+        let listener = WorldListenerPose {
+            position: Vec3 {
+                x: 0.0,
+                y: 1.6,
+                z: 0.0,
+            },
+            yaw_deg: 0.0,
+            pitch_deg: 0.0,
+            roll_deg: 0.0,
+        };
+        for (index, value) in custom.iter().enumerate() {
+            let object = value
+                .as_object()
+                .ok_or_else(|| format!("/spatial/stage/customSources/{index} 必须是对象"))?;
+            let position = parse_vec3(
+                object
+                    .get("position")
+                    .ok_or_else(|| format!("缺少 /spatial/stage/customSources/{index}/position"))?,
+                &format!("/spatial/stage/customSources/{index}/position"),
+            )?;
+            let direction = relative_direction_pose(listener, position);
+            push_speaker(
+                speakers,
+                channel_for_azimuth(direction.azimuth_deg as f32),
+                direction.azimuth_deg,
+                direction.elevation_deg,
+                direction.distance,
+                optional_finite(
+                    object,
+                    "gain",
+                    1.0,
+                    &format!("/spatial/stage/customSources/{index}/gain"),
+                )?,
+                optional_finite(
+                    object,
+                    "size",
+                    0.0,
+                    &format!("/spatial/stage/customSources/{index}/size"),
+                )?,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn configure_spatial_room(
+    renderer: &mut BinauralRenderer,
+    spatial: &Map<String, Value>,
+    mode: &str,
+) -> Result<(), String> {
+    let (preset, amount, scale) = if mode == "stage" {
+        let stage = required_object(spatial, "stage", "/spatial/stage")?;
+        let preset = match stage
+            .get("preset")
+            .and_then(Value::as_str)
+            .unwrap_or("stage")
+        {
+            "stage" => Some(RoomPreset::Stage),
+            "cinema" | "piano" => Some(RoomPreset::Hall),
+            "nature" => Some(RoomPreset::Outdoor),
+            _ => unreachable!(),
+        };
+        (
+            preset,
+            optional_finite(stage, "reverbAmount", 0.35, "/spatial/stage/reverbAmount")?
+                .clamp(0.0, 1.0) as f32,
+            optional_finite(stage, "roomSize", 1.0, "/spatial/stage/roomSize")?.clamp(0.5, 2.0)
+                as f32,
+        )
+    } else if mode == "instant" {
+        let instant = spatial.get("instant").and_then(Value::as_object);
+        let room_name = instant
+            .and_then(|value| value.get("room"))
+            .and_then(Value::as_str)
+            .unwrap_or("studio");
+        let preset = match room_name {
+            "off" => None,
+            "studio" => Some(RoomPreset::Studio),
+            "hall" => Some(RoomPreset::Hall),
+            "stage" => Some(RoomPreset::Stage),
+            "church" => Some(RoomPreset::Church),
+            "outdoor" => Some(RoomPreset::Outdoor),
+            "bathroom" => Some(RoomPreset::Bathroom),
+            "corridor" => Some(RoomPreset::Corridor),
+            value => return Err(format!("/spatial/instant/room 未知枚举值 {value:?}")),
+        };
+        let amount = instant
+            .map(|value| optional_finite(value, "roomAmount", 0.15, "/spatial/instant/roomAmount"))
+            .transpose()?
+            .unwrap_or(0.15)
+            .clamp(0.0, 1.0) as f32;
+        (preset, amount, 1.0)
+    } else {
+        (None, 0.0, 1.0)
+    };
+    let params = preset.map(|preset| {
+        let mut params = preset.params();
+        params.width *= scale;
+        params.height *= scale;
+        params.depth *= scale;
+        params
+    });
+    renderer
+        .set_room(params)
+        .map_err(|error| format!("无法设置空间房间：{error}"))?;
+    renderer
+        .set_room_amount(if preset.is_some() { amount } else { 0.0 })
+        .map_err(|error| format!("无法设置空间房间混合：{error}"))?;
+    Ok(())
+}
+
+fn world_velocity(
+    world: &Map<String, Value>,
+    previous: Option<&Value>,
+) -> Result<Option<Vec3>, String> {
+    let Some(previous_world) = previous
+        .and_then(|value| value.pointer("/spatial"))
+        .filter(|value| value.get("mode").and_then(Value::as_str) == Some("world"))
+        .and_then(|value| value.get("world"))
+        .and_then(Value::as_object)
+    else {
+        return Ok(None);
+    };
+    let playhead = optional_finite(world, "playhead", 0.0, "/spatial/world/playhead")?;
+    let previous_playhead = optional_finite(
+        previous_world,
+        "playhead",
+        0.0,
+        "/previous/spatial/world/playhead",
+    )?;
+    let delta = playhead - previous_playhead;
+    if delta <= 0.0 {
+        return Ok(None);
+    }
+    let current_listener = required_object(world, "listener", "/spatial/world/listener")?;
+    let previous_listener = required_object(
+        previous_world,
+        "listener",
+        "/previous/spatial/world/listener",
+    )?;
+    let current = parse_vec3(
+        current_listener
+            .get("position")
+            .ok_or("缺少 /spatial/world/listener/position")?,
+        "/spatial/world/listener/position",
+    )?;
+    let old = parse_vec3(
+        previous_listener
+            .get("position")
+            .ok_or("缺少 /previous/spatial/world/listener/position")?,
+        "/previous/spatial/world/listener/position",
+    )?;
+    Ok(Some(Vec3 {
+        x: (current.x - old.x) / delta,
+        y: (current.y - old.y) / delta,
+        z: (current.z - old.z) / delta,
+    }))
+}
+
 pub struct EngineChainStage {
     fs: f64,
     eq: EqChainStage,
@@ -223,6 +1240,7 @@ pub struct EngineChainStage {
     dynamic_eq_on: bool,
     limiter_on: bool,
     reverb_kind: u8,
+    spatial: Option<SpatialStage>,
     modulation_on: bool,
     pitch_on: bool,
     voice_balance: f64,
@@ -242,8 +1260,26 @@ pub struct EngineChainStage {
 }
 impl EngineChainStage {
     pub fn from_params(fs: f64, p: EngineChainParams) -> Result<Self, String> {
+        Self::from_params_with_hrtf_grid(fs, p, None)
+    }
+
+    pub fn from_params_with_hrtf_grid(
+        fs: f64,
+        p: EngineChainParams,
+        hrtf_grid: Option<HrtfGrid>,
+    ) -> Result<Self, String> {
+        Self::from_params_with_hrtf_grid_and_previous(fs, p, hrtf_grid, None)
+    }
+
+    pub fn from_params_with_hrtf_grid_and_previous(
+        fs: f64,
+        p: EngineChainParams,
+        hrtf_grid: Option<HrtfGrid>,
+        previous: Option<&Value>,
+    ) -> Result<Self, String> {
         let value = p.as_value().clone();
         let v = &value;
+        let spatial = spatial_stage(v, fs, hrtf_grid, previous)?;
         let eo = o(v, "/eq")?;
         let eq_mode = enum_value(eo, "mode", "/eq/mode", &["simple", "pro"])?;
         let mut eq = EqChainStage::new(fs, 20.)?;
@@ -456,6 +1492,7 @@ impl EngineChainStage {
             dynamic_eq_on: b(o(v, "/dynamicEq")?, "enabled")?,
             limiter_on: b(o(v, "/limiter")?, "enabled")?,
             reverb_kind,
+            spatial,
             modulation_on: b(mo, "enabled")?,
             pitch_on: b(pitch, "enabled")?,
             voice_balance: n(pitch, "voiceBalance")?,
@@ -486,6 +1523,34 @@ impl EngineChainStage {
     pub fn modulation_targets(&self) -> (f64, f64) {
         (self.mg, self.mw)
     }
+    pub fn get_latency_samples(&self) -> usize {
+        let limiter = if self.limiter_on {
+            self.lm.latency_samples()
+        } else {
+            0
+        };
+        let convolution = if self.reverb_kind == 3 {
+            self.conv
+                .as_ref()
+                .map(ConvolverStage::get_latency_samples)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let spatial = self
+            .spatial
+            .as_ref()
+            .map(SpatialStage::latency_samples)
+            .unwrap_or(0);
+        limiter + convolution + spatial
+    }
+
+    pub fn spatial_listener_velocity(&self) -> Option<Vec3> {
+        self.spatial
+            .as_ref()
+            .and_then(SpatialStage::listener_velocity)
+    }
+
     pub fn set_next_frame_count(&mut self, n: usize) {
         self.next_frame_count = Some(n)
     }
@@ -674,6 +1739,9 @@ impl EngineChainStage {
         if self.limiter_on {
             self.lm.process(l, r)
         }
+        if let Some(spatial) = self.spatial.as_mut() {
+            spatial.process(&mut l[..active_n], &mut r[..active_n])
+        }
     }
 }
 impl Stage for EngineChainStage {
@@ -692,7 +1760,10 @@ impl Stage for EngineChainStage {
         self.lc.prepare(x);
         self.ieq.prepare(x);
         self.dy.prepare(x);
-        self.lm.prepare(x)
+        self.lm.prepare(x);
+        if let Some(spatial) = self.spatial.as_mut() {
+            spatial.prepare(x)
+        }
     }
     fn process(&mut self, l: &mut [f32], r: &mut [f32]) {
         self.process_inner(l, r, None)
@@ -716,6 +1787,9 @@ impl Stage for EngineChainStage {
         self.ieq.reset();
         self.dy.reset();
         self.lm.reset();
+        if let Some(spatial) = self.spatial.as_mut() {
+            spatial.reset()
+        }
         self.lufs.reset();
         self.mm.reset();
         self.ring.fill(0.);
@@ -988,6 +2062,26 @@ fn curve(x: &str) -> [f64; 10] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hrtf_core::HrtfGrid;
+
+    fn asymmetric_grid() -> HrtfGrid {
+        HrtfGrid::new(
+            48_000,
+            vec![-30.0, 30.0],
+            vec![0.0],
+            3,
+            vec![1.0, 0.5, 0.0, 0.25, 0.0, 0.0],
+            vec![0.25, 0.0, 0.0, 1.0, 0.5, 0.0],
+        )
+        .unwrap()
+    }
+
+    fn spatial(overrides: Value) -> EngineChainStage {
+        let params = EngineChainParams::from_overrides(48_000.0, &overrides).unwrap();
+        EngineChainStage::from_params_with_hrtf_grid(48_000.0, params, Some(asymmetric_grid()))
+            .unwrap()
+    }
+
     fn bypass() -> EngineChainStage {
         EngineChainStage::from_params(
             48000.,
@@ -1017,12 +2111,273 @@ mod tests {
         assert_eq!((l, r), (x, y))
     }
     #[test]
-    fn 空间拒绝() {
-        assert!(
-            EngineChainParams::from_overrides(48000., &json!({"spatial":{"mode":"instant"}}))
-                .is_err()
-        )
+    fn 空间模式解析且缺少网格明确拒绝() {
+        for mode in ["instant", "headLocked", "world", "stage"] {
+            let params =
+                EngineChainParams::from_overrides(48_000.0, &json!({"spatial":{"mode":mode}}))
+                    .unwrap();
+            let error = EngineChainStage::from_params(48_000.0, params)
+                .err()
+                .expect("非 off 空间模式缺少网格时必须失败");
+            assert!(error.contains("HRTF grid"), "实际错误：{error}");
+        }
     }
+
+    #[test]
+    fn stage22_delta产生左右不对称双耳输出() {
+        let mut engine = spatial(json!({
+            "eq":{"enabled":false}, "limiter":{"enabled":false},
+            "spatial":{"mode":"instant","masterGain":1.0,"convolution":"time",
+                "instant":{"spreadDeg":60.0,"amount":1.0}}
+        }));
+        engine.prepare(8);
+        let mut left = [1.0, 0.0, 0.0, 0.0];
+        let mut right = [0.0; 4];
+        engine.process(&mut left, &mut right);
+        assert_ne!(left, right);
+        assert!(left.iter().chain(&right).any(|sample| *sample != 0.0));
+        assert_eq!(engine.get_latency_samples(), 0);
+    }
+
+    #[test]
+    fn stage22短块连续且reset复现() {
+        let overrides = json!({
+            "eq":{"enabled":false}, "limiter":{"enabled":false},
+            "spatial":{"mode":"headLocked","masterGain":1.0,"convolution":"time",
+                "headLocked":{"speakers":[
+                    {"azimuthDeg":-30.0,"elevationDeg":0.0,"distance":1.0,"gain":1.0},
+                    {"azimuthDeg":30.0,"elevationDeg":0.0,"distance":1.0,"gain":1.0}
+                ]}}
+        });
+        let input_left = [1.0, 0.25, -0.5, 0.0, 0.75];
+        let input_right = [0.0, -0.25, 0.5, 0.25, 0.0];
+
+        let mut whole = spatial(overrides.clone());
+        whole.prepare(5);
+        let (mut whole_left, mut whole_right) = (input_left, input_right);
+        whole.process(&mut whole_left, &mut whole_right);
+
+        let mut split = spatial(overrides);
+        split.prepare(3);
+        let (mut split_left, mut split_right) = (input_left, input_right);
+        split.process(&mut split_left[..2], &mut split_right[..2]);
+        split.process(&mut split_left[2..], &mut split_right[2..]);
+        assert_eq!((split_left, split_right), (whole_left, whole_right));
+
+        split.reset();
+        let (mut reset_left, mut reset_right) = (input_left, input_right);
+        split.process(&mut reset_left[..2], &mut reset_right[..2]);
+        split.process(&mut reset_left[2..], &mut reset_right[2..]);
+        assert_eq!((reset_left, reset_right), (whole_left, whole_right));
+    }
+
+    #[test]
+    fn 非instant模式不受instant_amount影响() {
+        let cases = [
+            json!({"mode":"headLocked","headLocked":{"speakers":[
+                {"azimuthDeg":-30.0,"elevationDeg":0.0,"distance":1.0,"gain":1.0},
+                {"azimuthDeg":30.0,"elevationDeg":0.0,"distance":1.0,"gain":1.0}
+            ]}}),
+            json!({"mode":"world","world":{"listener":{"position":{"x":0,"y":1.6,"z":0}},
+                "sources":[{"id":"source","position":{"x":1,"y":1.6,"z":2},"gain":1.0,"size":0.0}],
+                "playhead":0,"trajectories":[],"occlusion":0}}),
+            json!({"mode":"stage","stage":{"preset":"stage","seat":"middle","roomSize":1.0,
+                "reverbAmount":0.0,"customSources":[]}}),
+        ];
+        for spatial_case in cases {
+            let run = |amount: f64| {
+                let mut spatial_params = spatial_case.clone();
+                spatial_params["masterGain"] = json!(1.0);
+                spatial_params["convolution"] = json!("time");
+                spatial_params["instant"] = json!({"amount":amount,"room":"off","roomAmount":0.0});
+                let mut engine = spatial(json!({
+                    "eq":{"enabled":false}, "limiter":{"enabled":false}, "spatial":spatial_params
+                }));
+                engine.prepare(8);
+                let mut left = [1.0, 0.25, -0.5, 0.0, 0.75, -0.25, 0.1, 0.0];
+                let mut right = [0.0, -0.25, 0.5, 0.25, 0.0, 0.5, -0.1, 0.0];
+                engine.process(&mut left, &mut right);
+                (left, right)
+            };
+            assert_eq!(run(0.0), run(1.0), "mode={:?}", spatial_case["mode"]);
+        }
+    }
+
+    #[test]
+    fn stage22高增益多对象与room输出有界() {
+        let mut speakers = Vec::new();
+        for index in 0..16 {
+            speakers.push(json!({
+                "azimuthDeg":if index % 2 == 0 { -30.0 } else { 30.0 },
+                "elevationDeg":0.0,"distance":1.0,"gain":2.0,"size":0.0
+            }));
+        }
+        let cases = [
+            json!({"mode":"headLocked","masterGain":1.0,"convolution":"time",
+                "instant":{"amount":0.0},"headLocked":{"speakers":speakers}}),
+            json!({"mode":"stage","masterGain":1.0,"convolution":"time",
+                "instant":{"amount":0.0},"stage":{"preset":"stage","seat":"front",
+                    "roomSize":2.0,"reverbAmount":1.0,"customSources":[]}}),
+        ];
+        for spatial_params in cases {
+            let mut engine = spatial(json!({
+                "eq":{"enabled":false}, "limiter":{"enabled":false}, "spatial":spatial_params
+            }));
+            engine.prepare(128);
+            let mut left = [8.0; 128];
+            let mut right = [8.0; 128];
+            engine.process(&mut left, &mut right);
+            assert!(left
+                .iter()
+                .chain(&right)
+                .all(|sample| sample.is_finite() && sample.abs() <= 1.0));
+        }
+    }
+
+    #[test]
+    fn world投影完整姿态轨迹与稳定slot() {
+        let current = json!({"spatial":{"mode":"world","world":{
+            "listener":{"position":{"x":1,"y":1.6,"z":0},"yaw":20,"pitch":10,"roll":-5},
+            "sources":[
+                {"id":"beta","position":{"x":4,"y":2,"z":8},"gain":0.8,"size":0.5},
+                {"id":"alpha","position":{"x":-2,"y":1.6,"z":4},"gain":1,"size":0}
+            ],
+            "playhead":2,
+            "trajectories":[{"sourceId":"beta","keyframes":[
+                {"t":0,"position":{"x":0,"y":1.6,"z":4}},
+                {"t":4,"position":{"x":8,"y":1.6,"z":4}}
+            ]}],
+            "occlusion":0.4
+        }}});
+        let previous = json!({"spatial":{"mode":"world","world":{
+            "listener":{"position":{"x":0,"y":1.6,"z":0},"yaw":0,"pitch":0,"roll":0},
+            "sources":[
+                {"id":"alpha","position":{"x":-2,"y":1.6,"z":4},"gain":1,"size":0},
+                {"id":"beta","position":{"x":4,"y":2,"z":8},"gain":0.8,"size":0.5}
+            ],"playhead":1,"trajectories":[],"occlusion":0
+        }}});
+        let params = EngineChainParams::from_overrides(48_000.0, &current).unwrap();
+        let value = params.as_value();
+        let projected = spatial_speakers(
+            value["spatial"].as_object().unwrap(),
+            "world",
+            Some(&previous),
+        )
+        .unwrap();
+        assert_eq!(projected.len(), 2);
+        let beta = projected
+            .iter()
+            .find(|speaker| speaker.size == 0.5)
+            .unwrap();
+        let expected = relative_direction_pose(
+            WorldListenerPose {
+                position: Vec3 {
+                    x: 1.0,
+                    y: 1.6,
+                    z: 0.0,
+                },
+                yaw_deg: 20.0,
+                pitch_deg: 10.0,
+                roll_deg: -5.0,
+            },
+            Vec3 {
+                x: 4.0,
+                y: 1.6,
+                z: 4.0,
+            },
+        );
+        assert_eq!(beta.azimuth_deg, expected.azimuth_deg as f32);
+        assert_eq!(beta.elevation_deg, expected.elevation_deg as f32);
+        assert_eq!(beta.distance, expected.distance as f32);
+
+        let reordered = json!({"spatial":{"mode":"world","world":{
+            "listener":{"position":{"x":1,"y":1.6,"z":0},"yaw":20,"pitch":10,"roll":-5},
+            "sources":[
+                {"id":"alpha","position":{"x":-2,"y":1.6,"z":4},"gain":1,"size":0},
+                {"id":"beta","position":{"x":4,"y":2,"z":8},"gain":0.8,"size":0.5}
+            ],"playhead":2,"trajectories":[],"occlusion":0.4
+        }}});
+        let reordered = EngineChainParams::from_overrides(48_000.0, &reordered).unwrap();
+        let reordered = spatial_speakers(
+            reordered.as_value()["spatial"].as_object().unwrap(),
+            "world",
+            Some(&previous),
+        )
+        .unwrap();
+        for speaker in &projected {
+            let matching = reordered
+                .iter()
+                .find(|candidate| candidate.size == speaker.size)
+                .unwrap();
+            assert_eq!(matching.slot, speaker.slot);
+        }
+        let velocity = world_velocity(
+            value["spatial"]["world"].as_object().unwrap(),
+            Some(&previous),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            velocity,
+            Vec3 {
+                x: 1.0,
+                y: 0.0,
+                z: 0.0
+            }
+        );
+    }
+
+    #[test]
+    fn stable_slot历史并集可覆盖两组各32对象() {
+        let ids: Vec<String> = (0..SPATIAL_PRIMARY_SLOTS)
+            .map(|index| format!("source-{index}"))
+            .collect();
+        let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+        let slots = assign_stable_slots(&refs).unwrap();
+        assert_eq!(slots.len(), SPATIAL_PRIMARY_SLOTS);
+        let unique: std::collections::HashSet<_> = slots.values().copied().collect();
+        assert_eq!(unique.len(), SPATIAL_PRIMARY_SLOTS);
+    }
+
+    #[test]
+    fn stage投影preset座位房间与自定义声源() {
+        let params = EngineChainParams::from_overrides(
+            48_000.0,
+            &json!({"spatial":{"mode":"stage","stage":{
+                "preset":"cinema","seat":"back","roomSize":2,"reverbAmount":0.6,
+                "customSources":[{"id":"custom","position":{"x":2,"y":1.6,"z":2},"gain":0.4,"size":0.25}]
+            }}}),
+        )
+        .unwrap();
+        let spatial = params.as_value()["spatial"].as_object().unwrap();
+        let speakers = spatial_speakers(spatial, "stage", None).unwrap();
+        assert_eq!(speakers.len(), CINEMA.len() + 1);
+        assert_eq!(speakers[0].distance, 10.0);
+        assert_eq!(speakers.last().unwrap().size, 0.25);
+
+        let mut renderer = BinauralRenderer::new(
+            asymmetric_grid(),
+            RenderProfile::LowLatency,
+            DistanceModel::Inverse,
+            DistanceParams::default(),
+        )
+        .unwrap();
+        configure_spatial_room(&mut renderer, spatial, "stage").unwrap();
+        assert_eq!(renderer.room_amount(), 0.6);
+        let room = renderer.room_params().unwrap();
+        assert_eq!(room.width, RoomPreset::Hall.params().width * 2.0);
+    }
+
+    #[test]
+    fn canonical默认空间卷积为partitioned并上报延迟() {
+        let mut engine = spatial(json!({
+            "limiter":{"enabled":false},
+            "spatial":{"mode":"instant"}
+        }));
+        engine.prepare(128);
+        assert_eq!(engine.get_latency_samples(), 64);
+    }
+
     #[test]
     fn lufs启动() {
         let p=EngineChainParams::from_overrides(48000.,&json!({"eq":{"enabled":false},"limiter":{"enabled":false},"loudnessNormalization":{"enabled":true}})).unwrap();

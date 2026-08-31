@@ -10,6 +10,7 @@ import { describe, it, expect } from 'vitest'
 import {
   computeRelativeDirection,
   computeTrajectoryPosition,
+  computeWorldVelocity,
   moveListener,
   rotateListener,
   listenerForwardVector,
@@ -83,6 +84,20 @@ describe('controller：computeRelativeDirection 几何', () => {
     expect(r.elevationDeg).toBeCloseTo((Math.asin(5 / Math.sqrt(34)) * 180) / Math.PI, 5)
   })
 
+  it('pitch/roll 纳入头坐标逆旋转', () => {
+    const pitched = listenerAt({ x: 0, y: 0, z: 0 })
+    pitched.pitch = 30
+    const front = computeRelativeDirection(pitched, { x: 0, y: 0, z: 5 })
+    expect(front.azimuthDeg).toBeCloseTo(0, 10)
+    expect(front.elevationDeg).toBeCloseTo(-30, 10)
+
+    const rolled = listenerAt({ x: 0, y: 0, z: 0 })
+    rolled.roll = 30
+    const above = computeRelativeDirection(rolled, { x: 0, y: 5, z: 0 })
+    expect(above.azimuthDeg).toBeCloseTo(-90, 10)
+    expect(above.elevationDeg).toBeCloseTo(60, 10)
+  })
+
   it('非有限 listener/source 输入在调用边界拒绝', () => {
     expect(() => computeRelativeDirection(listenerAt({ x: 0, y: 0, z: 0 }, Number.NaN), { x: 0, y: 0, z: 1 }))
       .toThrow('computeRelativeDirection: listener and source values must be finite')
@@ -103,6 +118,24 @@ describe('controller：computeRelativeDirection 几何', () => {
     const r = computeRelativeDirection(listenerAt({ x: 0, y: 0, z: 0 }), { x: 0, y: -2.5, z: 4.330 })
     expect(r.elevationDeg).toBeCloseTo(-30, 1) // asin(-0.5) ≈ −30（z 值 4.330 取近似）
     expect(r.distance).toBeCloseTo(5, 1)
+  })
+})
+
+describe('controller：world 速度推导', () => {
+  it('首次状态、暂停与倒退时确定性返回零', () => {
+    const current = { position: { x: 2, y: 3, z: 4 }, playhead: 10 }
+    expect(computeWorldVelocity(null, current)).toEqual({ x: 0, y: 0, z: 0 })
+    expect(computeWorldVelocity({ position: { x: 1, y: 1, z: 1 }, playhead: 10 }, current))
+      .toEqual({ x: 0, y: 0, z: 0 })
+    expect(computeWorldVelocity({ position: { x: 1, y: 1, z: 1 }, playhead: 11 }, current))
+      .toEqual({ x: 0, y: 0, z: 0 })
+  })
+
+  it('按相邻 playhead 与 listener 位置差计算世界速度', () => {
+    expect(computeWorldVelocity(
+      { position: { x: 1, y: 2, z: 3 }, playhead: 4 },
+      { position: { x: 5, y: 0, z: 9 }, playhead: 6 },
+    )).toEqual({ x: 2, y: -1, z: 3 })
   })
 })
 

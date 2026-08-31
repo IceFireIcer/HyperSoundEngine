@@ -355,11 +355,13 @@ impl PilotParams {
     /// 将旧版服务 wire 快照投影为 hse-core 接受的完整 HyperSoundEngineParams。
     ///
     /// wire 仍保持整体替换语义；未暴露的完整链级使用 core canonical 默认值。
-    /// 空间级始终强制 off，HseStretch 不属于该参数树与主链。
+    /// spatial 段按最小可识别字段覆盖默认快照；HseStretch 不属于该参数树与主链。
     pub fn to_canonical_json(&self, source: &Value, sample_rate: f64) -> Result<Value, String> {
         let mut canonical = hse_core::params::default_params(sample_rate);
         canonical["sampleRate"] = json!(sample_rate);
-        canonical["spatial"]["mode"] = json!("off");
+        if let Some(spatial) = source.get("spatial") {
+            merge_json_object(&mut canonical["spatial"], spatial, "spatial")?;
+        }
         canonical["stereoWidth"] = json!(self.mid_side.width);
         canonical["pitch"]["enabled"] = json!(self.mid_side.voice_balance != 0.0);
         canonical["pitch"]["voiceBalance"] = json!(self.mid_side.voice_balance);
@@ -675,6 +677,10 @@ impl PilotParams {
                         "amount": self.mod_matrix.envelope.amount,
                     },
                 }),
+                "spatial" => source
+                    .get(key)
+                    .cloned()
+                    .expect("遍历中的 spatial 键必须存在"),
                 "limiter" => json!({
                     "enabled": self.limiter.enabled,
                     "thresholdDb": self.limiter.threshold_db,
@@ -1210,6 +1216,14 @@ pub fn parse_pilot_params(value: &Value) -> Result<(PilotParams, Vec<String>), S
                 }
                 collect_unknown(o, &seen, "modMatrix", &mut warnings);
             }
+            "spatial" => {
+                let spatial = v.as_object().ok_or("spatial 必须是 JSON 对象")?;
+                if let Some(mode) = spatial.get("mode") {
+                    if !mode.is_string() {
+                        return Err("spatial.mode 必须是字符串".to_string());
+                    }
+                }
+            }
             "limiter" => {
                 let o = v.as_object().ok_or("limiter 必须是 JSON 对象")?;
                 let mut seen = HashSet::new();
@@ -1238,6 +1252,27 @@ pub fn parse_pilot_params(value: &Value) -> Result<(PilotParams, Vec<String>), S
     }
     warnings.sort(); // 字典序升序（确定性输出）
     Ok((p, warnings))
+}
+
+fn merge_json_object(dst: &mut Value, src: &Value, path: &str) -> Result<(), String> {
+    let source = src
+        .as_object()
+        .ok_or_else(|| format!("{path} 必须是 JSON 对象"))?;
+    let target = dst
+        .as_object_mut()
+        .ok_or_else(|| format!("canonical {path} 必须是 JSON 对象"))?;
+    for (key, value) in source {
+        if value.is_object() && target.get(key).is_some_and(Value::is_object) {
+            merge_json_object(
+                target.get_mut(key).expect("已确认 canonical 子对象存在"),
+                value,
+                &format!("{path}.{key}"),
+            )?;
+        } else {
+            target.insert(key.clone(), value.clone());
+        }
+    }
+    Ok(())
 }
 
 /// IR 配方 seed：0..=u32::MAX 的整数（对齐 parity 的 to_uint32 值域）。
@@ -1617,6 +1652,67 @@ mod tests {
         assert_eq!(p.mod_matrix.lfo.shape, "triangle");
         assert_eq!(p.mod_matrix.envelope.amount, 0.8);
         assert!(w.is_empty());
+    }
+
+    #[test]
+    fn spatial_被识别投影并保留到wire快照() {
+        let value = serde_json::json!({
+            "spatial":{"mode":"instant","masterGain":0.8,"instant":{"spreadDeg":80}}
+        });
+        let (params, warnings) = parse_pilot_params(&value).unwrap();
+        assert!(warnings.is_empty());
+        let canonical = params.to_canonical_json(&value, 48_000.0).unwrap();
+        assert_eq!(canonical["spatial"]["mode"], "instant");
+        assert_eq!(canonical["spatial"]["masterGain"], 0.8);
+        assert_eq!(canonical["spatial"]["instant"]["spreadDeg"], 80);
+        assert_eq!(canonical["spatial"]["instant"]["amount"], 0.7);
+        assert_eq!(params.to_wire_json(&value)["spatial"], value["spatial"]);
+    }
+
+    #[test]
+    fn spatial_world与stage完整快照被识别投影并保留() {
+        for spatial in [
+            serde_json::json!({
+                "mode":"world",
+                "world":{
+                    "listener":{"position":{"x":1,"y":1.6,"z":2},"yaw":25,"pitch":5,"roll":-3},
+                    "sources":[{"id":"lead","position":{"x":-2,"y":1.6,"z":4},"gain":0.8,"size":0.4}],
+                    "playhead":3,
+                    "trajectories":[{"sourceId":"lead","keyframes":[
+                        {"t":0,"position":{"x":-2,"y":1.6,"z":4}},
+                        {"t":4,"position":{"x":2,"y":2,"z":8}}
+                    ]}],
+                    "occlusion":0.35
+                },
+                "ambience":{"enabled":true,"amount":0.25}
+            }),
+            serde_json::json!({
+                "mode":"stage",
+                "stage":{
+                    "preset":"cinema","seat":"back","roomSize":1.5,"reverbAmount":0.6,
+                    "customSources":[{"id":"fx","position":{"x":2,"y":2,"z":3},"gain":0.5,"size":0.2}]
+                },
+                "ambience":{"enabled":true,"amount":0.2}
+            }),
+        ] {
+            let value = serde_json::json!({"spatial": spatial});
+            let (params, warnings) = parse_pilot_params(&value).unwrap();
+            assert!(warnings.is_empty());
+            let canonical = params.to_canonical_json(&value, 48_000.0).unwrap();
+            assert_eq!(canonical["spatial"]["mode"], value["spatial"]["mode"]);
+            assert_eq!(
+                canonical["spatial"]["ambience"],
+                value["spatial"]["ambience"]
+            );
+            let mode = value["spatial"]["mode"].as_str().unwrap();
+            for (key, expected) in value["spatial"][mode].as_object().unwrap() {
+                assert_eq!(&canonical["spatial"][mode][key], expected);
+            }
+            if mode == "world" {
+                assert_eq!(canonical["spatial"]["world"]["moveSpeed"], 2);
+            }
+            assert_eq!(params.to_wire_json(&value)["spatial"], value["spatial"]);
+        }
     }
 
     #[test]

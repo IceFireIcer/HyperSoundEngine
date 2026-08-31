@@ -1,0 +1,52 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://hypersoundengine.dev/specs/schema/frame-count.schema.json",
+  "title": "HyperSoundEngine default frameCount contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "cases"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "sampleRate", "preparedCapacity", "blockFrames", "seeds", "params"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+          "sampleRate": { "type": "number", "exclusiveMinimum": 0 },
+          "preparedCapacity": { "type": "integer", "minimum": 1 },
+          "blockFrames": {
+            "type": "array",
+            "minItems": 2,
+            "items": { "type": "integer", "minimum": 1 }
+          },
+          "seeds": {
+            "type": "array",
+            "minItems": 2,
+            "items": { "type": "integer", "minimum": 0, "maximum": 4294967295 }
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["tremolo"],
+            "properties": {
+              "tremolo": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["rateHz", "depth", "mix"],
+                "properties": {
+                  "rateHz": { "type": "number", "exclusiveMinimum": 0 },
+                  "depth": { "type": "number", "minimum": 0, "maximum": 1 },
+                  "mix": { "type": "number", "minimum": 0, "maximum": 1 }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

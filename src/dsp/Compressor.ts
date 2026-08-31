@@ -62,12 +62,19 @@ export class Compressor {
   }
 
   /** 就地处理立体声（l/r 原地改写）；传入 sideL/sideR 时用外部 sidechain 驱动包络 */
-  processStereo(l: Float32Array, r: Float32Array, sideL?: Float32Array, sideR?: Float32Array): void {
+  processStereo(l: Float32Array, r: Float32Array, sideL?: Float32Array, sideR?: Float32Array, frameCount?: number): void {
     if (!this.enabled) {
       this.reductionDb = 0
       return
     }
-    const n = l.length
+    const useSide = sideL !== undefined && sideR !== undefined
+    const n = Math.max(0, Math.min(
+      Math.floor(frameCount ?? l.length),
+      l.length,
+      r.length,
+      useSide ? sideL.length : Infinity,
+      useSide ? sideR.length : Infinity,
+    ))
     const attack = this.attackCoef
     const release = this.releaseCoef
     const thr = this.thresholdDb
@@ -77,7 +84,6 @@ export class Compressor {
     const kneeHalf = knee * 0.5
     const twoKnee = 2 * knee
     const gainScale = this.makeupLin * this.outputGain
-    const useSide = sideL !== undefined && sideR !== undefined
     for (let i = 0; i < n; i++) {
       // 1) 立体声联合包络（峰值检测）；sidechain 模式下用外部信号
       const xl = l[i]

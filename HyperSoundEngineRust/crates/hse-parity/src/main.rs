@@ -7,7 +7,9 @@
 //! - 计量型用例（moduleKind='meter'，specs/dsp/lufs-meter.md §三）：把两段输入
 //!   分块馈入计量模块（就地分析），全部块馈入完成后一次性读取六项读数，与
 //!   readings 逐项判定（绝对容差 + NaN/±Infinity 哨兵等值）。
-//! - 空间结构化用例：调用 `hrtf-core` world-listener 几何核，按字段绝对容差判定。
+//! - Phase 4 参数扫描：重建固定 LCG 输入，以相同块调度运行 40 个完整参数快照，
+//!   按 1e-6 相对容差比对有限率、非零率与幅值数量级摘要。
+//! - 空间结构化用例：调用 `hrtf-core` world-listener 几何核与 renderer/ABI 成功路径，按共享容差判定。
 //!
 //! 打印音频与空间用例各自的 PASS/FAIL 和最大误差汇总。
 //!
@@ -20,14 +22,18 @@
 //!
 //! 退出码约定：
 //!
-//! - `0`：音频与空间夹具全部通过；
+//! - `0`：音频、空间与 Phase 4 参数扫描夹具全部通过；
 //! - `1`：任一用例失败、夹具缺失或夹具结构无效。
 //!
 //! 说明：未落地的流式模块回退直通假实现（输出=输入），有向量时出现成片 FAIL
 //! 属预期，恰证比对逻辑有效；hse-core 真实模块落地后同一命令应转绿。
 
+mod param_scan_runner;
+mod param_scan_vector;
 mod runner;
 mod segments;
+mod spatial_renderer_runner;
+mod spatial_renderer_vector;
 mod spatial_runner;
 mod spatial_vector;
 mod stages;
@@ -70,7 +76,9 @@ fn print_usage() {
     println!("  1. 从编译期记录的本 crate 路径（CARGO_MANIFEST_DIR）逐级向上查找；");
     println!("  2. 从当前工作目录逐级向上查找。");
     println!();
-    println!("退出码：0 = 音频与空间夹具全绿；1 = 用例失败、夹具缺失或夹具无效。");
+    println!(
+        "退出码：0 = 音频、空间与 Phase 4 参数扫描夹具全绿；1 = 用例失败、夹具缺失或夹具无效。"
+    );
 }
 
 fn flush_stdout() {
@@ -322,7 +330,85 @@ fn run(explicit_dir: Option<&Path>) -> i32 {
         }
     };
 
-    if fail_count > 0 || spatial_failed {
+    let renderer_path = vectors_dir.parent().and_then(Path::parent).map(|specs| {
+        specs
+            .join("spatial")
+            .join("vectors")
+            .join("renderer-abi.v1.json")
+    });
+    let renderer_failed = match renderer_path {
+        Some(path) if path.is_file() => match spatial_renderer_vector::load_fixture(&path) {
+            Ok(fixture) => {
+                let outcome = spatial_renderer_runner::run_fixture(&fixture);
+                println!();
+                println!("==== Spatial renderer-ABI 汇总 ====");
+                println!(
+                    "总计 {} 个用例：PASS {} 个，FAIL {} 个；最大绝对偏差 = {:.3e}",
+                    outcome.checked,
+                    outcome.passed_cases,
+                    outcome.checked.saturating_sub(outcome.passed_cases),
+                    outcome.max_abs_deviation
+                );
+                for failure in &outcome.failures {
+                    println!("[FAIL] {failure}");
+                }
+                !outcome.passed
+            }
+            Err(reason) => {
+                println!("[FAIL] Spatial renderer-ABI 夹具错误：{reason}");
+                true
+            }
+        },
+        Some(path) => {
+            println!("[FAIL] 缺少 Spatial renderer-ABI 夹具：{}", path.display());
+            true
+        }
+        None => {
+            println!("[FAIL] 无法从 DSP 向量目录定位 renderer-ABI 夹具");
+            true
+        }
+    };
+
+    let param_scan_path = vectors_dir.parent().and_then(Path::parent).map(|specs| {
+        specs
+            .join("engine")
+            .join("vectors")
+            .join("phase4-param-scan.json")
+    });
+    let param_scan_failed = match param_scan_path {
+        Some(path) if path.is_file() => match param_scan_vector::load_fixture(&path) {
+            Ok(fixture) => {
+                let outcome = param_scan_runner::run_fixture(&fixture);
+                println!();
+                println!("==== Phase 4 全链参数扫描汇总 ====");
+                println!(
+                    "总计 {} 个用例：PASS {} 个，FAIL {} 个；最大相对偏差 = {:.3e}",
+                    fixture.cases.len(),
+                    outcome.passed_cases,
+                    outcome.failed_cases,
+                    outcome.max_relative_error
+                );
+                for failure in &outcome.failures {
+                    println!("[FAIL] {failure}");
+                }
+                !outcome.passed
+            }
+            Err(reason) => {
+                println!("[FAIL] Phase 4 参数扫描夹具错误：{reason}");
+                true
+            }
+        },
+        Some(path) => {
+            println!("[FAIL] 缺少 Phase 4 参数扫描夹具：{}", path.display());
+            true
+        }
+        None => {
+            println!("[FAIL] 无法从 DSP 向量目录定位 Phase 4 参数扫描夹具");
+            true
+        }
+    };
+
+    if fail_count > 0 || spatial_failed || renderer_failed || param_scan_failed {
         EXIT_HAS_FAILURES
     } else {
         EXIT_ALL_GREEN

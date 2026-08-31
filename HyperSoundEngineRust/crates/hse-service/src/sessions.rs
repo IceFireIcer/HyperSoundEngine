@@ -22,6 +22,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use rtrb::{Consumer, Producer, RingBuffer};
+use serde_json::{json, Value};
 
 use crate::pipeline::XRUN_EVENT_INTERVAL_MS;
 use crate::state::{ServiceEvent, StatsAtomic};
@@ -74,6 +75,10 @@ struct SessionEntry {
     cons: Consumer<Vec<f32>>,
     /// 当前排队帧数（push/drain 同锁维护，无须原子）。
     queued_frames: usize,
+    /// WebSocket 数据面成功接收的累计帧数。
+    ingested_frames: u64,
+    /// 混合前级实际取出的累计帧数。
+    consumed_frames: u64,
     /// 消费侧半块余量：上轮未取尽的队首块与已消费帧偏移（FIFO 次序保持）。
     stash: Option<(Vec<f32>, usize)>,
     /// 本会话 xrun 通知的上次发送时刻（限频防风暴；首丢必报）。
@@ -112,7 +117,10 @@ impl SessionTable {
         events: SyncSender<ServiceEvent>,
     ) -> Self {
         Self {
-            inner: Mutex::new(TableInner { next_id: Some(next_id), sessions: BTreeMap::new() }),
+            inner: Mutex::new(TableInner {
+                next_id: Some(next_id),
+                sessions: BTreeMap::new(),
+            }),
             stats,
             events,
         }
@@ -123,11 +131,20 @@ impl SessionTable {
         let mut g = self.inner.lock().unwrap();
         let id = g.next_id.ok_or(SessionIdExhausted)?;
         g.next_id = id.checked_add(1); // 分配 u32::MAX 后即耗尽（id 永不复用）
-        // 预分配：块槽位一次到位，会话生命周期内不再分配。
+                                       // 预分配：块槽位一次到位，会话生命周期内不再分配。
         let (prod, cons) = RingBuffer::<Vec<f32>>::new(MAX_QUEUE_CHUNKS);
         g.sessions.insert(
             id,
-            SessionEntry { owner, prod, cons, queued_frames: 0, stash: None, last_emit: None },
+            SessionEntry {
+                owner,
+                prod,
+                cons,
+                queued_frames: 0,
+                ingested_frames: 0,
+                consumed_frames: 0,
+                stash: None,
+                last_emit: None,
+            },
         );
         Ok(id)
     }
@@ -135,7 +152,12 @@ impl SessionTable {
     /// 关闭会话：立即不再收帧，环内未消费块随条目一并丢弃（不承诺排空）。
     /// 未知 / 已关闭的 id 返回 false（重复 close 不幂等）。
     pub fn close(&self, session_id: u32) -> bool {
-        self.inner.lock().unwrap().sessions.remove(&session_id).is_some()
+        self.inner
+            .lock()
+            .unwrap()
+            .sessions
+            .remove(&session_id)
+            .is_some()
     }
 
     /// 关闭某连接打开的全部会话（断线自动清理，防泄漏）。返回关闭数。
@@ -148,7 +170,13 @@ impl SessionTable {
 
     /// 当前活跃会话 id（升序）。测试/诊断用。
     pub fn active_ids(&self) -> Vec<u32> {
-        self.inner.lock().unwrap().sessions.keys().copied().collect()
+        self.inner
+            .lock()
+            .unwrap()
+            .sessions
+            .keys()
+            .copied()
+            .collect()
     }
 
     /// 是否无活跃会话（捕获线程快路径判断）。
@@ -158,7 +186,30 @@ impl SessionTable {
 
     /// 某会话当前排队帧数；未知会话返回 None。测试/诊断用。
     pub fn queued_frames(&self, session_id: u32) -> Option<usize> {
-        self.inner.lock().unwrap().sessions.get(&session_id).map(|e| e.queued_frames)
+        self.inner
+            .lock()
+            .unwrap()
+            .sessions
+            .get(&session_id)
+            .map(|e| e.queued_frames)
+    }
+
+    /// 会话级消费诊断快照。用于验收工具机械证明每条独立连接的会话均被消费。
+    pub fn diagnostics(&self) -> Value {
+        let g = self.inner.lock().unwrap();
+        Value::Array(
+            g.sessions
+                .iter()
+                .map(|(&session_id, entry)| {
+                    json!({
+                        "sessionId": session_id,
+                        "queuedFrames": entry.queued_frames,
+                        "ingestedFrames": entry.ingested_frames,
+                        "consumedFrames": entry.consumed_frames,
+                    })
+                })
+                .collect(),
+        )
     }
 
     /// 输入侧 xrun 累计（与 getState.stats.xrunsIn 同源；测试/诊断用）。
@@ -198,7 +249,12 @@ impl SessionTable {
     ///   下轮，FIFO 次序不变）；尚未被覆盖的槽位覆盖写、已覆盖槽位加写，
     ///   累加次序固定 → 同输入同会话集重放逐位一致（GWT-PS-12）；
     /// - 返回本轮混合总帧数 = max(回环帧数, 各会话取出帧数)。
-    pub fn drain_and_mix(&self, mix: &mut [f32], loopback_frames: usize, cap_frames: usize) -> usize {
+    pub fn drain_and_mix(
+        &self,
+        mix: &mut [f32],
+        loopback_frames: usize,
+        cap_frames: usize,
+    ) -> usize {
         debug_assert!(mix.len() >= cap_frames * 2, "mix 缓冲须容得下本轮配额");
         let mut g = self.inner.lock().unwrap();
         let mut covered = loopback_frames; // mix 前 covered 帧已初始化
@@ -233,6 +289,7 @@ impl SessionTable {
                     }
                 }
                 pos += take;
+                entry.consumed_frames = entry.consumed_frames.saturating_add(take as u64);
                 covered = covered.max(pos);
                 total = total.max(pos);
                 let consumed = off + take;
@@ -268,12 +325,17 @@ fn push_entry(
     }
     if entry.prod.push(samples).is_ok() {
         entry.queued_frames += frames;
+        entry.ingested_frames = entry.ingested_frames.saturating_add(frames as u64);
     }
 }
 
 /// 限频上报（与数据面同窗口；首丢必报，窗口内丢弃只计计数不发通知，
 /// 总量以共享计数器为准——control-plane.md §七允许合并）。
-fn emit_xrun_throttled(events: &SyncSender<ServiceEvent>, last_emit: &mut Option<Instant>, count: u64) {
+fn emit_xrun_throttled(
+    events: &SyncSender<ServiceEvent>,
+    last_emit: &mut Option<Instant>,
+    count: u64,
+) {
     if count == 0 {
         return;
     }
@@ -324,7 +386,10 @@ mod tests {
         assert_eq!(parse_frame(&bad), None);
         // 载荷恰好 1 MiB 合法；再多样本即超限
         let huge = frame(1, 0, &[0.0; 262144]);
-        assert_eq!(parse_frame(&huge).map(|(id, _, p)| (id, p.len())), Some((1, MAX_PAYLOAD_BYTES)));
+        assert_eq!(
+            parse_frame(&huge).map(|(id, _, p)| (id, p.len())),
+            Some((1, MAX_PAYLOAD_BYTES))
+        );
         let mut over = frame(1, 0, &[0.0; 262144]);
         over.extend_from_slice(&1.0f32.to_le_bytes());
         assert_eq!(parse_frame(&over), None, "超过 1 MiB 须拒收");
@@ -382,7 +447,10 @@ mod tests {
         assert!(t.ingest_frame(&frame(s, 0, &[0.5, 0.5])));
         assert!(t.close(s));
         assert_eq!(t.queued_frames(s), None, "关闭即丢弃未消费块");
-        assert!(!t.ingest_frame(&frame(s, 1, &[0.5, 0.5])), "关闭后帧按未知会话静默丢弃");
+        assert!(
+            !t.ingest_frame(&frame(s, 1, &[0.5, 0.5])),
+            "关闭后帧按未知会话静默丢弃"
+        );
     }
 
     #[test]
@@ -391,8 +459,8 @@ mod tests {
         let s = t.open(0).unwrap();
         let frames_per_chunk = 512usize;
         let full_chunks = MAX_QUEUE_FRAMES / frames_per_chunk; // 256 块恰好装满预算
-        // 先推一块可识别的“最旧”内容，再灌 300 块新内容（总 301 > 256）；
-        // 每块前两个样本（第 0 帧 L/R）携带块号 k 作指纹。
+                                                               // 先推一块可识别的“最旧”内容，再灌 300 块新内容（总 301 > 256）；
+                                                               // 每块前两个样本（第 0 帧 L/R）携带块号 k 作指纹。
         let mut oldest = vec![0.5_f32; frames_per_chunk * 2];
         oldest[0] = 7.5;
         oldest[1] = 7.5;
@@ -405,7 +473,11 @@ mod tests {
         }
         // 301 - 256 = 45 次丢弃，每块 +1；稳态排队恰为帧预算
         assert_eq!(t.queued_frames(s), Some(MAX_QUEUE_FRAMES));
-        assert_eq!(t.xruns_in_total(), (301 - full_chunks) as u64, "每丢弃一个旧块 xrunsIn 恰 +1");
+        assert_eq!(
+            t.xruns_in_total(),
+            (301 - full_chunks) as u64,
+            "每丢弃一个旧块 xrunsIn 恰 +1"
+        );
         // 首丢必发通知（dir="in"）
         let mut seen = false;
         while let Ok(ev) = rx.try_recv() {
@@ -419,7 +491,11 @@ mod tests {
         let mut mix = vec![0.0_f32; MAX_QUEUE_FRAMES * 2];
         let total = t.drain_and_mix(&mut mix, 0, MAX_QUEUE_FRAMES);
         assert_eq!(total, MAX_QUEUE_FRAMES);
-        assert_eq!((mix[0], mix[1]), (45.0, 45.0), "队首最旧块被丢弃，消费侧取得时间上更近的数据");
+        assert_eq!(
+            (mix[0], mix[1]),
+            (45.0, 45.0),
+            "队首最旧块被丢弃，消费侧取得时间上更近的数据"
+        );
         assert_eq!((mix[2], mix[3]), (0.5, 0.5), "块内非指纹样本为填充值");
         assert_eq!((mix[1024], mix[1025]), (46.0, 46.0), "下一块从第 512 帧起");
     }
@@ -429,7 +505,7 @@ mod tests {
         let (t, _rx) = table();
         let a = t.open(0).unwrap(); // id 1
         let b = t.open(0).unwrap(); // id 2
-        // 回环块 3 帧；A 块 2 帧（L/R 相异）；B 块 4 帧；本轮配额 4 帧
+                                    // 回环块 3 帧；A 块 2 帧（L/R 相异）；B 块 4 帧；本轮配额 4 帧
         let loopback_l = [0.1_f32, 0.2, 0.3];
         let a_l = [0.5_f32, 0.25];
         let a_r = [-0.5_f32, -0.25];
@@ -445,7 +521,12 @@ mod tests {
 
         let mut mix = vec![0.0_f32; 8];
         mix[..6].copy_from_slice(&[
-            loopback_l[0], loopback_l[0], loopback_l[1], loopback_l[1], loopback_l[2], loopback_l[2],
+            loopback_l[0],
+            loopback_l[0],
+            loopback_l[1],
+            loopback_l[1],
+            loopback_l[2],
+            loopback_l[2],
         ]);
         let total = t.drain_and_mix(&mut mix, 3, 4);
         assert_eq!(total, 4, "B 取满 4 帧，混合长度取最大者");
@@ -477,11 +558,20 @@ mod tests {
         assert!(t.ingest_frame(&frame(b2, 0, &[b_val; 8])));
         let mut mix2 = vec![0.0_f32; 8];
         mix2[..6].copy_from_slice(&[
-            loopback_l[0], loopback_l[0], loopback_l[1], loopback_l[1], loopback_l[2], loopback_l[2],
+            loopback_l[0],
+            loopback_l[0],
+            loopback_l[1],
+            loopback_l[1],
+            loopback_l[2],
+            loopback_l[2],
         ]);
         let total2 = t.drain_and_mix(&mut mix2, 3, 4);
         assert_eq!(total2, total);
-        assert_eq!(&mix2[..total * 2], &mix[..total * 2], "同输入同会话集重放须逐位一致");
+        assert_eq!(
+            &mix2[..total * 2],
+            &mix[..total * 2],
+            "同输入同会话集重放须逐位一致"
+        );
     }
 
     #[test]
@@ -489,7 +579,13 @@ mod tests {
         let (t, _rx) = table();
         let s = t.open(0).unwrap();
         // 块1 = 8 帧，块2 = 2 帧；每轮配额 3 帧
-        t.ingest_frame(&frame(s, 0, &[1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0, 5.0, 5.0, 6.0, 6.0, 7.0, 7.0, 8.0, 8.0]));
+        t.ingest_frame(&frame(
+            s,
+            0,
+            &[
+                1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0, 5.0, 5.0, 6.0, 6.0, 7.0, 7.0, 8.0, 8.0,
+            ],
+        ));
         t.ingest_frame(&frame(s, 1, &[9.0, 9.0, 10.0, 10.0]));
         let mut mix = vec![0.0_f32; 6];
         assert_eq!(t.drain_and_mix(&mut mix, 0, 3), 3);
@@ -498,7 +594,11 @@ mod tests {
         assert_eq!(t.drain_and_mix(&mut mix2, 0, 3), 3);
         assert_eq!(&mix2[..6], &[4.0, 4.0, 5.0, 5.0, 6.0, 6.0]);
         let mut mix3 = vec![0.0_f32; 8];
-        assert_eq!(t.drain_and_mix(&mut mix3, 0, 3), 3, "余量 7,8 与下一块首帧 9");
+        assert_eq!(
+            t.drain_and_mix(&mut mix3, 0, 3),
+            3,
+            "余量 7,8 与下一块首帧 9"
+        );
         assert_eq!(&mix3[..6], &[7.0, 7.0, 8.0, 8.0, 9.0, 9.0]);
         let mut mix4 = vec![0.0_f32; 6];
         assert_eq!(t.drain_and_mix(&mut mix4, 0, 3), 1);
@@ -530,7 +630,10 @@ mod tests {
         let (t, _rx) = table();
         let s = t.open(0).unwrap();
         let weird = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -0.0];
-        assert!(t.ingest_frame(&frame(s, 0, &weird)), "规格未要求过滤，透传给链内 limiter");
+        assert!(
+            t.ingest_frame(&frame(s, 0, &weird)),
+            "规格未要求过滤，透传给链内 limiter"
+        );
         assert_eq!(t.queued_frames(s), Some(2));
     }
 }

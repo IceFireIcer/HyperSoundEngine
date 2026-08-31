@@ -15,8 +15,11 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      - run: npm run verify:license-guard
       - run: npm run typecheck
       - run: npm run typecheck:ui
+      - run: npm run verify:frame-count-contract
+      - run: npm run verify:phase4-param-scan
       - run: npm test
       - name: 引擎参数与场景契约幂等门禁
         run: node scripts/export-engine-contracts.mjs
@@ -35,22 +38,66 @@ jobs:
         with:
           node-version: 20
           cache: npm
+      - id: chrome
+        uses: browser-actions/setup-chrome@v2
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: HyperSoundEngineRust
-      - name: Rust 实时安全与空间契约改动格式门禁
+      - name: Rust Phase 4 与空间门禁格式检查
         run: >-
-          rustfmt --edition 2021 --check
+          rustfmt --edition 2021 --check --config skip_children=true
           crates/hse-core/src/convolver.rs
+          crates/hse-core/src/engine_chain.rs
           crates/hse-core/tests/realtime_alloc.rs
+          crates/hse-core/tests/phase4_param_scan.rs
+          benches/benches/bench_hse_stretch.rs
+          benches/benches/bench_lufs_meter.rs
+          benches/benches/bench_engine_param_domain.rs
+          benches/benches/bench_service_path.rs
           crates/hrtf-core/src/lib.rs
           crates/hrtf-core/src/world.rs
+          crates/hrtf-core/src/grid.rs
+          crates/hrtf-core/src/interpolation.rs
+          crates/hrtf-core/src/model.rs
+          crates/hrtf-core/src/partitioned.rs
+          crates/hrtf-core/src/renderer.rs
+          crates/hrtf-core/src/room.rs
+          crates/hrtf-core/src/sofa.rs
+          crates/hrtf-core/tests/realtime_alloc.rs
+          crates/hrtf-core/tests/renderer_features.rs
+          crates/hrtf-core/benches/renderer.rs
+          crates/hse-parity/src/main.rs
+          crates/hse-parity/src/param_scan_runner.rs
+          crates/hse-parity/src/param_scan_vector.rs
           crates/hse-parity/src/spatial_runner.rs
           crates/hse-parity/src/spatial_vector.rs
+          crates/hse-parity/src/spatial_renderer_runner.rs
+          crates/hse-parity/src/spatial_renderer_vector.rs
+          crates/hse-service/src/backend.rs
+          crates/hse-service/src/dsp_chain.rs
+          crates/hse-service/src/engine.rs
+          crates/hse-service/src/pipeline.rs
+          crates/hse-service/src/real_audio_check.rs
+          crates/hse-service/src/state.rs
+          crates/hse-service/src/bin/hse_real_audio_check.rs
+          crates/hse-service/tests/pipeline_fake.rs
+          crates/hse-wasapi/src/lib.rs
+          crates/hse-wasapi/src/win.rs
+          crates/hse-wasm/src/lib.rs
+          crates/hse-wasm/src/spatial_abi.rs
         working-directory: HyperSoundEngineRust
       - name: Rust Clippy 正确性与性能门禁
         # 精确小数常数与 x-x NaN 传播用于复刻 TS 位型，已由冻结向量覆盖。
         run: cargo clippy --workspace --all-targets --locked -- --allow clippy::approx_constant --allow clippy::eq_op --deny clippy::suspicious --deny clippy::perf
+        working-directory: HyperSoundEngineRust
+      - name: Rust Phase 4 固定种子参数扫描门禁
+        run: cargo test -p hse-core --test phase4_param_scan --locked
+        working-directory: HyperSoundEngineRust
+      - name: Rust Phase 4 release 连续块零分配门禁
+        run: cargo test --release -p hse-core --test realtime_alloc --locked
+        working-directory: HyperSoundEngineRust
+      - name: Rust 服务完整管线 readiness 许可门禁
+        run: cargo test -p hse-service --test pipeline_fake 完整管线由readiness许可推进_经过service_chain与双环 --locked
         working-directory: HyperSoundEngineRust
       - name: Rust 基准编译门禁
         run: cargo bench --workspace --no-run --locked
@@ -59,15 +106,21 @@ jobs:
         run: |
           npm ci
           cargo install --locked wasm-bindgen-cli --version 0.2.127
-      - name: wasm32 最小试点构建门禁
+      - name: wasm32 完整引擎、生产 Worklet 与 Chromium E2E 门禁
+        env:
+          HSE_CHROMIUM_EXECUTABLE: ${{ steps.chrome.outputs.chrome-path }}
         run: |
           rustup target add wasm32-unknown-unknown
           cargo build -p hse-core --target wasm32-unknown-unknown --release --locked
           cargo build -p hse-wasm --target wasm32-unknown-unknown --release --locked
           wasm-bindgen target/wasm32-unknown-unknown/release/hse_wasm.wasm \
             --target web \
-            --out-dir "$RUNNER_TEMP/wasm-pilot-pkg"
-          node ../scripts/check-wasm-pilot.mjs --pkg "$RUNNER_TEMP/wasm-pilot-pkg"
+            --out-dir "$RUNNER_TEMP/wasm-engine-pkg"
+          node ../scripts/check-wasm-pilot.mjs --pkg "$RUNNER_TEMP/wasm-engine-pkg"
+          npm run verify:spatial-abi-header --prefix ..
+          npm run build:core --prefix ..
+          node ../scripts/build-wasm-worklet.mjs --pkg "$RUNNER_TEMP/wasm-engine-pkg"
+          npm run test:wasm-worklet:e2e --prefix .. -- --wasm "$RUNNER_TEMP/wasm-engine-pkg/hse_wasm_bg.wasm"
         working-directory: HyperSoundEngineRust
       - name: Rust 支线单元测试（workspace 全成员）
         run: cargo test --workspace --locked
@@ -88,6 +141,12 @@ jobs:
           workspaces: HyperSoundEngineRust
       - name: Windows hse-core 无声门禁
         run: cargo test -p hse-core --locked
+        working-directory: HyperSoundEngineRust
+      - name: Windows hse-wasapi 无声方向门禁
+        run: cargo test -p hse-wasapi endpoint_modes_select_expected_device_and_stream_directions --locked
+        working-directory: HyperSoundEngineRust
+      - name: Windows 服务完整管线 readiness 许可门禁
+        run: cargo test -p hse-service --test pipeline_fake 完整管线由readiness许可推进_经过service_chain与双环 --locked
         working-directory: HyperSoundEngineRust
       - name: Windows hse-service 无声门禁
         run: cargo test -p hse-service --locked

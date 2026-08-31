@@ -260,8 +260,8 @@ export class FdnReverb {
   }
 
   /** 就地处理立体声;out = dry·in + 湿路交叉混合(FDN 结构) */
-  processStereo(l: Float32Array, r: Float32Array): void {
-    const B = Math.min(l.length, r.length)
+  processStereo(l: Float32Array, r: Float32Array, frameCount?: number): void {
+    const B = Math.max(0, Math.min(Math.floor(frameCount ?? l.length), l.length, r.length))
     for (let i = 0; i < B; i++) {
       const xl = l[i]
       const xr = r[i]

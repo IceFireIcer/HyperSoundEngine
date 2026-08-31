@@ -1,9 +1,9 @@
 /**
  * controller —— 模式 C 世界漫游：听者 → 声源相对方向计算 + 听者移动/旋转（纯函数）
  *
- * 规划书 §4.3：direction = src − listener；
- *   azimuth = atan2(dx, dz) − listener.yaw（度，右正、前方 0、正后 ±180）
- *   elevation = asin(dy / distance)（度，上方为正）
+ * 规划书 §4.3：direction = src − listener；将世界方向乘听者 yaw/pitch/roll 的逆旋转后：
+ *   azimuth = atan2(headX, headZ)（度，右正、前方 0、正后 ±180）
+ *   elevation = asin(headY / distance)（度，上方为正）
  *   distance = |direction|（米）
  * ListenerState/AudioObject 定义复用于 types.ts（本模块不重复声明）。
  * 移动/旋转（moveListener/rotateListener/listenerForwardVector/applyKeyboardMove）
@@ -20,6 +20,26 @@ export interface RelativeDirection {
   distance: number
 }
 
+export interface TimedPosition {
+  position: Vec3
+  playhead: number
+}
+
+/**
+ * 相邻参数快照推导听者世界速度。首次（prev=null）、非递增或非有限时间差固定返回零，
+ * 从而不依赖系统时钟且在暂停/seek 时保持确定性。
+ */
+export function computeWorldVelocity(prev: TimedPosition | null, current: TimedPosition): Vec3 {
+  if (!prev) return { x: 0, y: 0, z: 0 }
+  const dt = current.playhead - prev.playhead
+  if (!Number.isFinite(dt) || dt <= 0) return { x: 0, y: 0, z: 0 }
+  return {
+    x: (current.position.x - prev.position.x) / dt,
+    y: (current.position.y - prev.position.y) / dt,
+    z: (current.position.z - prev.position.z) / dt,
+  }
+}
+
 export function wrapAzimuthDeg(angle: number): number {
   return (((angle + 180) % 360) + 360) % 360 - 180
 }
@@ -33,8 +53,17 @@ export function computeRelativeDirection(
   listener: WorldListenerPose,
   source: Vec3,
 ): RelativeDirection {
-  if (![listener.position.x, listener.position.y, listener.position.z, listener.yaw, source.x, source.y, source.z]
-    .every(Number.isFinite)) {
+  if (![
+    listener.position.x,
+    listener.position.y,
+    listener.position.z,
+    listener.yaw,
+    listener.pitch ?? 0,
+    listener.roll ?? 0,
+    source.x,
+    source.y,
+    source.z,
+  ].every(Number.isFinite)) {
     throw new Error('computeRelativeDirection: listener and source values must be finite')
   }
   const dx = source.x - listener.position.x
@@ -45,8 +74,27 @@ export function computeRelativeDirection(
     // 声源与听者重合：方向未定义，约定为正前方（避免 asin 除零 → NaN）
     return { azimuthDeg: 0, elevationDeg: 0, distance: 0 }
   }
-  const azimuthDeg = wrapAzimuthDeg((Math.atan2(dx, dz) * 180) / Math.PI - listener.yaw)
-  const elevationDeg = (Math.asin(Math.max(-1, Math.min(1, dy / distance))) * 180) / Math.PI
+
+  // 世界方向乘听者欧拉姿态的逆旋转：先撤销 yaw，再撤销 pitch、roll。
+  // 约定 yaw 右转为正、pitch 抬头为正（固定世界前方因此落到负仰角）、roll 向右倾为正；pitch/roll 缺省 0
+  // 保持旧 WorldListenerPose 与冻结 yaw-only case 完全兼容。
+  const yaw = -(listener.yaw * Math.PI) / 180
+  const pitch = ((listener.pitch ?? 0) * Math.PI) / 180
+  const roll = -((listener.roll ?? 0) * Math.PI) / 180
+  const cy = Math.cos(yaw)
+  const sy = Math.sin(yaw)
+  const cp = Math.cos(pitch)
+  const sp = Math.sin(pitch)
+  const cr = Math.cos(roll)
+  const sr = Math.sin(roll)
+  const yawX = cy * dx + sy * dz
+  const yawZ = -sy * dx + cy * dz
+  const pitchY = cp * dy - sp * yawZ
+  const pitchZ = sp * dy + cp * yawZ
+  const headX = cr * yawX + sr * pitchY
+  const headY = -sr * yawX + cr * pitchY
+  const azimuthDeg = wrapAzimuthDeg((Math.atan2(headX, pitchZ) * 180) / Math.PI)
+  const elevationDeg = (Math.asin(Math.max(-1, Math.min(1, headY / distance))) * 180) / Math.PI
   return { azimuthDeg, elevationDeg, distance }
 }
 

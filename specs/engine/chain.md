@@ -79,6 +79,11 @@ engine.process([inputLBlock, inputRBlock], [outputLBlock, outputRBlock])
 - **当（When）**：每块先以未处理输入推进 LFO 与包络，再执行整链。
 - **则（Then）**：块级 stereo width 在第 3 级 M/S 生效，块级 master gain 在第 20 级生效；两者组合输出符合冻结向量。
 
+### GWT-CHAIN-06：默认工厂短尾只推进有效帧
+- **给定（Given）**：通过默认 `createEngine` 创建两个同参数引擎，其中一个先按较大容量调用 `prepare`，另一个不预分配；两者接收相同的确定性变长块序列，序列包含短于预分配容量的块。
+- **当（When）**：逐块调用公开 `process`，且处理器包含可观察跨块相位的 Tremolo。
+- **则（Then）**：两引擎每块输出逐位一致；短尾不得按内部容量补零处理，也不得推进容量尾部对应的 DSP 状态。case 形状由 `vectors/frame-count.v1.json` 与 `../schema/frame-count.schema.json` 机械校验；旧 72 组音频向量继续使用 `legacyPaddedTail` 重放，不修改冻结期望值。
+
 ## 四、冻结向量
 
 - `all-bypass-bitexact`：全旁路逐位锚点。
@@ -87,4 +92,4 @@ engine.process([inputLBlock, inputRBlock], [outputLBlock, outputRBlock])
 - `lufs-normalization-400ms`：实时归一化跨 400ms 首测边界。
 - `mod-dual-target`：调制矩阵同时驱动 master gain 与 stereo width。
 
-全部期望输出仅由 `scripts/export-vectors.mjs` 驱动 TS 事实实现生成；既有文件逐字节不一致时导出器必须拒绝覆盖。
+全部期望输出仅由 `scripts/export-vectors.mjs` 驱动 TS 事实实现生成；既有文件逐字节不一致时导出器必须拒绝覆盖。Phase 4 的 40 组广域参数扫描另由 [`param-scan.md`](param-scan.md) 与 `scripts/phase4-param-scan.mjs` 管理，不计入旧 72 组逐样本向量。

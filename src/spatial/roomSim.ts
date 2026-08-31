@@ -68,10 +68,22 @@ export interface RoomSimParams {
 }
 
 /** 预设 → 房间参数（off → null；earlyOrders 为早期反射阶数，预设默认 2） */
-export function roomParamsFromPreset(preset: RoomPreset, earlyOrders: number): RoomSimParams | null {
+export function roomParamsFromPreset(
+  preset: RoomPreset,
+  earlyOrders: number,
+  geometryScale = 1,
+): RoomSimParams | null {
   if (preset === 'off') return null
   const p = ROOM_PRESETS[preset]
-  return { width: p.width, height: p.height, depth: p.depth, reflectivity: p.reflectivity, earlyOrders, rt60: p.rt60 }
+  const scale = Number.isFinite(geometryScale) ? Math.min(2, Math.max(0.5, geometryScale)) : 1
+  return {
+    width: p.width * scale,
+    height: p.height * scale,
+    depth: p.depth * scale,
+    reflectivity: p.reflectivity,
+    earlyOrders,
+    rt60: p.rt60,
+  }
 }
 
 /** 镜像声源早期反射抽头（双耳共用延迟/增益；低通状态每耳独立，f32 存储） */
@@ -291,10 +303,11 @@ export class RoomSim {
           }
         }
       }
-      // 历史环长度 = 最大抽头延迟（预分配；双耳独立写指针，见 SpeakerRoomState 注释）
+      // 先写后读要求容量严格大于最大延迟，否则最大抽头会回读当前写位，退化为零延迟。
+      const historyLength = maxDelay + 1
       this.states.push({
-        histL: new Float32Array(maxDelay),
-        histR: new Float32Array(maxDelay),
+        histL: new Float32Array(historyLength),
+        histR: new Float32Array(historyLength),
         histPosL: 0,
         histPosR: 0,
         taps,
@@ -312,11 +325,18 @@ export class RoomSim {
     this.roomAmount = Math.min(1, Math.max(0, v))
   }
 
+  /** 在控制路径预分配块级累加总线。 */
+  prepare(maxBlockSize: number): void {
+    const size = Number.isFinite(maxBlockSize) ? Math.max(0, Math.floor(maxBlockSize)) : 0
+    if (this.earlyL.length >= size) return
+    this.earlyL = new Float32Array(size)
+    this.earlyR = new Float32Array(size)
+  }
+
   /** 每块开始时零化早期总线（须早于任何 early() 调用；热路径零分配） */
   beginBlock(n: number): void {
     if (this.earlyL.length < n) {
-      this.earlyL = new Float32Array(n)
-      this.earlyR = new Float32Array(n)
+      throw new Error(`RoomSim block ${n} exceeds prepared capacity ${this.earlyL.length}`)
     }
     this.earlyL.fill(0, 0, n)
     this.earlyR.fill(0, 0, n)

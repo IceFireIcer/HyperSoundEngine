@@ -33,8 +33,8 @@
     },
     "cases": {
       "type": "array",
-      "minItems": 12,
-      "maxItems": 12,
+      "minItems": 14,
+      "maxItems": 14,
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -47,7 +47,9 @@
             "required": ["position", "yaw"],
             "properties": {
               "position": { "$ref": "#/definitions/vec3" },
-              "yaw": { "type": "number" }
+              "yaw": { "type": "number" },
+              "pitch": { "type": "number" },
+              "roll": { "type": "number" }
             }
           },
           "source": { "$ref": "#/definitions/vec3" },

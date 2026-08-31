@@ -69,9 +69,10 @@ import {
 import { TsConvolverBackend } from '../spatial/TsConvolverBackend'
 import { generateAnalyticHrtfGrid } from '../spatial/analyticHrtf'
 import { instantSpeakers } from '../spatial/types'
-import { headLockedSpeakers } from '../spatial/layouts'
+import { headLockedSpeakers, multichannelSpeakers } from '../spatial/layouts'
 import { stageSpeakers, stageRoom } from '../spatial/scenes'
-import { computeRelativeDirection, computeTrajectoryPosition } from '../spatial/controller'
+import { computeRelativeDirection, computeTrajectoryPosition, computeWorldVelocity } from '../spatial/controller'
+import { AmbienceRenderer } from '../spatial/ambienceMixer'
 import type {
   VirtualSpeaker,
   VirtualSpeakerCfg,
@@ -96,6 +97,11 @@ const NORM_SMOOTH_SEC = 3.0
 /** 响度归一化手动增益平滑时间常数（秒）：externalGainDb（外部分析换算/用户拖动）
  *  语义下需及时跟随且无 zipper；实时 AGC 分支仍用 NORM_SMOOTH_SEC 防抽吸。 */
 const MANUAL_GAIN_SMOOTH_SEC = 0.08
+
+interface HyperSoundEngineInternalOptions {
+  /** 仅供冻结旧向量重放：内置 DSP 在短尾块按工作缓冲容量推进。默认关闭。 */
+  legacyPaddedTail?: boolean
+}
 
 /** 深拷贝参数快照：数组逐元素复制，避免外部可变对象影响引擎；引擎本身不修改传入参数。 */
 function cloneParams(p: HyperSoundEngineParams): HyperSoundEngineParams {
@@ -173,7 +179,7 @@ function cloneSpatial(s: SpatialSettings): SpatialSettings {
 // 复用 spatial/ 纯模块（layouts/scenes/controller），把 SpatialSettings 投影为后端渲染配置。
 // 差异（立体声内核）：① 无 output 分支；② hrtfInterp 直接由 settings 给出；
 // ③ instant.multichannelAuto 退化为 instantSpeakers（输入恒 2 声道）；
-// ④ 不附加 ambience 扬声器（FOA 动态混合是处理器层能力，内联级不实现，字段保留待扩展）。
+// ④ ambience 由内联级的 AmbienceRenderer 叠加，使用调用方持有缓冲与有效帧数。
 
 /** 扬声器方位角 → 输入声道索引（az≤0→左源 0、az>0→右源 1） */
 function headLockedChannel(azimuthDeg: number): number {
@@ -266,15 +272,22 @@ function speakersFromSettings(s: SpatialSettings): VirtualSpeaker[] {
  * SpatialSettings → 后端渲染配置。
  * stage 模式 room/roomAmount 取场景预设（与 instant 全局房间解耦）；wet/dry amount
  * 恒取 instant.amount（空间化强度全局由 instant.amount 控制）。
- * world 模式透传遮挡量 + 默认静止听者速度（多普勒 UI 驱动后续经 setParams 更新）。
+ * world 模式透传遮挡量，并由相邻 listener/playhead 参数快照推导确定性多普勒速度。
  */
-function spatialConfigFromSettings(s: SpatialSettings): SpatialRenderConfig {
+function spatialConfigFromSettings(
+  s: SpatialSettings,
+  dopplerVelocity?: { x: number; y: number; z: number },
+  inputChannelCount = 2,
+): SpatialRenderConfig {
   const stageActive = s.mode === 'stage'
-  const speakers = speakersFromSettings(s)
+  const speakers = s.mode === 'instant' && s.instant.multichannelAuto && inputChannelCount > 2
+    ? multichannelSpeakers(inputChannelCount)
+    : speakersFromSettings(s)
   return {
     speakers,
     room: stageActive ? stageRoom(s.stage) : s.instant.room,
     roomAmount: stageActive ? s.stage.reverbAmount : s.instant.roomAmount,
+    roomSizeScale: stageActive ? s.stage.roomSize : 1,
     amount: s.instant.amount,
     distanceModel: s.distanceModel ?? 'inverse',
     refDistance: s.refDistance,
@@ -283,13 +296,15 @@ function spatialConfigFromSettings(s: SpatialSettings): SpatialRenderConfig {
     convolution: s.convolution,
     masterGain: s.masterGain,
     occlusionAmount: s.mode === 'world' ? s.world.occlusion : undefined,
-    dopplerVelocity: s.mode === 'world' ? { x: 0, y: 0, z: 0 } : undefined,
+    dopplerVelocity: s.mode === 'world' ? dopplerVelocity : undefined,
+    ambienceAmount: s.ambience.enabled ? s.ambience.amount : 0,
   }
 }
 
 export class HyperSoundEngine implements AudioEngine {
   private readonly _fs: number
   private readonly _channels: number
+  private readonly _legacyPaddedTail: boolean
   private _params: HyperSoundEngineParams
 
   // —— 链上 DSP 模块（构造时固定采样率，setParams 只重算系数） ——
@@ -371,19 +386,31 @@ export class HyperSoundEngine implements AudioEngine {
 
   // —— 空间音频（内联级；TsConvolverBackend + 合成 HRTF 兜底网格） ——
   private readonly _spatialBackend: TsConvolverBackend
+  private readonly _ambienceRenderer: AmbienceRenderer
   private _spatialActive = false
+  private _ambienceAmount = 0
+  private _worldHistoryValid = false
+  private _worldPrevPlayhead = 0
+  private _worldPrevX = 0
+  private _worldPrevY = 0
+  private _worldPrevZ = 0
   /** spatial 配置变更签名（JSON）——仅当 settings 实际变化时才 setConfig，避免非空间参数
    *  变更触发后端 resample/decorr 状态清零（fill(0)）造成咔哒声 */
   private _spatialCfgKey = ''
   private _spatialOutL = new Float32Array(0)
   private _spatialOutR = new Float32Array(0)
+  /** 多声道空间渲染使用的预分配输入引用视图；每块只更新元素。 */
+  private readonly _spatialInputs: Float32Array[]
+  private _preparedCapacity = 0
 
-  constructor(sampleRate: number, channelCount = 2) {
+  constructor(sampleRate: number, channelCount = 2, options?: HyperSoundEngineInternalOptions) {
     if (!Number.isFinite(sampleRate) || sampleRate <= 0) {
       throw new Error('invalid sample rate')
     }
     this._fs = sampleRate
     this._channels = channelCount > 0 ? channelCount : 2
+    this._spatialInputs = new Array<Float32Array>(this._channels)
+    this._legacyPaddedTail = options?.legacyPaddedTail === true
 
     this._eqChain = new EqChain(sampleRate, MAX_PRE_EQ_BANDS)
     this._midSide = new MidSide()
@@ -438,6 +465,7 @@ export class HyperSoundEngine implements AudioEngine {
     // （KEMAR 实测网格后续可运行时经 loadHrtf 重载 + _spatialCfgKey='' 强制重下；首启用合成网格保证可用）
     this._spatialBackend = new TsConvolverBackend()
     this._spatialBackend.loadHrtf(generateAnalyticHrtfGrid(sampleRate))
+    this._ambienceRenderer = new AmbienceRenderer(sampleRate)
 
     // 初始快照：默认参数
     this._params = createDefaultParams(sampleRate)
@@ -595,16 +623,46 @@ export class HyperSoundEngine implements AudioEngine {
     const spatialActive = !!sp && sp.mode !== 'off'
     const wasSpatialActive = this._spatialActive
     this._spatialActive = spatialActive
+    let dopplerVelocity: { x: number; y: number; z: number } | undefined
+    if (sp?.mode === 'world') {
+      const listener = sp.world.listener.position
+      const playhead = sp.world.playhead
+      dopplerVelocity = computeWorldVelocity(
+        this._worldHistoryValid
+          ? {
+              position: { x: this._worldPrevX, y: this._worldPrevY, z: this._worldPrevZ },
+              playhead: this._worldPrevPlayhead,
+            }
+          : null,
+        { position: listener, playhead },
+      )
+      this._worldHistoryValid = true
+      this._worldPrevPlayhead = playhead
+      this._worldPrevX = listener.x
+      this._worldPrevY = listener.y
+      this._worldPrevZ = listener.z
+    } else {
+      this._worldHistoryValid = false
+    }
+    const wasAmbienceActive = this._ambienceAmount > 0
+    this._ambienceAmount = spatialActive && sp?.ambience.enabled
+      ? Math.min(1, Math.max(0, sp.ambience.amount))
+      : 0
+    if (!wasAmbienceActive && this._ambienceAmount > 0) this._ambienceRenderer.reset()
     if (spatialActive && sp) {
       const key = JSON.stringify(sp)
       if (key !== this._spatialCfgKey) {
-        if (!wasSpatialActive) this._spatialBackend.reset()
-        this._spatialBackend.setConfig(spatialConfigFromSettings(sp))
+        if (!wasSpatialActive) {
+          this._spatialBackend.reset()
+          this._ambienceRenderer.reset()
+        }
+        this._spatialBackend.setConfig(spatialConfigFromSettings(sp, dopplerVelocity, this._channels))
         this._spatialCfgKey = key
       }
     } else {
       // off/缺省：失效签名（下次再启用时强制重下配置）
       this._spatialCfgKey = ''
+      this._ambienceAmount = 0
     }
   }
 
@@ -618,12 +676,43 @@ export class HyperSoundEngine implements AudioEngine {
     const size = Number.isFinite(maxBlockSize) ? Math.max(0, Math.floor(maxBlockSize)) : 0
     if (size > 0) {
       this.ensureCapacity(size)
+      this._preparedCapacity = Math.max(this._preparedCapacity, size)
       this.ensureSideCapacity(size)
+      this._convolver.prepare(size)
+      this._spatialBackend.prepare(size)
+      this._ambienceRenderer.prepare(size)
     }
   }
 
   /** 就地处理：outputs[i] 写入处理结果（长度 = inputs[i] 长度）。process 内零分配。 */
   process(inputs: Float32Array[], outputs: Float32Array[], sidechain?: Float32Array[]): void {
+    this.processInternal(inputs, outputs, sidechain, false)
+  }
+
+  /**
+   * 3–8 路实时输入到双耳/立体声输出。数组和通道缓冲均由调用方预分配并复用。
+   * spatial 开启时先由 SpatialBackend.processMulti 双耳化，再让所得 L/R 经过第 1–21 级；
+   * spatial 关闭时保持 ch0→L、ch1→R，ch2+ 忽略的兼容语义并直接执行第 1–21 级。
+   */
+  processMulti(inputs: Float32Array[], outputs: Float32Array[], sidechain?: Float32Array[]): void {
+    if (inputs.length < 3 || inputs.length > 8) {
+      throw new RangeError('processMulti requires 3 to 8 input channels')
+    }
+    if (inputs.length !== this._channels) {
+      throw new RangeError(`processMulti requires configured input channel count ${this._channels}, got ${inputs.length}`)
+    }
+    if (outputs.length < 2) {
+      throw new RangeError('processMulti requires two output channels')
+    }
+    this.processInternal(inputs, outputs, sidechain, true)
+  }
+
+  private processInternal(
+    inputs: Float32Array[],
+    outputs: Float32Array[],
+    sidechain: Float32Array[] | undefined,
+    multi: boolean,
+  ): void {
     let n = Infinity
     for (const ch of inputs) {
       if (ch) n = Math.min(n, ch.length)
@@ -635,8 +724,16 @@ export class HyperSoundEngine implements AudioEngine {
     const inL = inputs[0]
     // 单声道引擎（channelCount=1）忽略第二输入声道
     const inR = this._channels > 1 && inputs.length > 1 ? inputs[1] : undefined
-    for (let i = 0; i < n; i++) L[i] = inL ? inL[i] : 0
-    for (let i = 0; i < n; i++) R[i] = inR ? inR[i] : 0
+    if (multi && this._spatialActive) {
+      for (let channel = 0; channel < inputs.length; channel++) this._spatialInputs[channel] = inputs[channel]
+      this._spatialBackend.processMulti(this._spatialInputs, L, R, n)
+      if (this._ambienceAmount > 0) {
+        this._ambienceRenderer.processAdd(inputs[0], inputs[1], L, R, n, this._ambienceAmount)
+      }
+    } else {
+      for (let i = 0; i < n; i++) L[i] = inL ? inL[i] : 0
+      for (let i = 0; i < n; i++) R[i] = inR ? inR[i] : 0
+    }
 
     // 可选 sidechain：复制到内部缓冲，供 Compressor/Deesser 等 stage 使用
     if (sidechain && sidechain.length > 0 && (sidechain[0]?.length ?? 0) > 0) {
@@ -644,8 +741,8 @@ export class HyperSoundEngine implements AudioEngine {
       const sL = sidechain[0]
       const sR = sidechain.length > 1 ? sidechain[1] : sL
       for (let i = 0; i < n; i++) {
-        this._sideL[i] = sL ? sL[i] : 0
-        this._sideR[i] = sR ? sR[i] : 0
+        this._sideL[i] = sL && i < sL.length ? sL[i] : 0
+        this._sideR[i] = sR && i < sR.length ? sR[i] : 0
       }
       this._sidechainActive = true
     } else {
@@ -662,10 +759,10 @@ export class HyperSoundEngine implements AudioEngine {
       this._modStereoWidth = 1
     }
 
-    // 14 级处理链（顺序见 buildStages）
-    for (const stage of this._stages) {
-      if (stage.active()) stage.run(L, R, n)
-    }
+    // 普通 process 保持 1–21 → spatial 的冻结顺序；processMulti 专用顺序为
+    // spatial multi → 1–21，避免双耳求和绕过 EQ、Limiter 等共享参数。
+    if (multi) this.processCore21(L, R, n)
+    else this.processAllStages(L, R, n)
 
     // 写出
     const outL = outputs[0]
@@ -687,7 +784,8 @@ export class HyperSoundEngine implements AudioEngine {
    *   奇数剩余通道复制成立体声处理并取 L 写回。适合 5.1/7.1 各通道独立处理。
    *   sidechain 同样按对切片；不足 2 声道时取第 0 声道广播到各对。
    *
-   * 注意：本方法为便利入口，会分配临时缓冲；实时路径请使用 `process()`。
+   * 注意：本方法为便利入口，会分配临时缓冲；实时立体声使用 `process()`，
+   * 实时 3–8 路输入使用 `processMulti()`。
    */
   processBus(input: HseAudioBus, output: HseAudioBus, sidechain?: HseAudioBus, options?: { mode?: 'downmix' | 'perChannelPair' }): void {
     if (options?.mode === 'perChannelPair' && input.channelCount > 2) {
@@ -870,8 +968,10 @@ export class HyperSoundEngine implements AudioEngine {
     this._flanger.reset()
     this._phaser.reset()
     this._tremolo.reset()
-    // 空间音频后端流式状态清零（卷积历史/延迟线/房间 FDN；配置与 IR 保留）
+    // 空间音频后端与环境渲染流式状态清零（配置与 IR 保留）
     this._spatialBackend.reset()
+    this._ambienceRenderer.reset()
+    this._worldHistoryValid = false
     this._normGain = 1
     this._surroundPhase = 0
     this._sidechainActive = false
@@ -899,8 +999,21 @@ export class HyperSoundEngine implements AudioEngine {
 
   // ==================== 内部实现 ====================
 
+  private processCore21(L: Float32Array, R: Float32Array, frameCount: number): void {
+    for (const stage of this._stages) {
+      if (stage.id === 'spatial') continue
+      if (stage.active()) stage.run(L, R, frameCount)
+    }
+  }
+
+  private processAllStages(L: Float32Array, R: Float32Array, frameCount: number): void {
+    for (const stage of this._stages) {
+      if (stage.active()) stage.run(L, R, frameCount)
+    }
+  }
+
   /**
-   * 构建处理链（20 级，含调制类效果与调制主增益）。
+   * 构建处理链（22 级，含调制类效果、调制主增益与空间音频）。
    * 顺序固定，与 API_SPEC 辅助模块 A 一致；数组顺序即处理顺序。
    */
   private buildStages(): void {
@@ -959,100 +1072,102 @@ export class HyperSoundEngine implements AudioEngine {
       {
         id: 'mid-side',
         active: () => true,
-        run: (L, R) => {
+        run: (L, R, n) => {
           // M/S：立体声宽度 + 人声比例（voiceBalance 仅在 pitch.enabled 时生效）
           const vb = this._params.pitch.enabled ? this._params.pitch.voiceBalance : 0
           const width = this._params.modulation.enabled ? this._modStereoWidth : this._params.stereoWidth
           this._midSide.setParams(width, vb)
-          this._midSide.processStereo(L, R)
+          this._midSide.processStereo(L, R, this.dspFrameCount(n))
         },
       },
       {
         id: 'pre-eq',
         active: () => this._preEqActive,
-        run: (L, R) => this._eqChain.processStereo(L, R),
+        run: (L, R, n) => this._eqChain.processStereo(L, R, this.dspFrameCount(n)),
       },
       {
         id: 'deesser',
         active: () => this._params.deesser.enabled,
-        run: (L, R) => {
+        run: (L, R, n) => {
           if (this._sidechainActive && this._params.deesser.sidechainEnabled) {
-            this._deesser.processStereo(L, R, this._sideL, this._sideR)
+            this._deesser.processStereo(L, R, this._sideL, this._sideR, this.dspFrameCount(n))
           } else {
-            this._deesser.processStereo(L, R)
+            this._deesser.processStereo(L, R, undefined, undefined, this.dspFrameCount(n))
           }
         },
       },
       {
         id: 'compressor',
         active: () => this._params.compressor.enabled,
-        run: (L, R) => {
+        run: (L, R, n) => {
           if (this._sidechainActive && this._params.compressor.sidechainEnabled) {
-            this._compressor.processStereo(L, R, this._sideL, this._sideR)
+            this._compressor.processStereo(L, R, this._sideL, this._sideR, this.dspFrameCount(n))
           } else {
-            this._compressor.processStereo(L, R)
+            this._compressor.processStereo(L, R, undefined, undefined, this.dspFrameCount(n))
           }
         },
       },
       {
         id: 'night-mode',
         active: () => this._nightActive,
-        run: (L, R) => {
+        run: (L, R, n) => {
           // NightMode：压缩增强 + 6kHz 高频衰减
-          this._nightCompressor.processStereo(L, R)
-          this._nightShelfL.processBlock(L, L)
-          this._nightShelfR.processBlock(R, R)
+          const dspN = this.dspFrameCount(n)
+          this._nightCompressor.processStereo(L, R, undefined, undefined, dspN)
+          this._nightShelfL.processBlock(L, L, dspN)
+          this._nightShelfR.processBlock(R, R, dspN)
         },
       },
       {
         id: 'delay',
         active: () => this._params.modEffects.delay.enabled,
-        run: (L, R) => this._delay.processStereo(L, R),
+        run: (L, R, n) => this._delay.processStereo(L, R, this.dspFrameCount(n)),
       },
       {
         id: 'chorus',
         active: () => this._params.modEffects.chorus.enabled,
-        run: (L, R) => this._chorus.processStereo(L, R),
+        run: (L, R, n) => this._chorus.processStereo(L, R, this.dspFrameCount(n)),
       },
       {
         id: 'flanger',
         active: () => this._params.modEffects.flanger.enabled,
-        run: (L, R) => this._flanger.processStereo(L, R),
+        run: (L, R, n) => this._flanger.processStereo(L, R, this.dspFrameCount(n)),
       },
       {
         id: 'phaser',
         active: () => this._params.modEffects.phaser.enabled,
-        run: (L, R) => this._phaser.processStereo(L, R),
+        run: (L, R, n) => this._phaser.processStereo(L, R, this.dspFrameCount(n)),
       },
       {
         id: 'tremolo',
         active: () => this._params.modEffects.tremolo.enabled,
-        run: (L, R) => this._tremolo.processStereo(L, R),
+        run: (L, R, n) => this._tremolo.processStereo(L, R, this.dspFrameCount(n)),
       },
       {
         id: 'reverb',
         active: () => this._params.reverb.enabled && this._params.reverb.mode !== 'off',
-        run: (L, R) => {
+        run: (L, R, n) => {
           // 混响（三路路由：卷积 / 算法 / off；mode='off' 时完全直通——审计修复）
-          if (this._useConvolver) this._convolver.processStereo(L, R)
-          else if (this._useFdn) this._fdnReverb.processStereo(L, R)
-          else this._reverbSimple.processStereo(L, R)
+          const dspN = this.dspFrameCount(n)
+          if (this._useConvolver) this._convolver.processStereo(L, R, dspN)
+          else if (this._useFdn) this._fdnReverb.processStereo(L, R, dspN)
+          else this._reverbSimple.processStereo(L, R, dspN)
         },
       },
       {
         id: 'bass-enhancer',
         active: () => this._params.bassEnhancer.enabled,
-        run: (L, R) => this._bass.processStereo(L, R),
+        run: (L, R, n) => this._bass.processStereo(L, R, this.dspFrameCount(n)),
       },
       {
         id: 'loudness-compensation',
         active: () => this._params.loudnessCompensation.enabled,
-        run: (L, R) => this._loudnessComp.processStereo(L, R),
+        run: (L, R, n) => this._loudnessComp.processStereo(L, R, this.dspFrameCount(n)),
       },
       {
         id: 'ieq-post',
         active: () => this._ieqActive,
-        run: (L, R) => this._ieqChain.processStereo(L, R),
+        run: (L, R, n) => this._ieqChain.processStereo(L, R, this.dspFrameCount(n)),
       },
       {
         id: 'analysis',
@@ -1066,14 +1181,14 @@ export class HyperSoundEngine implements AudioEngine {
       {
         id: 'dynamic-eq',
         active: () => this._params.dynamicEq.enabled,
-        run: (L, R) => this._dynamicEq.processStereo(L, R),
+        run: (L, R, n) => this._dynamicEq.processStereo(L, R, this.dspFrameCount(n)),
       },
       {
         id: 'lufs',
         active: () => true,
-        run: (L, R) => {
+        run: (L, R, n) => {
           // LUFS 采样点（Limiter 之前，API_SPEC 要求）
-          this._lufs.processStereo(L, R)
+          this._lufs.processStereo(L, R, this.dspFrameCount(n))
         },
       },
       {
@@ -1090,22 +1205,25 @@ export class HyperSoundEngine implements AudioEngine {
       {
         id: 'limiter',
         active: () => this._params.limiter.enabled,
-        run: (L, R) => this._limiter.processStereo(L, R),
+        run: (L, R, n) => this._limiter.processStereo(L, R, this.dspFrameCount(n)),
       },
       {
         id: 'spatial',
         active: () => this._spatialActive,
         run: (L, R, n) => {
           // 空间音频（内联级；mode='off' 时旁路逐位回归——不触碰 L/R）。
-          // 后端内部已含房间模拟（roomSim）；环境声 Ambisonics 动态混合是处理器层能力，
-          // 内联级不实现（ambience 字段保留待扩展）。渲染结果就地写回 L/R。
+          // 后端内部包含房间模拟；环境声在同一内联级叠加到双耳输出。
+          // 所有块级缓冲均由实例持有并在 prepare/ensureCapacity 控制路径扩容。
           if (this._spatialOutL.length < n) {
             this._spatialOutL = new Float32Array(n)
             this._spatialOutR = new Float32Array(n)
           }
           const oL = this._spatialOutL
           const oR = this._spatialOutR
-          this._spatialBackend.processStereo(L, R, oL, oR)
+          this._spatialBackend.processStereo(L, R, oL, oR, n)
+          if (this._ambienceAmount > 0) {
+            this._ambienceRenderer.processAdd(L, R, oL, oR, n, this._ambienceAmount)
+          }
           for (let i = 0; i < n; i++) {
             L[i] = oL[i]
             R[i] = oR[i]
@@ -1115,10 +1233,18 @@ export class HyperSoundEngine implements AudioEngine {
     )
   }
 
+  private dspFrameCount(frameCount: number): number {
+    return this._legacyPaddedTail ? this._workL.length : frameCount
+  }
+
   private ensureCapacity(n: number): void {
     if (this._workL.length < n) {
+      if (this._preparedCapacity > 0) {
+        throw new RangeError(`HyperSoundEngine block ${n} exceeds prepared capacity ${this._preparedCapacity}`)
+      }
       this._workL = new Float32Array(n)
       this._workR = new Float32Array(n)
+      this._spatialBackend.prepare(n)
     }
     if (this._spatialOutL.length < n) {
       this._spatialOutL = new Float32Array(n)
@@ -1166,6 +1292,7 @@ export class HyperSoundEngine implements AudioEngine {
     const wantDeP = rv.convolution.dePeriodize
     if (wantDeP !== this._convolverDePeriodize) {
       this._convolver = new Convolver(this._fs, { dePeriodize: wantDeP })
+      if (this._preparedCapacity > 0) this._convolver.prepare(this._preparedCapacity)
       this._convolverDePeriodize = wantDeP
       this._loadedIr = null // 新实例无 IR，强制重载
     }
@@ -1180,6 +1307,7 @@ export class HyperSoundEngine implements AudioEngine {
           if (ir !== this._loadedIr) {
             // 复制 IR 再载入：避免模块就地改写调用方数组
             this._convolver.loadIR(new Float32Array(ir), rv.convolution.irName ?? undefined)
+            if (this._preparedCapacity > 0) this._convolver.prepare(this._preparedCapacity)
             this._loadedIr = ir
           }
           this._convolver.setMix(rv.convolution.mix)

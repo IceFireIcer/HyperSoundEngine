@@ -16,7 +16,7 @@
  *   fc = 4000/(1+d) Hz（系数 a = 1−exp(−2π·fc/fs)，对扬声器信号先滤波后卷积）。
  *
  * 混合：out = ((1−amount)·dry + amount·Σ扬声器湿路) · masterGain，随后输出软限幅
- *   （0.85 软拐点 tanh 渐近 1.0——空间级位于引擎 Limiter 之后无下游保护）。
+ *   （0.85 软拐点 tanh 渐近 1.0；后端独立使用时也保证输出有界）。
  * 爆音防护（三道）：① 湿总线能量归一化——同源总线按 1/max(1, √Σ distGain²)
  *   预缩放（多扬声器相干求和不超幅，1~2 只不放大）；② IR 重装载淡变——方向/
  *   布局变化触发 loadIR 前先淡出湿路（256 样本）、装载后淡入，消除 Convolver
@@ -96,9 +96,7 @@ const OCC_FC_BASE = 12000
 /** 遮挡低通截止钳位下界（Hz）：防系数 a=0 退化为纯保持/全静音（"遮挡=1 增益≈0.2"语义） */
 const OCC_FC_MIN = 1
 /** 输出软限幅软拐点阈值（|x| ≤ T 完全线性零失真；超阈值 tanh 软压渐近 1.0）。
- *  空间级位于引擎 Limiter 之后（第 15 级），输出无下游保护——多扬声器相干残余
- *  峰值（能量归一化后低频最坏仍可到 √N·单只）由本软限幅兜底，超幅表现为
- *  温和软压缩而非硬削爆破音。 */
+ *  后端自身保持有界，供引擎 stage 22、processMulti 前置空间化和独立调用共同使用。 */
 const SOFTCLIP_THRESHOLD = 0.85
 /** IR 重装载淡入淡出长度（样本，≈5.3ms @48k）：方向/布局变化触发 loadIR 时，
  *  先淡出旧湿路 → 装载 → 淡入新湿路，消除 Convolver 状态重置的硬切换爆音 */
@@ -123,8 +121,8 @@ export function distanceGain(model: DistanceModel, d: number, ref = REF_DISTANCE
       // min(1, ref/max(d, ref))：ref 内不衰减，之后 1/d
       return Math.min(1, ref / Math.max(d, ref))
     case 'linear':
-      // max(0, 1-(d-ref)/(max-ref))：ref 内不衰减，ref..max 线性衰减到 0
-      return Math.max(0, 1 - (d - ref) / (Math.max(max, ref + 0.1) - ref))
+      // ref 内固定 1，ref..max 线性衰减到 0，max 外固定 0
+      return Math.min(1, Math.max(0, 1 - (d - ref) / (Math.max(max, ref + 0.1) - ref)))
     case 'exponential':
       // pow(max(d,ref)/ref, -1)：ref 内不衰减，之后 1/(d/ref)
       return Math.pow(Math.max(d, ref) / ref, -1)
@@ -205,6 +203,12 @@ export class TsConvolverBackend implements SpatialBackend {
   // 时域直接卷积，接口同构可互换）+ 空气吸收状态 + 标量增益
   private convL: StereoConvEngine[] = []
   private convR: StereoConvEngine[] = []
+  /** 控制路径预建的下一组卷积器；渲染线程淡出到零时只交换引用。 */
+  private pendingConvL: Array<StereoConvEngine | null> = []
+  private pendingConvR: Array<StereoConvEngine | null> = []
+  /** 交换下来的旧实例暂存到控制路径回收，避免音频回调内析构。 */
+  private retiredConvL: Array<StereoConvEngine | null> = []
+  private retiredConvR: Array<StereoConvEngine | null> = []
   /** 卷积模式：'partitioned'=分区 FFT（默认）/ 'time'=时域直接卷积（契约 spatial_set_convolution_mode） */
   private convMode: 'partitioned' | 'time' = 'partitioned'
   private airState: Float32Array = new Float32Array(0) // 一阶低通 y 状态（每扬声器一个标量）
@@ -229,9 +233,6 @@ export class TsConvolverBackend implements SpatialBackend {
   private fadePhase: Uint8Array = new Uint8Array(0)
   /** 淡变已推进样本数（phase1 从 RELOAD_FADE_SAMPLES 递减到 0 时执行装载转 phase2；phase2 递增到上限转 phase0） */
   private fadeCount: Int32Array = new Int32Array(0)
-  /** 待装载 IR（n × hrirLength 布局，syncSpeakers 拷贝入队，renderProcess 淡出完成后装载） */
-  private pendingIrL: Float32Array = new Float32Array(0)
-  private pendingIrR: Float32Array = new Float32Array(0)
   /** 干湿混合增益平滑状态（NaN = 首块直接跳到目标） */
   private dryGState = NaN
   private wetGState = NaN
@@ -314,6 +315,30 @@ export class TsConvolverBackend implements SpatialBackend {
    * 仅在 syncSpeakers 末尾更新；显式 reset() 不触碰（配置未变，仅流式状态清零）。
    */
   private _configuredN = 0
+  private maxBlockSize = 0
+  private explicitlyPrepared = false
+
+  prepare(maxBlockSize: number): void {
+    const size = Number.isFinite(maxBlockSize) ? Math.max(0, Math.floor(maxBlockSize)) : 0
+    this.explicitlyPrepared = size > 0
+    this.allocateBlockScratch(size)
+  }
+
+  private allocateBlockScratch(size: number): void {
+    if (size <= this.maxBlockSize) return
+    this.maxBlockSize = size
+    this.silenceL = new Float32Array(size)
+    this.silenceR = new Float32Array(size)
+    this.srcL = new Float32Array(size)
+    this.srcR = new Float32Array(size)
+    this.wetL = new Float32Array(size)
+    this.wetR = new Float32Array(size)
+    for (const convolver of this.convL) convolver.prepare(size)
+    for (const convolver of this.convR) convolver.prepare(size)
+    for (const convolver of this.pendingConvL) convolver?.prepare(size)
+    for (const convolver of this.pendingConvR) convolver?.prepare(size)
+    if (this.room) this.room.prepare(size)
+  }
 
   loadHrtf(grid: HrtfGrid): void {
     if (!grid || !Number.isFinite(grid.sampleRate) || grid.sampleRate <= 0) {
@@ -367,6 +392,10 @@ export class TsConvolverBackend implements SpatialBackend {
     if (convMode !== this.convMode) {
       this.convL = []
       this.convR = []
+      this.pendingConvL = []
+      this.pendingConvR = []
+      this.retiredConvL = []
+      this.retiredConvR = []
       this.convMode = convMode
       this._configuredN = 0
       // 全新实例无 IR——必须立即装载（不可走淡出重装路径），hasIr 全部归零
@@ -385,15 +414,22 @@ export class TsConvolverBackend implements SpatialBackend {
     const roomPreset: RoomPreset = config.room ?? 'off'
     const roomAmount = Math.max(0, config.roomAmount ?? 0)
     const roomActive = roomPreset !== 'off' && roomAmount > 0 && this.speakers.length > 0
+    const roomScale = Math.min(2, Math.max(0.5, config.roomSizeScale ?? 1))
     const roomSig = roomActive
-      ? roomPreset + '|' + this.roomEarlyOrders + '|' + this.speakers.map(sp =>
+      ? roomPreset + '|' + roomScale + '|' + this.roomEarlyOrders + '|' + this.speakers.map(sp =>
         `${Math.fround(sp.azimuthDeg)},${Math.fround(sp.elevationDeg)},${Math.fround(sp.distance)},${sp.channel}`).join(';')
       : ''
     if (roomActive) {
       if (this.room && this.roomSig === roomSig) {
         this.room.setAmount(roomAmount)
       } else {
-        this.room = new RoomSim(this.fs, config.speakers, roomParamsFromPreset(roomPreset, this.roomEarlyOrders), roomAmount)
+        this.room = new RoomSim(
+          this.fs,
+          config.speakers,
+          roomParamsFromPreset(roomPreset, this.roomEarlyOrders, roomScale),
+          roomAmount,
+        )
+        if (this.maxBlockSize > 0) this.room.prepare(this.maxBlockSize)
         this.roomSig = roomSig
       }
     } else {
@@ -416,22 +452,33 @@ export class TsConvolverBackend implements SpatialBackend {
   private syncSpeakers(forceReload: boolean): void {
     const grid = this.grid
     if (!grid) return
+    // 回收上一次音频线程交换下来的旧实例；本函数只在控制路径调用。
+    this.retiredConvL.fill(null)
+    this.retiredConvR.fill(null)
     const n = this.speakers.length
+    if (this.grpOf.length < n) {
+      this.grpOf = new Int32Array(n)
+      this.grpScale = new Float32Array(n)
+    }
 
     // 卷积引擎实例：数量变化时分配/截断（配置变化不重建同索引实例，避免湿路历史抖动；
     // 模式切换已在 setConfig 全量重建）——partitioned=Convolver（分区 FFT）/
     // time=TimeConvolver（时域直接卷积，契约 spatial_set_convolution_mode）
-    const mkConv = (): StereoConvEngine =>
-      this.convMode === 'time'
-        ? new TimeConvolver(this.fs, { partitionSize: PARTITION_SIZE })
-        : new Convolver(this.fs, { partitionSize: PARTITION_SIZE })
     while (this.convL.length < n) {
-      this.convL.push(mkConv())
-      this.convR.push(mkConv())
+      this.convL.push(this.createConvolver())
+      this.convR.push(this.createConvolver())
+      this.pendingConvL.push(null)
+      this.pendingConvR.push(null)
+      this.retiredConvL.push(null)
+      this.retiredConvR.push(null)
     }
     if (this.convL.length > n) {
       this.convL.length = n
       this.convR.length = n
+      this.pendingConvL.length = n
+      this.pendingConvR.length = n
+      this.retiredConvL.length = n
+      this.retiredConvR.length = n
     }
     // 每扬声器状态数组按需扩容（保留旧值）
     if (this.airState.length < n) {
@@ -491,13 +538,6 @@ export class TsConvolverBackend implements SpatialBackend {
       const fc = new Int32Array(n)
       fc.set(this.fadeCount.subarray(0, Math.min(this.fadeCount.length, n)))
       this.fadeCount = fc
-    }
-    if (grid && this.pendingIrL.length < n * grid.hrirLength) {
-      const M = grid.hrirLength
-      const pl = new Float32Array(n * M)
-      const pr = new Float32Array(n * M)
-      this.pendingIrL = pl
-      this.pendingIrR = pr
     }
     if (this.occState.length < n) {
       const ns = new Float32Array(n)
@@ -710,21 +750,28 @@ export class TsConvolverBackend implements SpatialBackend {
     }
   }
 
+  private createConvolver(): StereoConvEngine {
+    const convolver = this.convMode === 'time'
+      ? new TimeConvolver(this.fs, { partitionSize: PARTITION_SIZE })
+      : new Convolver(this.fs, { partitionSize: PARTITION_SIZE })
+    if (this.maxBlockSize > 0) convolver.prepare(this.maxBlockSize)
+    return convolver
+  }
+
   /**
-   * IR 装载入队（爆音修复）：已有 IR 的槽位不立即 loadIR——Convolver.loadIR 会
-   * 重置流式状态（湿路瞬间静默 512 样本再全幅跳回 = 硬切换爆音），改为暂存 IR
-   * 并进入淡出相位，由 renderProcess 在湿路淡出到 0 后执行装载、再淡入。
-   * 全新槽位/实例（hasIr=0，processStereo 对无 IR 实例会抛错）立即装载并从 0
-   * 淡入——卷积零状态虽自然渐入，但满增益起步在多扬声器布局下（一次新增 11 只）
-   * 首块即可观爬升（实测相邻样本跳变 0.76），淡入 256 样本彻底压平。
+   * IR 装载入队（爆音修复）：已有 IR 的槽位在控制路径预建下一组卷积器，
+   * 渲染路径只负责旧湿路淡出、交换已完成的实例引用、再淡入；FFT、数组分配和
+   * 旧实例析构都不会发生在 process 回调内。全新槽位/实例立即装载并从 0 淡入。
    */
   private queueIr(s: number, irL: Float32Array, irR: Float32Array): void {
-    const grid = this.grid
-    if (!grid) return
+    if (!this.grid) return
     if (this.hasIr[s]) {
-      const M = grid.hrirLength
-      this.pendingIrL.set(irL, s * M)
-      this.pendingIrR.set(irR, s * M)
+      const nextL = this.createConvolver()
+      const nextR = this.createConvolver()
+      nextL.loadIR(irL, `sp${s}-L`)
+      nextR.loadIR(irR, `sp${s}-R`)
+      this.pendingConvL[s] = nextL
+      this.pendingConvR[s] = nextR
       this.fadePhase[s] = 1
       this.fadeCount[s] = RELOAD_FADE_SAMPLES
     } else {
@@ -770,9 +817,14 @@ export class TsConvolverBackend implements SpatialBackend {
     return { left, right }
   }
 
-  processStereo(inL: Float32Array, inR: Float32Array, outL: Float32Array, outR: Float32Array): void {
-    // 立体声：channel ≤ 0 → L 源，其余 → R 源（既有语义，逐位回归）
-    this.renderProcess((s) => (this.speakers[s].channel <= 0 ? inL : inR), inL, inR, outL, outR)
+  processStereo(
+    inL: Float32Array,
+    inR: Float32Array,
+    outL: Float32Array,
+    outR: Float32Array,
+    frameCount?: number,
+  ): void {
+    this.renderProcess(null, inL, inR, outL, outR, frameCount)
   }
 
   /**
@@ -781,7 +833,12 @@ export class TsConvolverBackend implements SpatialBackend {
    * 输入；越界取 0 号输入；干路 = 0/1 号输入（立体声下混）。相同 speaker 配置下
    * 2 路输入与 processStereo 输出逐位一致（回归测试）。
    */
-  processMulti(inputs: Float32Array[], outL: Float32Array, outR: Float32Array): void {
+  processMulti(
+    inputs: Float32Array[],
+    outL: Float32Array,
+    outR: Float32Array,
+    frameCount?: number,
+  ): void {
     if (inputs.length === 0) {
       // 防御：无输入（处理器多声道路径恒 ≥3 路，不会走到）→ 静音输出
       outL.fill(0)
@@ -790,51 +847,56 @@ export class TsConvolverBackend implements SpatialBackend {
     }
     const inL = inputs[0]
     const inR = inputs.length > 1 ? inputs[1] : inputs[0] // 单路输入干路双耳同源
-    this.renderProcess((s) => {
-      const c = this.speakers[s].channel
-      return c < inputs.length ? inputs[c] : inputs[0] // 越界取 0 号输入
-    }, inL, inR, outL, outR)
+    this.renderProcess(inputs, inL, inR, outL, outR, frameCount)
+  }
+
+  private sourceForSpeaker(
+    inputs: Float32Array[] | null,
+    inL: Float32Array,
+    inR: Float32Array,
+    speakerIndex: number,
+  ): Float32Array {
+    const channel = this.speakers[speakerIndex].channel
+    if (!inputs) return channel <= 0 ? inL : inR
+    return channel < inputs.length ? inputs[channel] : inputs[0]
   }
 
   /**
-   * 公共渲染内核（processStereo / processMulti 共用；srcFor 只做源声道选择，
+   * 公共渲染内核（processStereo / processMulti 共用；输入数组只做源声道选择，
    * 全部 DSP 算术与顺序逐位一致）：
    * 干路延迟线（512 对齐）→ 逐扬声器吸收/距离增益/遮挡/多普勒/去相关/卷积 →
    * 房间早期反射 + FDN → 干湿混合。
    */
   private renderProcess(
-    srcFor: (speakerIndex: number) => Float32Array,
+    inputs: Float32Array[] | null,
     inL: Float32Array,
     inR: Float32Array,
     outL: Float32Array,
     outR: Float32Array,
+    frameCount?: number,
   ): void {
-    const B = Math.min(inL.length, inR.length, outL.length, outR.length)
+    const requested = frameCount === undefined
+      ? Math.min(inL.length, inR.length, outL.length, outR.length)
+      : Math.floor(frameCount)
+    const B = Math.max(0, Math.min(requested, inL.length, inR.length, outL.length, outR.length))
     if (B <= 0) return
+    if (this.maxBlockSize === 0) this.allocateBlockScratch(B)
+    if (B > this.maxBlockSize) {
+      if (this.explicitlyPrepared) {
+        throw new Error(`TsConvolverBackend block ${B} exceeds prepared capacity ${this.maxBlockSize}`)
+      }
+      this.allocateBlockScratch(B)
+    }
     const n = this.speakers.length
     if (n === 0) {
       // 无扬声器：直通（无额外延迟）
-      outL.set(inL.subarray(0, B))
-      outR.set(inR.subarray(0, B))
+      for (let i = 0; i < B; i++) {
+        outL[i] = inL[i]
+        outR[i] = inR[i]
+      }
       return
     }
-    // scratch 按需扩容（仅尺寸变化时分配一次）
-    if (this.silenceL.length < B) {
-      this.silenceL = new Float32Array(B)
-      this.silenceR = new Float32Array(B)
-    }
-    if (this.srcL.length < B) {
-      this.srcL = new Float32Array(B)
-      this.srcR = new Float32Array(B)
-    }
-    if (this.wetL.length < B) {
-      this.wetL = new Float32Array(B)
-      this.wetR = new Float32Array(B)
-    }
-    if (this.grpOf.length < n) {
-      this.grpOf = new Int32Array(n)
-      this.grpScale = new Float32Array(n)
-    }
+    // scratch 已由 prepare()/setConfig() 在控制路径分配。
 
     // 干路：512 样本延迟线（与湿路块缓冲延迟对齐），写入 out
     for (let i = 0; i < B; i++) {
@@ -848,8 +910,8 @@ export class TsConvolverBackend implements SpatialBackend {
 
     // 湿路：逐扬声器 —— 距离增益（一阶平滑）+ IR 重装载淡变 + 空气吸收 → 左右耳卷积 → 求和（+ 房间早期反射）
     if (this.room) this.room.beginBlock(B)
-    this.wetL.fill(0)
-    this.wetR.fill(0)
+    this.wetL.fill(0, 0, B)
+    this.wetR.fill(0, 0, B)
     // 标量增益每样本平滑系数（τ=20ms，防 zipper）
     const gainCoef = 1 - Math.exp(-1 / (this.fs * GAIN_SMOOTH_TAU))
     // —— 湿总线能量归一化（爆音主修复）：按 srcFor 返回的输入数组引用分组（同
@@ -862,10 +924,10 @@ export class TsConvolverBackend implements SpatialBackend {
     for (let s = 0; s < n; s++) this.grpOf[s] = -1
     for (let s = 0; s < n; s++) {
       if (this.grpOf[s] !== -1) continue
-      const srcS = srcFor(s)
+      const srcS = this.sourceForSpeaker(inputs, inL, inR, s)
       let e = this.distGain[s] * this.distGain[s]
       for (let k = s + 1; k < n; k++) {
-        if (this.grpOf[k] === -1 && srcFor(k) === srcS) {
+        if (this.grpOf[k] === -1 && this.sourceForSpeaker(inputs, inL, inR, k) === srcS) {
           this.grpOf[k] = s
           e += this.distGain[k] * this.distGain[k]
         }
@@ -875,14 +937,14 @@ export class TsConvolverBackend implements SpatialBackend {
       this.grpScale[s] = scale
     }
     for (let s = 0; s < n; s++) {
-      const src = srcFor(s) // 源声道选择（processStereo：0=L 其余=R；processMulti：按 channel 索引）
+      const src = this.sourceForSpeaker(inputs, inL, inR, s)
       // 拷贝 + 距离增益：g 一阶平滑逼近目标（目标 = distGain × 组归一化）
       const gTarget = this.distGain[s] * this.grpScale[this.grpOf[s]]
       let g = this.distGainCur[s]
       if (Number.isNaN(g)) g = gTarget // 新槽位/reset 后首块：直接跳完整目标（含组缩放）
       const a = this.airCoef[s]
-      const sl = this.srcL.subarray(0, B) // 只喂本块 B 个样本，避免历史最大块长的陈旧尾部被重复卷积
-      const sr = this.srcR.subarray(0, B)
+      const sl = this.srcL
+      const sr = this.srcR
       for (let i = 0; i < B; i++) {
         g += gainCoef * (gTarget - g)
         const v = src[i] * g
@@ -925,7 +987,7 @@ export class TsConvolverBackend implements SpatialBackend {
         const rate = dopplerRate(this.dopplerVelocity, this.rsmpDirX[s], this.rsmpDirY[s], this.rsmpDirZ[s])
         if (rate !== 1) {
           this.resampleSpeaker(s, sl, B, rate)
-          sr.set(sl.subarray(0, B))
+          for (let i = 0; i < B; i++) sr[i] = sl[i]
         }
       }
 
@@ -937,38 +999,33 @@ export class TsConvolverBackend implements SpatialBackend {
 
       // 左耳：processStereo(信号, 静音) → l 通道 = 左耳湿路（就地覆盖 srcL）。
       // 注意：Convolver 就地写回输入数组，故静音通道会被污染——左右耳各用一块
-      // 独立静音（silenceL/silenceR），且每扬声器只喂 subarray(0, B) 的 B 个样本，
-      // 避免历史最大块长下 scratch 尾部陈旧样本被重复处理（湿路错位）。
-      this.convL[s].processStereo(sl, this.silenceL.subarray(0, B))
-      this.convR[s].processStereo(this.silenceR.subarray(0, B), sr)
-      // IR 重装载淡变状态机（施加在湿路输出端——卷积输出有 512 样本固有块缓冲
-      // 延迟，若乘在输入端，淡出要 512 样本后才表现在输出上，而 loadIR 中断放行
-      // 是即时的：输出会先硬跳 0 再补跳，等于没淡）。phase1：输出 256 样本线性淡出
-      // 到 0 → 此刻执行 loadIR（放行中断发生在该扬声器输出已为 0 时，无缝）→
-      // phase2：count 从 −512（分区长）起步对齐放行恢复时刻——装载后 512 样本
-      // 放行重建期间输出恒 0（fg=0 无副作用），恢复瞬间 fg 恰好从 0 渐强，盖住
-      // 卷积零状态起播的暂态振铃；256 样本淡入完成后回稳态。
+      // 独立静音（silenceL/silenceR）；有效帧数显式传给卷积器，避免历史容量尾部被推进。
+      this.silenceL.fill(0, 0, B)
+      this.silenceR.fill(0, 0, B)
+      this.convL[s].processStereo(this.srcL, this.silenceL, B)
+      this.convR[s].processStereo(this.silenceR, this.srcR, B)
+      // IR 重装载淡变状态机。旧实例处理完整块并淡出；达到零增益后只在块尾
+      // 交换控制路径已预建的实例，新实例从下一块开始消费完整输入，再经历其固有
+      // 512 样本放行期后淡入。禁止块中途交换，否则新实例会漏掉当前块后半历史。
       let phase = this.fadePhase[s]
+      let swapAfterBlock = false
       if (phase !== 0) {
         let count = this.fadeCount[s]
-        const M = this.grid ? this.grid.hrirLength : 0
         for (let i = 0; i < B; i++) {
-          if (phase === 0) continue // 块内已达稳态：fg=1，后续样本不再触碰
+          if (phase === 0) continue
           let fg = 1
           if (phase === 1) {
             count--
             fg = count > 0 ? count / RELOAD_FADE_SAMPLES : 0
             if (count <= 0) {
-              this.convL[s].loadIR(this.pendingIrL.subarray(s * M, (s + 1) * M), `sp${s}-L`)
-              this.convR[s].loadIR(this.pendingIrR.subarray(s * M, (s + 1) * M), `sp${s}-R`)
-              phase = 2
-              count = -PARTITION_SIZE
+              swapAfterBlock = true
+              count = 0
               fg = 0
             }
           } else {
             count++
             if (count >= RELOAD_FADE_SAMPLES) {
-              phase = 0 // 稳态（fg=1；count 不再使用）
+              phase = 0
             } else {
               fg = count > 0 ? count / RELOAD_FADE_SAMPLES : 0
             }
@@ -977,6 +1034,20 @@ export class TsConvolverBackend implements SpatialBackend {
             sl[i] *= fg
             sr[i] *= fg
           }
+        }
+        if (swapAfterBlock) {
+          const nextL = this.pendingConvL[s]
+          const nextR = this.pendingConvR[s]
+          if (nextL && nextR) {
+            this.retiredConvL[s] = this.convL[s]
+            this.retiredConvR[s] = this.convR[s]
+            this.convL[s] = nextL
+            this.convR[s] = nextR
+            this.pendingConvL[s] = null
+            this.pendingConvR[s] = null
+          }
+          phase = 2
+          count = -PARTITION_SIZE
         }
         this.fadePhase[s] = phase
         this.fadeCount[s] = count
@@ -995,8 +1066,7 @@ export class TsConvolverBackend implements SpatialBackend {
     if (this.room) this.room.lateAndMix(this.wetL, this.wetR, B)
 
     // 混合：out = ((1−amount)·dry + amount·wetSum) · masterGain——dryG/wetG 样本级
-    // 一阶平滑（NaN 首块直接跳目标），随后输出软限幅（空间级位于引擎 Limiter 之后，
-    // 无下游保护；多扬声器相干残余峰值在此软压，超幅为温和压缩而非硬削爆音）
+    // 一阶平滑（NaN 首块直接跳目标），随后输出软限幅，使后端独立输出也保持有界。
     const dryT = (1 - this.amount) * this.masterGain
     const wetT = this.amount * this.masterGain
     if (Number.isNaN(this.dryGState)) {
@@ -1115,13 +1185,16 @@ export class TsConvolverBackend implements SpatialBackend {
     this.wetGState = NaN
     for (let s = 0; s < this.distGainCur.length; s++) this.distGainCur[s] = NaN
     if (this.fadePhase.length > 0) {
-      const M = this.grid ? this.grid.hrirLength : 0
       for (let s = 0; s < this.fadePhase.length; s++) {
         if (this.fadePhase[s] === 1) {
-          // 淡出中未完成的待装 IR 立即装载（丢弃会让卷积器停留在旧 IR——配置语义
-          // 错误：声称 size/方向已变实际没变）；reset 已清全部流式状态，无爆音顾虑
-          this.convL[s].loadIR(this.pendingIrL.subarray(s * M, (s + 1) * M), `sp${s}-L`)
-          this.convR[s].loadIR(this.pendingIrR.subarray(s * M, (s + 1) * M), `sp${s}-R`)
+          const nextL = this.pendingConvL[s]
+          const nextR = this.pendingConvR[s]
+          if (nextL && nextR) {
+            this.convL[s] = nextL
+            this.convR[s] = nextR
+            this.pendingConvL[s] = null
+            this.pendingConvR[s] = null
+          }
         }
         if (this.hasIr[s]) {
           // 与全新后端 setConfig 后状态对齐（"reset 后与全新逐位一致"回归）：

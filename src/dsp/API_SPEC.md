@@ -408,7 +408,7 @@ export function decodeShareCode(s: string): HyperSoundEngineParams
 import { HyperSoundEngine } from '../engine/HyperSoundEngine'
 export const WORKLET_PROCESSOR_NAME = 'hypersoundengine'
 export class HseAudioEffectsProcessor extends AudioWorkletProcessor {
-  constructor() // 用全局 sampleRate 创建 HyperSoundEngine；port.onmessage 接 {type:'params'|'reset'}
+  constructor(options) // 用全局 sampleRate 创建引擎；从 processorOptions.initialParams 初始化并回 ready，port 仅接 reset
   process(inputs: Float32Array[][], outputs: Float32Array[][], parameters: Record<string, Float32Array>): boolean
 }
 // 文件末尾：typeof registerProcessor !== 'undefined' && registerProcessor(WORKLET_PROCESSOR_NAME, HseAudioEffectsProcessor)

@@ -151,8 +151,8 @@ export class LufsMeter {
   }
 
   /** 就地分析立体声（L/R 均过 K 加权；z = L'+R'） */
-  processStereo(l: Float32Array, r: Float32Array): void {
-    const B = Math.min(l.length, r.length)
+  processStereo(l: Float32Array, r: Float32Array, frameCount?: number): void {
+    const B = Math.max(0, Math.min(Math.floor(frameCount ?? l.length), l.length, r.length))
     for (let i = 0; i < B; i++) {
       const xl = l[i]
       const xr = r[i]
