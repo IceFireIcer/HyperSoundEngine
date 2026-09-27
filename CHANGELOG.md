@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+- **nightly 只在有新提交时发布**：`.github/workflows/nightly.yml` 新增前置 `check` 作业，当前 HEAD 已被任一 `nightly-*` 标签发布过时整个工作流跳过，不再每日重复发布同一提交的 pre-release（此前单一提交最多被重复发布 27 次）；`workflow_dispatch` 新增 `force` 选项供需要重发同一提交时使用。release 说明新增自上次 nightly 以来的新提交数与基准标签。仓库历史遗留的 31 个重复 nightly release/tag 已清理，每个提交仅保留最新一个（37 → 6）。
+
 ### Documentation
 - **发布就绪度与文档统一**：新增 `docs/RELEASE_READINESS.md`，区分源码 GitHub Release、npm、Windows 二进制与 crates.io 的发布门槛；同步 AGENTS、README、HANDOVER、项目/架构/接入/历史审计文档至 1.5.1 口径，并将第三方来源改为公开上游链接。
 

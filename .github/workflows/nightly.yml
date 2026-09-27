@@ -1,13 +1,20 @@
 name: Nightly Build
 
-# 每日自动构建并发 pre-release。
-# 注意：GitHub Actions cron 为 UTC；北京时间 17:00 = UTC 09:00。
-# tag 命名：nightly-YYYYMMDD.当日构建次数（重跑自动递增）；包版本号不随 nightly 变化（docs/VERSIONING.md）。
+# 每日检查是否有新提交，有则构建并发 pre-release，没有则整体跳过。
+# 触发时间：GitHub Actions cron 为 UTC；北京时间 17:00 = UTC 09:00。
+# 跳过规则：HEAD 与最近一个 nightly 标签指向同一提交时不构建（同一提交不重复发 pre-release，省 runner 与存储）。
+# tag 命名：nightly-YYYYMMDD.当日构建次数（当日重跑自动递增）；包版本号不随 nightly 变化（docs/VERSIONING.md）。
+# 手动触发默认同样受跳过规则约束，需要重新发布同一提交时勾选 force。
 
 on:
   schedule:
     - cron: '0 9 * * *' # UTC 09:00 = 北京时间 17:00
-  workflow_dispatch: {} # 支持手动触发（Actions 页面 Run workflow）
+  workflow_dispatch: # 支持手动触发（Actions 页面 Run workflow）
+    inputs:
+      force:
+        description: '强制构建：当前提交已有 nightly 时也发新 pre-release'
+        type: boolean
+        default: false
 
 permissions:
   contents: write # 创建 release 与 tag
@@ -17,7 +24,62 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.commits.outputs.should_build }}
+      new_commits: ${{ steps.commits.outputs.new_commits }}
+      since: ${{ steps.commits.outputs.since }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 需要完整 tags 才能判断上次 nightly 落在哪个提交
+
+      - name: 判断是否有新提交
+        id: commits
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.force }}" = "true" ]; then
+            echo "手动触发且 force=true，跳过提交检查，强制构建。"
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            echo "new_commits=0" >> "$GITHUB_OUTPUT"
+            echo "since=(force)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          HEAD_SHA=$(git rev-parse HEAD)
+
+          # 已有 nightly 指向当前提交 → 无新提交，跳过（不重复发布同一提交）
+          EXISTING=''
+          for t in $(git tag -l 'nightly-*'); do
+            if [ "$(git rev-parse "${t}^{commit}")" = "$HEAD_SHA" ]; then
+              EXISTING="$t"
+              break
+            fi
+          done
+          if [ -n "$EXISTING" ]; then
+            echo "当前提交 ${HEAD_SHA:0:8} 已由 ${EXISTING} 发布过，跳过本次 nightly。"
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # 统计自最近一次可从 HEAD 追溯到的 nightly 以来的新提交数（写入 release 说明）
+          LAST_TAG=$(git tag -l 'nightly-*' --merged HEAD | sort -V | tail -1)
+          if [ -z "$LAST_TAG" ]; then
+            echo "尚无可从 HEAD 追溯的 nightly 标签，按首次发布处理。"
+            COUNT=$(git rev-list --count HEAD)
+            SINCE='(首次发布)'
+          else
+            COUNT=$(git rev-list --count "${LAST_TAG}..HEAD")
+            SINCE="$LAST_TAG"
+          fi
+          echo "检测到 ${COUNT} 个新提交（基准：${SINCE}），继续构建。"
+          echo "should_build=true" >> "$GITHUB_OUTPUT"
+          echo "new_commits=${COUNT}" >> "$GITHUB_OUTPUT"
+          echo "since=${SINCE}" >> "$GITHUB_OUTPUT"
+
   nightly:
+    needs: check
+    if: needs.check.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -82,13 +144,16 @@ jobs:
       - name: 发布 Pre-release
         env:
           GH_TOKEN: ${{ github.token }}
+          NEW_COMMITS: ${{ needs.check.outputs.new_commits }}
+          SINCE: ${{ needs.check.outputs.since }}
         run: |
           SHA=$(git rev-parse --short HEAD)
           PKG_VER=$(node -p "require('./package.json').version")
           cat > release-notes.md <<EOF
-          每日自动构建（北京时间 17:00 触发）。
+          有新的提交才构建（北京时间 17:00 检查触发；无新提交时工作流整体跳过）。
 
           - 提交：\`${SHA}\`
+          - 自 \`${SINCE}\` 以来的新提交：${NEW_COMMITS} 个
           - 包版本：\`${PKG_VER}\`（nightly 不递增版本号，规则见 docs/VERSIONING.md）
           - 产物：TS 支线 \`dist/\` 与 npm 包；Rust 支线二进制（存在时）
           - 标签：\`${TAG}\`（nightly-日期.当日构建次数）
